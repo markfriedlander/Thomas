@@ -80,6 +80,24 @@ final class Lens: NSObject {
     private(set) var isAuthorized = false
     private(set) var isRunning = false
 
+    /// Current optical/digital zoom factor. On a virtual device this is one continuous
+    /// scale spanning every lens — crossing a seam swaps the physical camera silently.
+    private(set) var zoom: CGFloat = 1
+
+    /// The zoom factors at which the device changes lenses (e.g. `[2.0, 6.0]` on a triple
+    /// camera: ultra-wide → wide at 2×, wide → tele at 6×). Exposed so the UI can show
+    /// where the seams are, and so `/rotation` can report them.
+    var switchOverZoomFactors: [CGFloat] {
+        device?.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat(truncating: $0) } ?? []
+    }
+
+    var zoomRange: ClosedRange<CGFloat> {
+        guard let device else { return 1...1 }
+        // Cap the top: a device will happily offer 100×+ of pure digital upscaling, which
+        // is not zoom, it's cropping. 12× is past every optical seam on current phones.
+        return device.minAvailableVideoZoomFactor...min(device.maxAvailableVideoZoomFactor, 12)
+    }
+
     #if DEBUG
     /// The lens currently on screen, so the antenna can interrogate it. DEBUG-only —
     /// this exists to serve a diagnostic route that doesn't ship.
@@ -155,11 +173,47 @@ final class Lens: NSObject {
         session.beginConfiguration()
         session.sessionPreset = .photo
 
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        // ⭐ A VIRTUAL device, in preference order — this is what the native camera uses.
+        //
+        // `.builtInWideAngleCamera` is ONE physical lens, which is why the camera was
+        // stuck on a single focal length. A virtual device presents all the back lenses
+        // as one, and **switches between them automatically as you zoom** — Apple: "the
+        // virtual device chooses the best camera for the scene," picking the longest focal
+        // length that avoids digital upscaling, and falling back to a wider lens when the
+        // subject is closer than the tele's minimum focus distance. We get that for free;
+        // we just have to ask for the right device.
+        //
+        // Ordered most-lenses-first, degrading gracefully all the way down to one lens.
+        // EVERY back camera any iPhone has ever shipped is covered by the last entry, so
+        // this cannot come up empty on hardware that has a camera at all:
+        let preferred: [AVCaptureDevice.DeviceType] = [
+            .builtInTripleCamera,     // ultra-wide + wide + tele   (Pro)
+            .builtInDualWideCamera,   // ultra-wide + wide          (standard 13/14/15/16)
+            .builtInDualCamera,       // wide + tele                (older Plus/Pro)
+            .builtInWideAngleCamera   // one lens                   (SE, and the floor)
+        ]
+        // Walk the list explicitly and take the first that EXISTS.
+        //
+        // ⚠️ Not `DiscoverySession(...).devices.first` — that assumes the discovery
+        // session hands devices back in the order they were requested, which is an
+        // ordering guarantee CC never verified. An SE would then get whatever came out
+        // first. This asks for each device by name, in our order, and stops at the first
+        // real one. On a single-lens phone that's the wide angle, `zoomRange` collapses to
+        // whatever it supports, `switchOverZoomFactors` is empty, and pinch still works —
+        // it's just digital, because there's no second lens to switch to.
+        if let device = preferred.lazy.compactMap({
+               AVCaptureDevice.default($0, for: .video, position: .back)
+           }).first,
            let input = try? AVCaptureDeviceInput(device: device),
            session.canAddInput(input) {
             session.addInput(input)
             self.device = device
+            // Start at 1× — the wide lens on every modern iPhone, not the ultra-wide.
+            // On a virtual device the zoom scale is continuous ACROSS lenses, so 1.0 is
+            // not necessarily the minimum; `switchOverZoomFactors` says where the seams
+            // are. Clamp into whatever this device actually supports.
+            zoom = defaultZoom(for: device)
+            applyZoom(zoom)
         }
         if session.canAddOutput(output) { session.addOutput(output) }
 
@@ -209,6 +263,32 @@ final class Lens: NSObject {
               connection.isVideoRotationAngleSupported(angle) else { return }
         connection.videoRotationAngle = angle
     }
+
+    // MARK: - Zoom
+
+    /// 1× on a virtual device isn't the minimum — on a triple camera the ultra-wide sits
+    /// below it. Open where the native camera opens.
+    private func defaultZoom(for device: AVCaptureDevice) -> CGFloat {
+        max(device.minAvailableVideoZoomFactor, min(1.0, device.maxAvailableVideoZoomFactor))
+    }
+
+    /// Pinch. `scale` is the gesture's cumulative magnification since it began, so the
+    /// caller passes the zoom the pinch started from rather than compounding each update.
+    func zoom(by scale: CGFloat, from initial: CGFloat) {
+        applyZoom(initial * scale)
+    }
+
+    private func applyZoom(_ requested: CGFloat) {
+        guard let device else { return }
+        let clamped = min(max(requested, zoomRange.lowerBound), zoomRange.upperBound)
+        // Lock only for the instant of the change — holding it blocks the session.
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.videoZoomFactor = clamped
+        device.unlockForConfiguration()
+        zoom = clamped
+    }
+
+    // MARK: - The shutter
 
     /// Press the shutter. Returns an **upright** frame, or nil if the capture failed.
     ///

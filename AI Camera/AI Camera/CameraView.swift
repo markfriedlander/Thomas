@@ -69,13 +69,27 @@ struct CameraView: View {
     /// but chosen in Preferences, never here. The capture screen stays sacred.
     @State private var settings = Settings.shared
     @State private var showingPreferences = false
+    /// The zoom at the instant the pinch began. A gesture reports magnification relative
+    /// to its own start, so without an anchor each update would compound the last.
+    @State private var zoomAnchor: CGFloat?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             if lens.isAuthorized {
-                Viewfinder(lens: lens).ignoresSafeArea()
+                Viewfinder(lens: lens)
+                    .ignoresSafeArea()
+                    // Pinch to zoom, like every camera. The lens swap is the system's
+                    // job, not ours — see `configure()`.
+                    .gesture(
+                        MagnifyGesture()
+                            .onChanged { value in
+                                if zoomAnchor == nil { zoomAnchor = lens.zoom }
+                                lens.zoom(by: value.magnification, from: zoomAnchor ?? 1)
+                            }
+                            .onEnded { _ in zoomAnchor = nil }
+                    )
             } else {
                 Text("The camera needs permission to see.")
                     .foregroundStyle(.white.opacity(0.7))
@@ -84,6 +98,7 @@ struct CameraView: View {
             VStack {
                 developingIndicator
                 Spacer()
+                zoomReadout
                 shutterRow
             }
             .padding(.bottom, 28)
@@ -138,6 +153,20 @@ struct CameraView: View {
                 }
                 .padding(.trailing, 28)
             }
+        }
+    }
+
+    /// The zoom factor, said plainly. Principle 2: a real number, not five dots.
+    /// Only while it's changing — the capture screen owes you nothing at rest.
+    @ViewBuilder
+    private var zoomReadout: some View {
+        if zoomAnchor != nil {
+            Text(String(format: "%.1f×", lens.zoom))
+                .font(.footnote.monospacedDigit().weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.black.opacity(0.35), in: Capsule())
+                .padding(.bottom, 14)
         }
     }
 
