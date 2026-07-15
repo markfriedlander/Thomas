@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Big models want more RAM than the default cap allows. Both of these are on
+	     Hal's entitlements for the same reason; a VLM is heavier than an LLM because
+	     the vision encoder runs alongside the language model. -->
+	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+	<true/>
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+	<!-- The family's shared model store. Hal and Posey are already in here; this is
+	     AI Camera taking the third seat. A user who downloaded Qwen3.5-2B for Hal
+	     has it in this camera instantly — zero download, zero extra bytes.
+	     Must match Hal's and Posey's string exactly or sharing silently breaks. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.MarkFriedlander.aifamily</string>
+	</array>
+</dict>
+</plist>

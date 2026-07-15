@@ -1,0 +1,42 @@
+# API config — CONTAINS THE BEARER TOKEN. Machine-local, never committed.
+# (Posey excludes its equivalent for the same reason.)
+tools/.camera_api_config.json
+tools/.camera_api_config.*.json
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+*.xcscmblueprint
+*.xccheckout
+
+# Build output
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# macOS
+.DS_Store
+
+# Scratch
+*.csv
+
+# NOTE — a deliberate deviation from Posey's .gitignore, which excludes its test
+# materials as "large files, not for version control":
+#
+#   `Test Materials/` IS committed here.
+#
+# Posey's corpus is a convenience; ours is a scientific instrument. Every
+# characterization result in HISTORY.md refers to specific images by name. The corpus
+# was fetched by searching Wikimedia Commons, and Commons search results CHANGE — a
+# re-fetch would silently return different pictures, and every recorded finding would
+# quietly stop corresponding to the thing it described. A corpus that drifts isn't a
+# corpus. It's ~15 MB. That's a cheap price for results that stay true.
