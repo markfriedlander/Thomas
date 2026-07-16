@@ -342,8 +342,362 @@ extension LocalAPIServer {
         case ("GET",  "/rotation"): return handleRotation()
         case ("GET",  "/memory"): return await handleMemory()
         case ("POST", "/unload"): return await handleUnload()
+        case ("GET",  "/disk"):      return handleDisk()
+        case ("GET",  "/repo"):      return await handleRepo(req)
+        case ("POST", "/download"):  return await handleDownload(req)
+        case ("GET",  "/downloads"): return await handleDownloads()
+        case ("POST", "/release"):   return await handleRelease(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
+    }
+
+    /// GET /disk — how much room is actually on the phone, and what the family is using.
+    ///
+    /// Added 2026-07-15 at Mark's instruction — *"add whatever tools you need to the
+    /// antenna"* — in answer to CC asking him how much free space the phone had. The right
+    /// response to a question about a measurable fact is an instrument, not a question.
+    ///
+    /// **Three numbers, on purpose, because they disagree and the disagreement is the
+    /// point.** iOS does not have one idea of "free":
+    ///
+    ///   - `importantUsageMB` — `volumeAvailableCapacityForImportantUsage`. What iOS will
+    ///     actually *give* us for something that matters, **including space it would purge
+    ///     on our behalf** (other apps' evictable caches). This is the honest
+    ///     "can I download a 2.4 GB model" number, and it is the one the downloader's own
+    ///     pre-flight uses.
+    ///   - `freeMB` — `volumeAvailableCapacity`. Raw unallocated bytes right now. Always
+    ///     smaller. This is closest to what Settings shows.
+    ///   - `totalMB` — the volume's size.
+    ///
+    /// Report all three rather than picking one, because a single number here is exactly
+    /// the kind of thing that gets quoted later without its definition. NEXT.md says
+    /// "~7 GB free" and does not say which of these it means.
+    private func handleDisk() -> (Int, String) {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let keys: Set<URLResourceKey> = [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+            .volumeTotalCapacityKey
+        ]
+        let v = try? url.resourceValues(forKeys: keys)
+
+        func mb(_ bytes: Int64?) -> Any { bytes.map { Int($0 / 1_048_576) } ?? "unavailable" }
+
+        let repos = SharedModelStore.installedRepos()
+        let storeBytes = repos.reduce(Int64(0)) { $0 + SharedModelStore.sizeOnDisk($1) }
+
+        return (200, json([
+            "importantUsageMB": mb(v?.volumeAvailableCapacityForImportantUsage),
+            "freeMB":           mb(v?.volumeAvailableCapacity.map(Int64.init)),
+            "totalMB":          mb(v?.volumeTotalCapacity.map(Int64.init)),
+            // What the family is holding, so "where did the disk go" is answerable without
+            // a cable. The store is invisible from outside the App Group.
+            "storeBytes":       storeBytes,
+            "storeMB":          Int(storeBytes / 1_048_576),
+            "storeRoot":        SharedModelStore.root.path,
+            "models":           repos.map { repo in
+                [
+                    "repo":      repo,
+                    "sizeBytes": SharedModelStore.sizeOnDisk(repo),
+                    "sizeMB":    Int(SharedModelStore.sizeOnDisk(repo) / 1_048_576),
+                    "claimedBy": SharedModelStore.claimants(modelID: repo)
+                ]
+            }
+        ]))
+    }
+
+    /// GET /repo?id=<repo-id> — ask HuggingFace what a repo weighs, **as this app would
+    /// fetch it**, before fetching it.
+    ///
+    /// This is the instrument for the question NEXT.md left open and told us not to guess
+    /// at: *"⚠️ Download size UNKNOWN. HuggingFace returned 401 to every attempt to read
+    /// SD 2.1 base's file sizes. Don't quote a number — measure it."*
+    ///
+    /// **Why it lives on the phone rather than in a script on the Mac:** the number that
+    /// matters is not "what does this repo contain," it's "what would *our downloader*
+    /// pull." Those differ enormously for diffusion repos, which ship the same weights at
+    /// several precisions — `matchesMLXPattern` takes every `.safetensors`, so a repo
+    /// advertising a 2.4 GB model can cost 12 GB. Asking from inside the app, through the
+    /// same filter, is the only version of this question that can't lie.
+    ///
+    /// `totalMatchedBytes` is therefore the real download. `files` is the itemization, so
+    /// a human can see *what* the filter dragged in.
+    private func handleRepo(_ req: ParsedRequest) async -> (Int, String) {
+        guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
+            return (400, #"{"error":"Pass the repo in an X-Repo header, e.g. X-Repo: stabilityai/sd-turbo"}"#)
+        }
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/main?recursive=1") else {
+            return (400, json(["error": "Bad repo id: \(repoID)"]))
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+
+        struct TreeEntry: Decodable {
+            let type: String
+            let path: String
+            let size: Int64?
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            guard status == 200 else {
+                // A non-200 is a finding, not a failure — 401 is how HuggingFace reports a
+                // repo that has been withdrawn or made private, and that is exactly what
+                // happened to SD 2.x. Report it as data.
+                return (200, json([
+                    "repo":       repoID,
+                    "httpStatus": status,
+                    "reachable":  false,
+                    "body":       String(data: data, encoding: .utf8) ?? ""
+                ]))
+            }
+            let entries = try JSONDecoder().decode([TreeEntry].self, from: data)
+            let fileEntries = entries.filter { $0.type == "file" }
+            let matched = fileEntries.filter { MLXModelDownloader.matchesDownloadPattern($0.path) }
+            let matchedBytes = matched.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+            let allBytes = fileEntries.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+
+            return (200, json([
+                "repo":              repoID,
+                "httpStatus":        status,
+                "reachable":         true,
+                "fileCount":         fileEntries.count,
+                "matchedFileCount":  matched.count,
+                // The number that decides whether this fits on the phone.
+                "totalMatchedBytes": matchedBytes,
+                "totalMatchedMB":    Int(matchedBytes / 1_048_576),
+                "totalMatchedGB":    (Double(matchedBytes) / 1_073_741_824 * 100).rounded() / 100,
+                // Everything in the repo, for contrast — the gap between these two is the
+                // filter doing its job (or failing to).
+                "totalRepoBytes":    allBytes,
+                "totalRepoGB":       (Double(allBytes) / 1_073_741_824 * 100).rounded() / 100,
+                "files":             matched
+                    .sorted { ($0.size ?? 0) > ($1.size ?? 0) }
+                    .map { ["path": $0.path, "sizeBytes": $0.size ?? 0] }
+            ]))
+        } catch {
+            return (200, json([
+                "repo":      repoID,
+                "reachable": false,
+                "error":     error.localizedDescription
+            ]))
+        }
+    }
+
+    /// POST /download — pull a model onto the phone, without Mark's thumbs.
+    ///
+    ///   X-Repo:    mlx-community/Qwen3.5-2B-MLX-4bit    (required)
+    ///   X-Size-GB: 1.75                                  (optional — measured if absent)
+    ///   X-Force:   true                                  (optional — skip the fit check)
+    ///
+    /// Mark's standing directive is that the API does everything a human can. A human taps
+    /// Download in Preferences; this is that, repeatably, from a harness.
+    ///
+    /// **This route also closes a hole the port left open, and the hole is worth naming.**
+    /// Hal reads a model's size from its curated catalog and hands it to `startDownload`.
+    /// AI Camera has no catalog — it has repo ids — and the port replaced the catalog
+    /// lookup with a display name and nothing else. But the downloader's pre-flight refuses
+    /// outright when `sizeGB` is nil (*"this model's size couldn't be determined"*). So as
+    /// ported, **AI Camera's downloader could never have downloaded anything**: it would
+    /// have refused every call. It compiled, which is why nobody saw it. Here the size is
+    /// *measured* from HuggingFace instead of declared from a catalog — which is the same
+    /// move `ProcessMemoryGuard` makes, and for the same reason: this app adopts rather
+    /// than orders, so it can look rather than assume.
+    private func handleDownload(_ req: ParsedRequest) async -> (Int, String) {
+        guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
+            return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
+        }
+
+        if SharedModelStore.isRepoDownloaded(repoID) {
+            return (200, json([
+                "repo":     repoID,
+                "started":  false,
+                "message":  "Already in the shared store.",
+                "sizeBytes": SharedModelStore.sizeOnDisk(repoID)
+            ]))
+        }
+
+        // Size: caller's figure if given, otherwise measured from the repo through the same
+        // filter the downloader will apply. Never assumed.
+        var sizeGB: Double? = req.headers["x-size-gb"].flatMap(Double.init)
+        var measured = false
+        if sizeGB == nil {
+            if let bytes = await Self.measureRepoBytes(repoID) {
+                sizeGB = Double(bytes) / 1_073_741_824
+                measured = true
+            }
+        }
+        guard let sizeGB else {
+            return (200, json([
+                "repo":    repoID,
+                "started": false,
+                "error":   "Couldn't measure \(repoID) from HuggingFace, and no X-Size-GB was given. Refusing rather than starting a download that can't be size-checked."
+            ]))
+        }
+
+        // Fit check before we start. The downloader has its own pre-flight and will refuse
+        // too — this one exists to give the *harness* a structured answer instead of a
+        // prose error buried in a download state.
+        let cachesURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let availBytes = (try? cachesURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
+        let needBytes = Int64(sizeGB * 1.3 * 1_073_741_824)
+        let force = (req.headers["x-force"] ?? "false") == "true"
+        if !force, let availBytes, availBytes < needBytes {
+            return (200, json([
+                "repo":            repoID,
+                "started":         false,
+                "measured":        measured,
+                "sizeGB":          (sizeGB * 100).rounded() / 100,
+                "needBytes":       needBytes,
+                "availableBytes":  availBytes,
+                "error":           "Won't fit: needs ~\(Int(Double(needBytes) / 1_073_741_824 * 10) / 10) GB with margin, \(Int(Double(availBytes) / 1_073_741_824 * 10) / 10) GB available. Pass X-Force: true to try anyway."
+            ]))
+        }
+
+        cameraLog("DOWNLOAD: antenna starting \(repoID) sizeGB=\(sizeGB) measured=\(measured)")
+        // Fire and return. A multi-GB download does not finish inside an HTTP request —
+        // poll GET /downloads.
+        Task { await MLXModelDownloader.shared.startDownload(modelID: repoID, repoID: repoID, sizeGB: sizeGB) }
+
+        return (200, json([
+            "repo":     repoID,
+            "started":  true,
+            "measured": measured,
+            "sizeGB":   (sizeGB * 100).rounded() / 100,
+            "message":  "Started. Poll GET /downloads."
+        ]))
+    }
+
+    /// Total bytes of the files our downloader would actually take from a repo.
+    ///
+    /// Deliberately applies `matchesDownloadPattern` rather than summing the repo: a
+    /// diffusion repo carries the same weights at several precisions, so the repo total and
+    /// the download are different numbers and only one of them is ours.
+    private static func measureRepoBytes(_ repoID: String) async -> Int64? {
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/main?recursive=1")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+        struct TreeEntry: Decodable { let type: String; let path: String; let size: Int64? }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let entries = try? JSONDecoder().decode([TreeEntry].self, from: data)
+        else { return nil }
+        return entries
+            .filter { $0.type == "file" && MLXModelDownloader.matchesDownloadPattern($0.path) }
+            .reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+    }
+
+    /// GET /downloads — what's in flight, and how far along.
+    ///
+    /// The downloader's progress lives in `@Published` state a SwiftUI view reads. Without
+    /// this route a harness can only watch the disk grow and guess; with it, a download is
+    /// observable the way a look already is.
+    private func handleDownloads() async -> (Int, String) {
+        let states = await MainActor.run { MLXModelDownloader.shared.downloadStates }
+        let entries: [[String: Any]] = states.map { id, s in
+            var e: [String: Any] = [
+                "repo":        id,
+                "isDownloading": s.isDownloading,
+                "progress":    (s.progress * 1000).rounded() / 1000,
+                "message":     s.message
+            ]
+            if let err = s.error { e["error"] = err }
+            if let p = s.localPath { e["localPath"] = p.path }
+            e["onDisk"] = SharedModelStore.isRepoDownloaded(id)
+            e["sizeBytes"] = SharedModelStore.sizeOnDisk(id)
+            return e
+        }
+        let anyActive = states.values.contains { $0.isDownloading }
+        return (200, json([
+            "anyActive": anyActive,
+            "downloads": entries.sorted { ($0["repo"] as! String) < ($1["repo"] as! String) },
+            "log":       MemoryLog.shared.recent(60)
+        ]))
+    }
+
+    /// POST /release — give up this app's claim on a model, deleting it only if we were the
+    /// last app holding it.
+    ///
+    ///   X-Repo: stabilityai/sd-turbo   (required)
+    ///
+    /// **Mark's semantics, verbatim (2026-07-15):** *"All the apps should share the same
+    /// repository of models. Deleting a model from an app does not delete it from the
+    /// repository. Deleting it from the last remaining app to have it in use deletes it
+    /// from the repository."* This route is that sentence and nothing more.
+    ///
+    /// Needed because frame 3 means pulling multi-GB models onto a phone with single-digit
+    /// gigabytes free, and NEXT.md's plan is explicit: *"Run the engines one at a time and
+    /// delete between."* Doing that by hand, per model, per test, is exactly the kind of
+    /// thumb-work the antenna exists to remove.
+    ///
+    /// ⚠️ **This route deletes files, so it is built the careful way, and the reason is in
+    /// this repo's own history.** Hal's `clearHubCache()` did `removeItem` on the *shared*
+    /// container and took out every model of every app. The fix Hal's CC landed — after
+    /// catching a quieter version of the same bug in AI Camera CC's suggested fix — was to
+    /// **ask the ledger what we own rather than infer it from what we can see**, because
+    /// `releaseClaim` returns `true` for a model with no manifest entry at all, so a model
+    /// a sibling downloaded and we never adopted would look unclaimed and get destroyed.
+    /// So: refuse anything not in `modelsClaimedByThisApp()`, and delete only where
+    /// `releaseClaim` says we were last. Per-model. Never a bulk wipe.
+    private func handleRelease(_ req: ParsedRequest) async -> (Int, String) {
+        guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
+            return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
+        }
+
+        // The ledger, not the disk. See the note above — this guard IS the bug fix.
+        let ours = SharedModelStore.modelsClaimedByThisApp()
+        guard ours.contains(repoID) else {
+            return (200, json([
+                "repo":     repoID,
+                "released": false,
+                "deleted":  false,
+                "claimedByThisApp": false,
+                "claimants": SharedModelStore.claimants(modelID: repoID),
+                "message":  "AI Camera has no claim on \(repoID). Refusing — a model this app never adopted is not this app's to delete."
+            ]))
+        }
+
+        // If we're about to delete the model, make sure we aren't holding it open.
+        if repoID == Qwen.repo, await QwenLoader.shared.isLoaded {
+            await QwenLoader.shared.unload()
+            cameraLog("RELEASE: unloaded \(repoID) before releasing its claim")
+        }
+
+        let sizeBefore = SharedModelStore.sizeOnDisk(repoID)
+        let wasLast = SharedModelStore.releaseClaim(modelID: repoID)
+        var deleted = false
+        var deleteError: String?
+
+        if wasLast {
+            let dir = SharedModelStore.mlxModelDir(repoID)
+            do {
+                if FileManager.default.fileExists(atPath: dir.path) {
+                    try FileManager.default.removeItem(at: dir)
+                    deleted = true
+                    cameraLog("RELEASE: last claimant — deleted \(repoID) (\(sizeBefore) bytes)")
+                }
+            } catch {
+                deleteError = error.localizedDescription
+                cameraLog("RELEASE: delete FAILED for \(repoID): \(error.localizedDescription)")
+            }
+        } else {
+            cameraLog("RELEASE: released claim on \(repoID); siblings still hold it — kept on disk")
+        }
+
+        var payload: [String: Any] = [
+            "repo":             repoID,
+            "released":         true,
+            "claimedByThisApp": true,
+            "wasLastClaimant":  wasLast,
+            "deleted":          deleted,
+            "freedBytes":       deleted ? sizeBefore : 0,
+            "remainingClaimants": SharedModelStore.claimants(modelID: repoID)
+        ]
+        if let deleteError { payload["error"] = deleteError }
+        return (200, json(payload))
     }
 
     /// GET /memory — what the process is holding, and the reclamation curve.
@@ -386,8 +740,26 @@ extension LocalAPIServer {
             "unloaded":       true,
             "availableMBBefore": before.isInfinite ? "unavailable" : Int(before),
             "availableMBAfter":  after.isInfinite ? "unavailable" : Int(after),
-            // Expect this to be ~0 immediately. That is the lazy-reclaim point, not a
-            // failure — poll GET /memory and watch it climb.
+            // ⭐ MEASURED 2026-07-15, and it refutes the prediction this line used to carry.
+            //
+            // This comment said: *"Expect this to be ~0 immediately. That is the lazy-reclaim
+            // point, not a failure — poll GET /memory and watch it climb."* That was written
+            // the night the instrument was built and before it was ever run. The first run
+            // said otherwise:
+            //
+            //     22:26:14.570  unload ENTRY  active=1642 MB  iosAvail=4362
+            //     22:26:14.649  unload EXIT   active=0 MB     iosAvail=6026  | Δ=1664
+            //
+            // **1,664 MB back in 79 milliseconds** — 93% of what Qwen cost, immediately, not
+            // lazily. The lazy-reclaim story is about clean mmap'd pages, which don't count
+            // against the dirty-memory limit anyway; MLX's Metal buffers are dirty and freeing
+            // them is a real free. So expect this delta to be LARGE and prompt.
+            //
+            // Which means the handoff at the heart of Mark's three-frame design — tear down
+            // frame 2, load frame 3 — is cheap, and `waitForMemoryHeadroom` is a belt to
+            // `unload()`'s braces rather than the load-bearing part. Keep the poll (it costs
+            // nothing and other workloads may behave differently), but do not design around a
+            // slow curve that isn't there. The instrument beat the guess, again.
             "deltaMB":        (before.isInfinite || after.isInfinite) ? "unavailable" : Int(after - before)
         ]))
     }

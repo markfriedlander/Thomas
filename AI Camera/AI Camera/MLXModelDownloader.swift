@@ -421,10 +421,7 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     // Same set mlx-swift-lm's ModelFactory uses: *.safetensors, *.json, *.jinja.
     // The *.jinja is critical for modern chat-template models (Gemma 4 etc).
     private static func matchesMLXPattern(_ filename: String) -> Bool {
-        let lower = filename.lowercased()
-        return lower.hasSuffix(".safetensors")
-            || lower.hasSuffix(".json")
-            || lower.hasSuffix(".jinja")
+        MLXModelDownloader.matchesDownloadPattern(filename)
     }
 
     private func modelDirectory(for modelID: String) -> URL {
@@ -779,7 +776,30 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 // MARK: - MLX Model Downloader (Singleton)
 class MLXModelDownloader: ObservableObject {
     static let shared = MLXModelDownloader()
-    
+
+    // MARK: - Pattern Matching (the single definition)
+    //
+    // The set of files a download actually takes: *.safetensors, *.json, *.jinja — the
+    // same set mlx-swift-lm's ModelFactory uses. `BackgroundDownloadCoordinator` defers to
+    // this rather than keeping its own copy, so there is one answer to "what would we
+    // fetch," and the antenna can ask it (GET /repo) instead of re-implementing the rule
+    // and drifting from it.
+    //
+    // ⚠️ **This rule is right for LLM repos and wrong for diffusion repos, and frame 3 has
+    // to deal with that.** An LLM repo holds one model, so "every .safetensors" is the
+    // model. A diffusion repo holds the *same* weights at several precisions in parallel
+    // folders (unet/, vae/, text_encoder/, each with an fp16 twin beside the fp32) — so
+    // "every .safetensors" means downloading the model two or three times over. Measured
+    // 2026-07-15: `stabilityai/sd-turbo` is a 2.4 GB model whose .safetensors total
+    // **12.06 GB**. On a phone with single-digit gigabytes free that is the difference
+    // between fitting and not. Frame 3 needs a per-model file allowlist, not this filter.
+    nonisolated static func matchesDownloadPattern(_ filename: String) -> Bool {
+        let lower = filename.lowercased()
+        return lower.hasSuffix(".safetensors")
+            || lower.hasSuffix(".json")
+            || lower.hasSuffix(".jinja")
+    }
+
     // MARK: - Download State Structure
     
     struct DownloadState {
