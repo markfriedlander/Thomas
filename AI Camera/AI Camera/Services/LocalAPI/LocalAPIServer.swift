@@ -555,9 +555,11 @@ extension LocalAPIServer {
         // The whole shot, in the lane, exactly as the shutter runs it. `run` can't throw and
         // `seeThenDraw` doesn't throw — a failed drawing comes back as `drawn == nil`.
         let handStyle = req.headers["x-hand-prompt"]
+        let sizeOverride = req.headers["x-size"].flatMap { DrawingSize(rawValue: $0) }
+        let methodOverride = req.headers["x-upscaler"].flatMap { UpscaleMethod(rawValue: $0) }
         struct ShotOut: Sendable { let words: String; let outcome: String; let drawn: CGImage? }
         let out = await ModelLane.shared.run("shoot") { () -> ShotOut in
-            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird, handStyleOverride: handStyle)
+            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird, handStyleOverride: handStyle, sizeOverride: sizeOverride, methodOverride: methodOverride)
             // Build the composited frames, so this holds the same memory a real shot holds
             // while everything is still warm — reality's receipt, the words over the world.
             let frames = await MainActor.run {

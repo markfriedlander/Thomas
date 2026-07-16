@@ -75,6 +75,9 @@
 //  Shot.swift
 //   30  The Shot (One Press, All Three Frames)
 //
+//  Upscaler.swift
+//   31  The Upscaler (Making The Drawing Bigger)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

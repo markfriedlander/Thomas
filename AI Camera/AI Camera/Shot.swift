@@ -72,7 +72,9 @@ enum Shot {
     static func seeThenDraw(_ photograph: CGImage,
                             seer: Seer,
                             drawThird: Bool,
-                            handStyleOverride: String? = nil) async -> (perception: Perception, drawn: UIImage?) {
+                            handStyleOverride: String? = nil,
+                            sizeOverride: DrawingSize? = nil,
+                            methodOverride: UpscaleMethod? = nil) async -> (perception: Perception, drawn: UIImage?) {
         // ── Frame 2. The eye reads the world and says what it sees. ──
         let perception = await seer.look(at: photograph)
 
@@ -95,14 +97,21 @@ enum Shot {
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
 
+        // How big to save it, and with which upscaler. Read here on the main actor.
+        let size = sizeOverride ?? Settings.shared.drawingSize
+        let method = methodOverride ?? Settings.shared.upscaler
+
         // ── Frame 3. The hand draws what the eye said. ──
         do {
-            let image = try await DrawerLoader.shared.draw(Drawing(), prompt: prompt)
-            // Frame 3 is over too. Nothing carries into the next shot; the next press reloads
-            // the eye, the same path a cold start takes. (The drawer also tears itself down in
-            // `draw`'s `defer` — this is belt to that braces.)
+            let drawn = try await DrawerLoader.shared.draw(Drawing(), prompt: prompt)
+            // Frame 3's model is over. Tear it down BEFORE upscaling, so the upscale (which
+            // uses the GPU too) runs with the drawer's memory already returned. (The drawer
+            // also tears itself down in `draw`'s `defer` — this is belt to that braces.)
             await DrawerLoader.shared.unload()
-            return (perception, UIImage(cgImage: image))
+            // Enlarge after the draw — cheap, and it never touched the VAE spike. `.native`
+            // returns the 512² unchanged.
+            let sized = Upscaler.enlarge(drawn, to: size, method: method)
+            return (perception, UIImage(cgImage: sized))
         } catch {
             cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
             await DrawerLoader.shared.unload()

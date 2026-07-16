@@ -94,6 +94,17 @@ final class Settings {
     var handPrompt: String {
         didSet { store(handPrompt, "handPrompt") }
     }
+    /// How large the drawing is saved. The model draws at 512²; anything larger is upscaled
+    /// AFTER the draw (the upscale is light and never touches the VAE memory spike). `native`
+    /// = 512, no upscaling — the honest baseline, what the model actually made.
+    var drawingSize: DrawingSize {
+        didSet { store(drawingSize.rawValue, "drawingSize") }
+    }
+    /// Which upscaler does the enlarging, when `drawingSize` is larger than native. MetalFX is
+    /// sharper (GPU) but falls back to Core Image on any device that doesn't support it.
+    var upscaler: UpscaleMethod {
+        didSet { store(upscaler.rawValue, "upscaler") }
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -103,6 +114,8 @@ final class Settings {
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
         handPrompt = d.string(forKey: "handPrompt") ?? ""
+        drawingSize = DrawingSize(rawValue: d.string(forKey: "drawingSize") ?? "") ?? .native
+        upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
     }
 
     private func store(_ value: Any, _ key: String) {
@@ -140,6 +153,8 @@ final class Settings {
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
         handPrompt = ""
+        drawingSize = .native
+        upscaler = .metalFX
     }
 }
 
@@ -233,6 +248,7 @@ struct PreferencesView: View {
                 modelSection
                 eyeSection
                 handSection
+                sizeSection
                 layoutSection
                 resetSection
             }
@@ -437,6 +453,41 @@ struct PreferencesView: View {
     }
 
     // MARK: - How the words meet the picture
+
+    // MARK: - How big the drawing is saved
+
+    /// The drawing's size, and which upscaler enlarges it. Only in "The hand"'s world — it's
+    /// about frame 3, so it hides when the drawing model isn't downloaded.
+    ///
+    /// The model draws at 512²; larger sizes upscale AFTER the draw, where it's cheap and
+    /// never touches the memory spike (Mark: *"I really don't wanna push our luck"* on
+    /// generating bigger). Native is the honest baseline. The upscaler picker only matters
+    /// when a larger size is chosen, so it's tucked below and its choice explained.
+    @ViewBuilder
+    private var sizeSection: some View {
+        if DrawerLoader.isAvailable {
+            Section {
+                Picker("Size", selection: $settings.drawingSize) {
+                    ForEach(DrawingSize.allCases, id: \.self) { size in
+                        Text(size.name).tag(size)
+                    }
+                }
+                if settings.drawingSize != .native {
+                    Picker("Upscaler", selection: $settings.upscaler) {
+                        ForEach(UpscaleMethod.allCases, id: \.self) { m in
+                            Text(m.name).tag(m)
+                        }
+                    }
+                }
+            } header: {
+                Text("The drawing's size")
+            } footer: {
+                Text(settings.drawingSize == .native
+                     ? "The hand draws at 512 pixels — small next to your photograph. Larger sizes enlarge the drawing after it's made, which is quick and doesn't strain memory."
+                     : "MetalFX is Apple's GPU upscaler — sharper, and it falls back to Core Image on any device that doesn't support it. Core Image is softer; on a dreamy re-imagining that can read as intentional. The enlarging happens after the draw, so it costs no extra memory.")
+            }
+        }
+    }
 
     private var layoutSection: some View {
         Section {
