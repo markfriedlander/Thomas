@@ -206,7 +206,10 @@ struct CameraView: View {
         await develop(cg.uprighted(orientation))
     }
 
-    /// Reality -> perception -> the finished frame, and into Photos.
+    /// Reality -> perception -> re-imagining -> Photos.
+    ///
+    /// **All three frames, in one press.** This is the whole thesis of the app, and until
+    /// 2026-07-16 two thirds of it were a document.
     ///
     /// Deliberately NOT awaited by the shutter: press it again while this runs and you
     /// get a second frame in the bath. Serialization is `LookQueue`'s job, not the
@@ -215,14 +218,71 @@ struct CameraView: View {
         developing += 1
         defer { developing -= 1 }
 
+        // ── Frame 2. The eye reads the world and says what it sees. ──
         let perception = await settings.seer.look(at: photograph)
+
         // A shot yields one frame — or two, for "Separate images". Still one press.
-        let frames = Darkroom.develop(photograph: photograph,
+        var frames = Darkroom.develop(photograph: photograph,
                                       words: perception.wireText,
                                       place: place.name,
                                       layout: settings.layout)
+
+        // ── Frame 3. The hand draws what the eye said. ──
+        if let drawn = await reimagine(perception) {
+            frames.append(drawn)
+        }
+
         lastFrame = frames.last
         await Self.save(frames)
+    }
+
+    /// The third frame, or nothing.
+    ///
+    /// ── Why the eye is torn down first ──
+    ///
+    /// Mark's design, verbatim: *"there are three separate steps and each one should be
+    /// completely separate and offload models in between... at no point should the app
+    /// maintain overhead from one frame into another."* Frame 2 is finished the moment the
+    /// words exist. Holding 1.6 GB of Qwen through a 2.7 GB diffusion load asks the phone for
+    /// 4.3 GB to do a job that needs 2.7, and iOS answers that by killing the app.
+    ///
+    /// The handoff was the thing everyone feared and it is cheap: measured 2026-07-16,
+    /// `unload()` returns ~1,664 MB in **79 ms**. Not lazy. The whole worry was misplaced.
+    ///
+    /// ── Why a failure here is silent ──
+    ///
+    /// **Frames 1 and 2 have already succeeded** by the time this runs, and they are a
+    /// complete photograph. If the drawing can't happen — no model, no memory, whatever —
+    /// the shot still lands, with the photograph and the words. Taking the whole frame down
+    /// because the optional third panel failed would be the worst possible trade.
+    ///
+    /// **This is NOT Principle 3 being softened.** Principle 3 governs what the *machine says
+    /// about a photograph* — no hedging, no apology, and a refusal is content. It does not
+    /// govern an engineering failure to allocate memory. Confusing the two would be a
+    /// category error, the same one `ProcessMemoryGuard` calls out about its own refusal.
+    private func reimagine(_ perception: Perception) async -> UIImage? {
+        guard settings.drawsThirdFrame else { return nil }
+
+        // The hand draws from words. If the machine didn't produce any — a filter blocked
+        // the image, or the model declined — there is nothing to draw FROM. That is a real
+        // outcome and it is already recorded in frame 2; it is not a failure to log about.
+        let words = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return nil }
+
+        // Frame 2 is over. Let the eye go before the hand arrives.
+        await QwenLoader.shared.unload()
+
+        do {
+            let image = try await DrawerLoader.shared.draw(Drawing(), prompt: words)
+            // And frame 3 is over. Nothing carries into the next shot; the next press
+            // reloads the eye, which is the same path a cold start takes.
+            await DrawerLoader.shared.unload()
+            return UIImage(cgImage: image)
+        } catch {
+            cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
+            await DrawerLoader.shared.unload()
+            return nil
+        }
     }
 
     /// Into the camera roll, where it develops.

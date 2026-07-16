@@ -63,6 +63,19 @@ final class Settings {
     var layout: Layout {
         didSet { store(layout.rawValue, "layout") }
     }
+    /// Whether a shot also draws the third frame.
+    ///
+    /// **Off by default, and that is the ship strategy rather than timidity.** Panels 1 and 2
+    /// work on a fresh install with zero download (CLAUDE.md: *"Panel 3, the re-imagining, is
+    /// the download"*). Defaulting this on would mean a camera that fails on first press for
+    /// anyone who hasn't been to the library yet.
+    ///
+    /// It also costs real time — ~10 s on an iPhone 16 Plus, load included — so it is a
+    /// choice, not a default. The latency is the film developing, but the user gets to decide
+    /// how long the bath takes.
+    var drawsThirdFrame: Bool {
+        didSet { store(drawsThirdFrame, "drawsThirdFrame") }
+    }
     var systemPrompt: String {
         didSet { store(systemPrompt, "systemPrompt") }
     }
@@ -74,6 +87,7 @@ final class Settings {
         let d = UserDefaults.standard
         seer = Seer(rawValue: d.string(forKey: "seer") ?? "") ?? .apple
         layout = Layout(rawValue: d.string(forKey: "layout") ?? "") ?? .superimposed
+        drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
     }
@@ -109,6 +123,7 @@ final class Settings {
     func resetEverything() {
         seer = .apple
         layout = .superimposed
+        drawsThirdFrame = false
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
     }
@@ -204,6 +219,7 @@ struct PreferencesView: View {
                 modelSection
                 promptSection
                 layoutSection
+                thirdFrameSection
                 resetSection
             }
             .navigationTitle("Preferences")
@@ -345,6 +361,31 @@ struct PreferencesView: View {
     }
 
     // MARK: - How the words meet the picture
+
+    // MARK: - The third frame
+
+    /// The re-imagining. Off unless the model is here.
+    ///
+    /// Its own section rather than a row in Layout, because it is not a layout — it is
+    /// whether the camera takes a third frame at all. The toggle disables itself when the
+    /// model isn't downloaded: an ON switch that produces nothing on every press is worse
+    /// than no switch, and the fix is one tap away in the library above.
+    private var thirdFrameSection: some View {
+        Section {
+            Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
+                .disabled(!DrawerLoader.isAvailable)
+            if !DrawerLoader.isAvailable {
+                Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("The re-imagining")
+        } footer: {
+            // Said plainly, with the real cost, and no verdict on whether it's worth it.
+            Text("The machine draws the scene again from its own words. It never sees your photograph — it only reads what the eye said about it. The drawing is saved alongside the frame. It adds about ten seconds to a shot.")
+        }
+    }
 
     private var layoutSection: some View {
         Section {
