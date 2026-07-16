@@ -69,6 +69,9 @@
 //  ModelLibraryView.swift
 //   28  ModelLibraryView (The Model Library)
 //
+//  Drawing.swift
+//   29  The Hand (Frame 3 — Drawing From Words)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

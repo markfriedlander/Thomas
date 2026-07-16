@@ -1,0 +1,390 @@
+//
+//  Drawing.swift
+//  AI Camera
+//
+//  Frame 3. The hand.
+//
+//  Mark, three days and three sessions in, after every one of them found a principled reason
+//  to defer this: *"I'm here to build this app which has three frames. Two of them exist why
+//  are we still not building the third? It cannot exist until you build it."*
+//
+//  ── What this is ──
+//
+//  The machine re-imagining the scene from its own words. It **never sees the photograph** —
+//  it only reads what the eye said about it. That is the whole architecture of the app in one
+//  sentence: reality → machine perception (text) → machine re-imagining (image). The text is
+//  a bottleneck on purpose, and the gap it opens is the art.
+//
+//  ── Why sd-turbo ──
+//
+//  See `ModelCatalog.sdTurbo`. Short version: NEXT.md's plan named Stable Diffusion 2.1 base,
+//  and that repo no longer exists — Stability withdrew the 2.x line, verified three ways on
+//  2026-07-15. sd-turbo is distilled *from* SD 2.1, so it fits the same code path, and it
+//  draws in 1–4 steps rather than 50.
+//
+//  ── What's unknown, stated plainly ──
+//
+//  **Nobody has ever published a measurement of MLX drawing on an iPhone.** Not Apple, not the
+//  research fleet, not either failed session, nobody. Everything anyone in this project knows
+//  about MLX diffusion came from *reading the library's source*, which tells you what it asks
+//  for and nothing about whether it runs. So this file is a question before it is a feature,
+//  and Mark set the bar: **"Alive first. Speed later if we so choose."**
+//
+//  ── Memory ──
+//
+//  Under Mark's design the frames are discrete — *"at no point should the app maintain
+//  overhead from one frame into another"* — so the eye is torn down before the hand loads and
+//  they never coexist. The bar is "does the biggest single model fit alone," not "do both
+//  fit." Measured 2026-07-15 on the iPhone 16 Plus: **6,129 MB available**, and Qwen gives
+//  back 1,664 MB in 79 ms when dropped. A 2.4 GB model has room.
+//
+//  ⚠️ `ProcessMemoryGuard`'s 0.75 dirty-memory ratio is Hal's, calibrated for **4-bit
+//  quantized safetensors via mmap**. These are fp16 diffusion weights — a different shape and
+//  a different residency pattern. **The estimate below is not to be trusted until measured**;
+//  it is a starting guess, labelled as one, and `GET /memory` is how it gets checked. Do not
+//  inherit a number across a change of subject. That is how the Core AI day happened.
+//
+
+import CoreGraphics
+import Foundation
+import Hub
+import MLX
+
+// ==== LEGO START: 29 The Hand (Frame 3 — Drawing From Words) ====
+
+nonisolated struct Drawing: Sendable {
+    static let repo = ModelCatalog.sdTurbo.id
+
+    /// How many denoising steps. sd-turbo is *distilled* to need very few — it was trained
+    /// for single-step generation and stays coherent to about 4.
+    ///
+    /// ⚠️ **Do not read the stock demo app's step handling as guidance.** It drops to a single
+    /// step whenever `Memory.memoryLimit < 8 GB`, and on iOS that is the *task* limit, so
+    /// every iPhone trips it. For SDXL-Turbo that's fine — one step is what Turbo is. NEXT.md
+    /// warns that inheriting that behaviour with a non-turbo model gives you noise and the
+    /// conclusion "MLX can't draw." We're on a turbo model, so the trap doesn't bite, but the
+    /// number here is chosen, not inherited.
+    var steps: Int = 4
+
+    /// Classifier-free guidance. **Zero, and that is not a placeholder.** Turbo models are
+    /// distilled without CFG; giving them a guidance weight doesn't sharpen the image, it
+    /// doubles the work (CFG evaluates the UNet twice per step) and degrades the result.
+    /// The library's own SDXL-Turbo preset uses `cfgWeight: 0` for the same reason.
+    var cfgWeight: Float = 0
+
+    /// 64 latent units → a 512×512 image. sd-turbo's native resolution; asking for more
+    /// doesn't add detail, it adds artefacts and memory.
+    var latentSize: [Int] = [64, 64]
+
+    var seed: UInt64?
+
+    /// The words the eye produced, handed to the hand unedited.
+    ///
+    /// **Principle 3, and this is the load-bearing decision in the file.** It is tempting to
+    /// "help" — to strip the eye's hedges, append "highly detailed, 4k, masterpiece", or
+    /// rewrite the perception into something a diffusion model finds easier to draw. Every
+    /// one of those closes the gap this app exists to show. The hand draws what the eye said.
+    /// If the eye said something strange, the strangeness is the point, and the triptych is
+    /// self-auditing — panel 1 is right there and the viewer judges.
+    func parameters(prompt: String) -> EvaluateParameters {
+        EvaluateParameters(
+            cfgWeight: cfgWeight,
+            steps: steps,
+            imageCount: 1,
+            decodingBatchSize: 1,
+            latentSize: latentSize,
+            seed: seed,
+            prompt: prompt,
+            negativePrompt: ""
+        )
+    }
+
+    /// sd-turbo, named file by file.
+    ///
+    /// This configuration is the entire reason the library is vendored rather than added as a
+    /// package. `StableDiffusionConfiguration`'s `files` and `factory` are `internal`, and a
+    /// struct with internal members has an internal memberwise init — so from *outside* the
+    /// module this could not be written at all. Inside our own target, it can.
+    ///
+    /// Two things it fixes that the shipped presets get wrong for a phone:
+    ///   1. **The repo is alive.** `presetStableDiffusion21Base` points at a 401.
+    ///   2. **The fp16 twins.** The presets hardcode fp32 filenames and convert to float16
+    ///      after loading — paying the heavy download to use the light weights while the fp16
+    ///      files sit unused in the same repo. Measured: 4.81 GB as the preset asks vs
+    ///      **2.40 GB** for these. Same weights.
+    static var configuration: StableDiffusionConfiguration {
+        StableDiffusionConfiguration(
+            id: repo,
+            files: [
+                .unetConfig: "unet/config.json",
+                .unetWeights: "unet/diffusion_pytorch_model.fp16.safetensors",
+                .textEncoderConfig: "text_encoder/config.json",
+                .textEncoderWeights: "text_encoder/model.fp16.safetensors",
+                .vaeConfig: "vae/config.json",
+                .vaeWeights: "vae/diffusion_pytorch_model.fp16.safetensors",
+                .diffusionConfig: "scheduler/scheduler_config.json",
+                .tokenizerVocabulary: "tokenizer/vocab.json",
+                .tokenizerMerges: "tokenizer/merges.txt",
+            ],
+            defaultParameters: { EvaluateParameters(cfgWeight: 0, steps: 4) },
+            factory: { hub, sdConfiguration, loadConfiguration in
+                // StableDiffusionBase — the SD 2.1 path, one text encoder. sd-turbo IS 2.1's
+                // architecture; that is why it was chosen over SD 1.5, whose text encoder is
+                // a different shape.
+                try StableDiffusionBase(
+                    hub: hub, configuration: sdConfiguration, dType: loadConfiguration.dType)
+            }
+        )
+    }
+
+    /// Point the library at the family's shared store instead of its own cache.
+    ///
+    /// The two layouts already agree: `HubApi.localRepoLocation` resolves to
+    /// `downloadBase/models/<repo-id>`, and `SharedModelStore.mlxModelDir` is
+    /// `huggingface/models/<repo-id>`. So handing it `huggingFaceRoot` makes it find exactly
+    /// what `MLXModelDownloader` put there — no download, no second copy, and Hal or Posey
+    /// would find the same bytes.
+    static var hub: HubApi {
+        HubApi(downloadBase: SharedModelStore.huggingFaceRoot)
+    }
+}
+
+/// Holds the drawing model, and lets go of it.
+///
+/// Deliberately the same shape as `QwenLoader` — one resident model, a coalesced in-flight
+/// load, a pre-flight refusal, and an `unload()` that drains the GPU before releasing. Not
+/// symmetry for its own sake: `Qwen.unload()` shipped as `loaded = nil`, which was a latent
+/// SIGABRT (releasing the container while Metal command buffers are still in flight fires
+/// their completion handlers against freed memory). The only reason it never crashed is that
+/// nothing ever called it. That lesson costs nothing to apply here and everything to relearn.
+actor DrawerLoader {
+    static let shared = DrawerLoader()
+
+    private var loaded: TextToImageGenerator?
+    private var loading: Task<TextToImageGenerator, Error>?
+
+    /// Whether the weights are on disk right now.
+    nonisolated static var isAvailable: Bool {
+        SharedModelStore.isRepoDownloaded(Drawing.repo)
+    }
+
+    var isLoaded: Bool { loaded != nil }
+
+    func generator() async throws -> TextToImageGenerator {
+        if let loaded { return loaded }
+        if let loading { return try await loading.value }
+
+        let task = Task<TextToImageGenerator, Error> {
+            // Hal's line, and not optional on a phone: cap MLX's buffer cache or it grows
+            // until iOS jetsams the app.
+            MLX.Memory.cacheLimit = 20 * 1024 * 1024
+
+            guard SharedModelStore.isRepoDownloaded(Drawing.repo) else {
+                throw DrawingError.notInstalled(Drawing.repo)
+            }
+
+            // PRE-FLIGHT. Same reasoning as Qwen's: everything past this line maps the
+            // weights and faults them in, and if there isn't room iOS kills the process
+            // with no error and no message.
+            //
+            // ⚠️ The requirement is computed with Hal's 4-bit-mmap ratio against fp16
+            // diffusion weights. **That number is a guess here and is labelled one.** It is
+            // the first thing to re-measure once this runs — watch GET /memory.
+            let requiredMB = requiredMemoryMBForLoad(repo: Drawing.repo)
+            var availableMB = processAvailableMemoryMB()
+            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (⚠️ ratio unverified for diffusion) availableMB=\(formatMB(availableMB))")
+
+            if availableMB < requiredMB {
+                cameraLog("DRAW: short on headroom — waiting for iOS to reclaim")
+                let result = await waitForMemoryHeadroom(requiredMB: requiredMB)
+                availableMB = result.finalAvailableMB
+                cameraLog("DRAW: headroom wait \(result.success ? "succeeded" : "TIMED OUT") after \(result.pollsTaken) polls / \(String(format: "%.2f", result.elapsedSeconds))s — availableMB=\(formatMB(availableMB))")
+            }
+
+            guard availableMB >= requiredMB else {
+                let message = memoryRefusalMessage(modelName: ModelCatalog.sdTurbo.displayName,
+                                                   availableMB: availableMB,
+                                                   requiredMB: requiredMB)
+                cameraLog("DRAW: REFUSED load — \(message)")
+                throw DrawingError.notEnoughMemory(message: message)
+            }
+
+            // Adopt it, so a sibling's delete can't pull the weights out from under a shot
+            // in progress. Same claim the downloader records; harmless to repeat, and this
+            // covers a model adopted rather than downloaded.
+            SharedModelStore.claim(modelID: Drawing.repo, repo: Drawing.repo,
+                                   sizeBytes: SharedModelStore.sizeOnDisk(Drawing.repo))
+            SharedModelStore.excludeFromBackup(Drawing.repo)
+
+            let before = processAvailableMemoryMB()
+            let started = Date()
+            let configuration = Drawing.configuration
+            guard let generator = try configuration.textToImageGenerator(
+                hub: Drawing.hub,
+                configuration: LoadConfiguration(float16: true, quantize: false)
+            ) else {
+                throw DrawingError.wrongKind
+            }
+            // Force the weights in now rather than on first use, so the number below is the
+            // real cost of loading and not half of it.
+            generator.ensureLoaded()
+            MLX.Stream.gpu.synchronize()
+
+            let after = processAvailableMemoryMB()
+            let snapshot = MLX.Memory.snapshot()
+            cameraLog("DRAW: loaded in \(String(format: "%.2f", Date().timeIntervalSince(started)))s | iosAvailMB \(formatMB(before)) → \(formatMB(after)) (Δ\(formatMB(before - after))) | mlxActive=\(String(format: "%.1f", Double(snapshot.activeMemory) / 1_048_576)) MB peak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB")
+            return generator
+        }
+        loading = task
+        defer { loading = nil }
+        let generator = try await task.value
+        loaded = generator
+        return generator
+    }
+
+    /// Drop the model. Drain first — see the note on the type.
+    func unload() async {
+        guard loaded != nil else { return }
+        let snapshot = MLX.Memory.snapshot()
+        let before = processAvailableMemoryMB()
+        cameraLog("DRAW: unload ENTRY active=\(String(format: "%.1f", Double(snapshot.activeMemory) / 1_048_576)) MB peak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB iosAvailMB=\(formatMB(before))")
+
+        // Drain in-flight GPU work BEFORE releasing. Metal command buffers from the last
+        // draw hold references into these arrays; releasing underneath them fires their
+        // completion handlers against ARC-freed memory and MLX's check_error throws an
+        // uncaught C++ exception → SIGABRT. Hal has a crash log for exactly this.
+        MLX.Stream.gpu.synchronize()
+        loaded = nil
+        MLX.Memory.clearCache()
+
+        let after = processAvailableMemoryMB()
+        cameraLog("DRAW: unload EXIT  iosAvailMB=\(formatMB(after)) | ΔiosAvailMB=\(formatMB(after - before))")
+    }
+
+    /// Draw. Words in, a picture out.
+    ///
+    /// ── The two-stage shape, which is not a style choice — it is what makes this run ──
+    ///
+    /// **Measured 2026-07-15, the first time MLX diffusion was ever run on an iPhone:** the
+    /// model loads (4.3 s, 2,702 MB), all four denoise steps complete (3.55 s), and then the
+    /// process is **jetsammed at the VAE decode**. Denoising works at 64×64 latents; decoding
+    /// inflates those to 512×512 through the autoencoder, and its intermediate activations
+    /// need more room than is left with the UNet still resident.
+    ///
+    /// The library is built for exactly this and says so: `detachedDecoder()` is documented
+    /// *"useful if trying to conserve memory"*, and `SDModelContainer.performTwoStage`
+    /// discards the model between the two blocks. The trick is that the detached decoder
+    /// captures **only the autoencoder** — so the UNet and text encoder (the ~1.6 GB that
+    /// just finished their work and are never needed again this shot) can be released before
+    /// the decode allocates anything.
+    ///
+    /// **And this is Mark's architecture, not a workaround for it:** *"at no point should the
+    /// app maintain overhead from one frame into another. They should be built discreetly."*
+    /// The UNet's job ends when the last latent lands. Holding it through the decode was the
+    /// bug; letting it go is the design.
+    ///
+    /// Costs 4.3 s to reload on the next shot. That is the right trade here — *the latency is
+    /// the film developing* — and a shot that finishes slowly beats a process that dies.
+    func draw(_ drawing: Drawing, prompt: String,
+              onStep: (@Sendable (Int, Int) -> Void)? = nil) async throws -> CGImage {
+        // ⚠️ **Optionals, and every one of them is load-bearing.** The demo app's only comment
+        // on this reads "Note: The optionals are used to discard parts of the model as it
+        // runs" — which is easy to skim past and is in fact the entire mechanism.
+        //
+        // Measured: the first attempt at this used `let generator` and set `loaded = nil`
+        // before decoding. The log said **"freed 0"** and the process died anyway. Dropping
+        // the actor's reference does nothing while a local `let` in this very function still
+        // holds the model. ARC frees on the *last* reference, not the first. So every handle
+        // on the UNet has to be nilled, by hand, in order.
+        var generator: TextToImageGenerator? = try await self.generator()
+        let parameters = drawing.parameters(prompt: prompt)
+
+        let started = Date()
+        cameraLog("DRAW: begin steps=\(parameters.steps) cfg=\(parameters.cfgWeight) size=\(parameters.latentSize) seed=\(parameters.seed) prompt=\"\(prompt.prefix(120))\"")
+
+        // Take the decoder BEFORE anything is released. It closes over the autoencoder alone
+        // — that is what makes it safe to throw the rest away.
+        let decoder = generator!.detachedDecoder()
+
+        var latent: MLXArray?
+        var step = 0
+        var iterator: DenoiseIterator? = generator!.generateLatents(parameters: parameters)
+        while let xt = iterator?.next() {
+            latent = xt
+            // MLX is lazy: the iterator hands back an unevaluated graph. Without this the
+            // whole diffusion collapses into the final eval and every per-step number is a
+            // fiction.
+            eval(xt)
+            step += 1
+            onStep?(step, parameters.steps)
+            cameraLog("DRAW: step \(step)/\(parameters.steps) at \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
+        }
+
+        guard let final = latent else { throw DrawingError.producedNothing }
+        let denoiseSeconds = Date().timeIntervalSince(started)
+
+        // Drop the UNet and the text encoder. Drain first — Metal command buffers from the
+        // last step still reference these arrays, and releasing underneath them fires their
+        // completion handlers against freed memory (SIGABRT). Same reason `unload()` drains.
+        //
+        // All three references, or none of it frees: the iterator (it holds the model to
+        // step it), this function's handle, and the actor's cache.
+        let beforeRelease = processAvailableMemoryMB()
+        MLX.Stream.gpu.synchronize()
+        iterator = nil
+        generator = nil
+        loaded = nil
+        MLX.Memory.clearCache()
+        let afterRelease = processAvailableMemoryMB()
+        cameraLog("DRAW: released the generator before decoding — iosAvailMB \(formatMB(beforeRelease)) → \(formatMB(afterRelease)) (freed \(formatMB(afterRelease - beforeRelease)))")
+
+        let decodeStarted = Date()
+        let decoded = decoder(final)
+        eval(decoded)
+        let decodeSeconds = Date().timeIntervalSince(decodeStarted)
+
+        let snapshot = MLX.Memory.snapshot()
+        cameraLog("DRAW: done denoise=\(String(format: "%.2f", denoiseSeconds))s decode=\(String(format: "%.2f", decodeSeconds))s total=\(String(format: "%.2f", Date().timeIntervalSince(started)))s | mlxPeak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB iosAvailMB=\(formatMB(processAvailableMemoryMB()))")
+
+        // The decoder returns floats in 0…1 with a leading batch dimension — `[1, 512, 512, 3]`.
+        // `SDImage` wants 8-bit samples and `precondition(data.ndim == 3)`. Handing it the raw
+        // decoder output trips that precondition and takes the process down with a signal 5,
+        // **after** a perfectly good image has been computed — which is exactly what happened
+        // on the first successful draw. Scale, cast, drop the batch dim. The library doesn't do
+        // this for you; the demo app does it inline and it's easy to miss.
+        //
+        // `SDImage` is the vendored library's `Image`, renamed — it collided with SwiftUI's.
+        // See Vendor/StableDiffusion/VENDOR.md.
+        let raster = (decoded * 255).asType(.uint8).squeezed()
+        eval(raster)
+        let image = SDImage(raster).asCGImage()
+
+        // The autoencoder goes too, now the pixels exist. Frame 3 is over.
+        MLX.Stream.gpu.synchronize()
+        MLX.Memory.clearCache()
+        cameraLog("DRAW: frame 3 complete — iosAvailMB=\(formatMB(processAvailableMemoryMB()))")
+        return image
+    }
+}
+
+enum DrawingError: LocalizedError {
+    case notInstalled(String)
+    case notEnoughMemory(message: String)
+    case wrongKind
+    case producedNothing
+
+    var errorDescription: String? {
+        switch self {
+        case .notInstalled(let repo):
+            return "\(repo) isn't downloaded yet. Get it in Preferences → Models → Browse Model Library."
+        case .notEnoughMemory(let message):
+            return message
+        case .wrongKind:
+            return "\(Drawing.repo) loaded, but not as something that can draw from text."
+        case .producedNothing:
+            return "The drawing finished with no image. That shouldn't happen — check the step count."
+        }
+    }
+}
+
+// ==== LEGO END: 29 The Hand (Frame 3 — Drawing From Words) ====

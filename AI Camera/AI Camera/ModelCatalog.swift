@@ -52,7 +52,7 @@ import Foundation
 /// there's frame two which is reading the image and writing the text, and frame three,
 /// which is reading the text and drawing an image."* Frame 1 is the sensor and needs no
 /// machine. These are the other two.
-enum ModelJob: String, Hashable, Sendable {
+nonisolated enum ModelJob: String, Hashable, Sendable {
     case seeing   // frame 2 — a photograph in, words out
     case drawing  // frame 3 — words in, a photograph out
 
@@ -65,7 +65,7 @@ enum ModelJob: String, Hashable, Sendable {
 }
 
 /// How a model gets onto the phone.
-enum ModelDelivery: Hashable, Sendable {
+nonisolated enum ModelDelivery: Hashable, Sendable {
     /// Ships with iOS. Nothing to fetch, nothing to delete.
     case builtIn
 
@@ -81,7 +81,7 @@ enum ModelDelivery: Hashable, Sendable {
 }
 
 /// One thing the camera can load.
-struct CameraModel: Identifiable, Hashable, Sendable {
+nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// The HuggingFace repo id, and the id the store and downloader key on.
     /// `"apple"` for the built-in, which has no repo.
     let id: String
@@ -134,7 +134,11 @@ struct CameraModel: Identifiable, Hashable, Sendable {
     }
 }
 
-enum ModelCatalog {
+/// `nonisolated` because the catalog is plain data and its readers are not on the main
+/// actor — `DrawerLoader` and `QwenLoader` are actors that load weights off-main by design,
+/// and the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` would otherwise strand a
+/// list of constants on the main thread.
+nonisolated enum ModelCatalog {
 
     /// The kit lens. Free, onboard, guarded, zero download.
     static let apple = CameraModel(

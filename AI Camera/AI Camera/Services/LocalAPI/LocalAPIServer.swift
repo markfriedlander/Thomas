@@ -347,8 +347,100 @@ extension LocalAPIServer {
         case ("POST", "/download"):  return await handleDownload(req)
         case ("GET",  "/downloads"): return await handleDownloads()
         case ("POST", "/release"):   return await handleRelease(req)
+        case ("POST", "/draw"):      return await handleDraw(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
+    }
+
+    /// POST /draw — frame 3, on demand. Words in, a picture out.
+    ///
+    ///   Body:       the prompt (UTF-8, raw). Required.
+    ///   X-Steps:    4         (optional)
+    ///   X-Cfg:      0         (optional)
+    ///   X-Seed:     12345     (optional — fix it to compare runs)
+    ///   X-Unload:   true      (optional — drop the model after, to measure the handoff)
+    ///
+    /// **This exists before any UI does, deliberately.** The question frame 3 asks first is
+    /// not "where does the picture go on screen" — it is *does MLX draw on an iPhone at all,
+    /// how long does it take, and what does it cost in memory*. Nobody on Earth has published
+    /// that measurement. A route answers it tonight, repeatably, without Mark's thumbs, and
+    /// the shutter path can be built on a known quantity instead of a hope.
+    ///
+    /// Returns the timings, the memory, and **the picture itself, base64'd into the JSON**.
+    /// The antenna's `respond` only speaks JSON; rather than grow a binary path and a second
+    /// route for one image, it rides in the body. A 512×512 PNG is a few hundred KB — the
+    /// waste is real and the simplicity is worth more. The picture is the entire point of the
+    /// route, and a measurement I can't look at is how you get a black square you believe in
+    /// for five hours (HISTORY, 2026-07-15).
+    private func handleDraw(_ req: ParsedRequest) async -> (Int, String) {
+        guard let data = req.bodyData, !data.isEmpty,
+              let prompt = String(data: data, encoding: .utf8),
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (400, #"{"error":"POST the prompt as the body"}"#)
+        }
+
+        var drawing = Drawing()
+        if let s = req.headers["x-steps"], let v = Int(s) { drawing.steps = v }
+        if let c = req.headers["x-cfg"], let v = Float(c) { drawing.cfgWeight = v }
+        if let s = req.headers["x-seed"], let v = UInt64(s) { drawing.seed = v }
+
+        let availableBefore = processAvailableMemoryMB()
+        let started = Date()
+        do {
+            let image = try await DrawerLoader.shared.draw(drawing, prompt: prompt)
+            let seconds = Date().timeIntervalSince(started)
+
+            let png = try Self.pngData(image)
+            let snapshot = MLX.Memory.snapshot()
+            var payload: [String: Any] = [
+                "drew":          true,
+                "prompt":        prompt,
+                "steps":         drawing.steps,
+                "cfgWeight":     drawing.cfgWeight,
+                "seed":          drawing.seed.map(String.init) ?? "random",
+                "width":         image.width,
+                "height":        image.height,
+                "totalSeconds":  round(seconds * 100) / 100,
+                "secondsPerStep": round(seconds / Double(max(drawing.steps, 1)) * 100) / 100,
+                // ⭐ The fork. Draw Things does SD in ~2 GB on a phone; that is the number
+                // this is measured against, not a speed.
+                "mlxPeakMB":     Int(Double(snapshot.peakMemory) / 1_048_576),
+                "mlxActiveMB":   Int(Double(snapshot.activeMemory) / 1_048_576),
+                "availableMBBefore": availableBefore.isInfinite ? "unavailable" : Int(availableBefore),
+                "availableMBAfter":  processAvailableMemoryMB().isInfinite ? "unavailable" : Int(processAvailableMemoryMB()),
+                "pngBytes":      png.count,
+                "pngBase64":     png.base64EncodedString()
+            ]
+            if (req.headers["x-unload"] ?? "false") == "true" {
+                await DrawerLoader.shared.unload()
+                payload["unloadedAfter"] = true
+                payload["availableMBAfterUnload"] = processAvailableMemoryMB().isInfinite
+                    ? "unavailable" : Int(processAvailableMemoryMB())
+            }
+            payload["log"] = MemoryLog.shared.recent(40)
+            return (200, json(payload))
+        } catch {
+            // A refusal is data. Report it rather than swallowing it into a 500.
+            return (200, json([
+                "drew":  false,
+                "error": error.localizedDescription,
+                "secondsBeforeFailing": round(Date().timeIntervalSince(started) * 100) / 100,
+                "availableMB": processAvailableMemoryMB().isInfinite
+                    ? "unavailable" : Int(processAvailableMemoryMB()),
+                "log":   MemoryLog.shared.recent(40)
+            ]))
+        }
+    }
+
+    private static func pngData(_ image: CGImage) throws -> Data {
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            out as CFMutableData, "public.png" as CFString, 1, nil) else {
+            throw DrawingError.producedNothing
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { throw DrawingError.producedNothing }
+        return out as Data
     }
 
     /// GET /disk — how much room is actually on the phone, and what the family is using.
