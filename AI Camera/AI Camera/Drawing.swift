@@ -349,7 +349,11 @@ actor DrawerLoader {
         loaded = nil
         MLX.Memory.clearCache()
         let afterRelease = processAvailableMemoryMB()
-        cameraLog("DRAW: released the generator before decoding — iosAvailMB \(formatMB(beforeRelease)) → \(formatMB(afterRelease)) (freed \(formatMB(afterRelease - beforeRelease)))")
+        // ⭐ Peak AT RELEASE, so the decode's contribution is isolatable. If mlxPeak here is
+        // already the final peak, the spike was load/denoise (quantization helps). If it
+        // climbs during the decode below, the spike is the VAE (only tiled decode helps).
+        let atRelease = MLX.Memory.snapshot()
+        cameraLog("DRAW: released the generator before decoding — iosAvailMB \(formatMB(beforeRelease)) → \(formatMB(afterRelease)) (freed \(formatMB(afterRelease - beforeRelease))) | mlxActive=\(String(format: "%.0f", Double(atRelease.activeMemory) / 1_048_576)) peakSoFar=\(String(format: "%.0f", Double(atRelease.peakMemory) / 1_048_576)) MB")
 
         let decodeStarted = Date()
         let decoded = decoder(final)
