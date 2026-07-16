@@ -252,12 +252,11 @@ private struct ModelLibraryRow: View {
         .padding(.vertical, 4)
     }
 
-    /// Green = active. Blue = here. Grey = not here. No dot for a model mid-download —
-    /// the progress bar is already saying so.
+    /// The three-state model dot, from the one shared source (`ModelStatusDot`): green =
+    /// downloaded and active, grey = downloaded and inactive, no dot = not here. A model
+    /// mid-download shows no dot — the progress bar below is already saying so.
     private var statusDot: some View {
-        Circle()
-            .fill(isActive ? Color.green : (model.isInstalled ? Color.blue : Color.secondary.opacity(0.4)))
-            .frame(width: 8, height: 8)
+        ModelStatusDot(isDownloaded: model.isInstalled, isActive: isActive)
     }
 
     private func progress(_ state: MLXModelDownloader.DownloadState) -> some View {
@@ -358,6 +357,37 @@ private struct DiskRow: View {
         f.allowedUnits = [.useGB, .useMB]
         f.countStyle = .file
         return f.string(fromByteCount: bytes)
+    }
+}
+
+/// The model-status dot — **the one place the three-state metaphor lives**, so it cannot
+/// drift again. It already had: a blue "installed" dot crept into the Model Library while
+/// the same logic sat, subtly different, in Preferences. Preferences.swift itself warns
+/// *"two places to change a thing is how they drift"* — this is that lesson applied to the
+/// dot (Principle 7: enforce the constraint in code, don't just document it).
+///
+/// Adopted verbatim from Hal's `modelStatusDot` and its dot-language directive:
+///
+///   • **GREEN** — downloaded and active
+///   • **GREY**  — downloaded but not active
+///   • **(no dot)** — not downloaded
+///
+/// No blue, no orange-downloading, no red-error. Download progress and errors have their own
+/// UI (the progress bar and the red error row in the model card). When the model isn't
+/// downloaded this renders nothing at all — the **absence of a dot IS the state**, exactly as
+/// Hal does it.
+struct ModelStatusDot: View {
+    let isDownloaded: Bool
+    let isActive: Bool
+
+    var body: some View {
+        if isDownloaded {
+            Circle()
+                .fill(isActive ? Color.green : Color.gray.opacity(0.5))
+                .frame(width: 8, height: 8)
+                .accessibilityLabel(isActive ? "Downloaded and active" : "Downloaded")
+        }
+        // No dot when not downloaded.
     }
 }
 

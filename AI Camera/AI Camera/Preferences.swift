@@ -305,9 +305,12 @@ struct PreferencesView: View {
                     .font(.subheadline)
                 Spacer()
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(settings.seer.isAvailable ? Color.green : Color.secondary.opacity(0.4))
-                        .frame(width: 8, height: 8)
+                    // The one shared dot (`ModelStatusDot`). The loaded eye IS the active one,
+                    // so it's green when it's ready to shoot and — per the metaphor — no dot at
+                    // all when it isn't (the reason text below says why). Grey never appears
+                    // here: this row only ever shows the model you're currently shooting with,
+                    // and there is no such thing as an inactive loaded eye.
+                    ModelStatusDot(isDownloaded: settings.seer.isAvailable, isActive: true)
                     Text(settings.seer.name)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
