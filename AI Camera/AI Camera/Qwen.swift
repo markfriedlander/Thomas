@@ -190,9 +190,13 @@ actor QwenLoader {
             // The directory overload, NOT Hal's `configuration:` + `#hubDownloader()`
             // form. Hal passes a downloader it never uses (its own comment says so) and
             // needs it only to thread `extraEOSTokens` through — a text-model concern we
-            // don't have. Taking the directory form means we never even name a
-            // downloader, which is honest: this app cannot download, and the code now
-            // says that.
+            // don't have. Taking the directory form means we never name a downloader here.
+            //
+            // The original comment added "which is honest: this app cannot download, and
+            // the code now says that." **That is no longer true** — the library downloads,
+            // and Qwen arrives through `MLXModelDownloader` like anything else. The
+            // reasoning above survives on its own merits: loading is not downloading, and
+            // by this point the weights are already on disk either way.
             return try await VLMModelFactory.shared.loadContainer(
                 from: directory,
                 using: #huggingFaceTokenizerLoader()
@@ -256,7 +260,11 @@ enum QwenError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notInstalled(let repo):
-            return "\(repo) isn't in the shared store. Download it in Hal or Posey and it appears here."
+            // Was: "Download it in Hal or Posey and it appears here." True on day one, when
+            // this app genuinely couldn't fetch a byte. It can now — Preferences → Models →
+            // Browse Model Library. Sending a user to two unreleased apps is no longer an
+            // answer, and it never should have been the shipping one.
+            return "\(repo) isn't downloaded yet. Get it in Preferences → Models → Browse Model Library."
         case .notEnoughMemory(let message):
             return message
         }

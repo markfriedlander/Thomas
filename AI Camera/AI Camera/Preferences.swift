@@ -201,7 +201,6 @@ struct PreferencesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                eyeSection
                 modelSection
                 promptSection
                 layoutSection
@@ -228,38 +227,15 @@ struct PreferencesView: View {
 
     // MARK: - Which machine is looking
 
-    private var eyeSection: some View {
-        Section {
-            Picker("Model", selection: $settings.seer) {
-                ForEach([Seer.apple, Seer.qwen], id: \.self) { seer in
-                    Text(seer.name).tag(seer)
-                }
-            }
-            if !settings.seer.isAvailable {
-                Text(unavailableReason)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("The eye")
-        } footer: {
-            // Said plainly, with the real trade-offs. Not marketing, and not a verdict —
-            // which is better is not ours to say (Principle 3).
-            Text(settings.seer == .apple
-                 ? "Apple Intelligence. On the phone already, nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers."
-                 : "Qwen3.5-2B, \(String(format: "%.1f", Double(qwenSize) / 1e9)) GB, shared with Hal and Posey — already downloaded, so nothing to fetch. No filter of any kind. Sees more, and largely ignores instructions about how to speak. First look after launch takes ~9s while it loads; after that ~3s.")
-        }
-    }
-
-    private var qwenSize: Int64 { SharedModelStore.sizeOnDisk(Qwen.repo) }
-
-    // MARK: - The door on the downloader
-
-    /// Hal's convention exactly: the active model with a status dot, and a row through to
-    /// the library. Posey copied it verbatim; this is the third tenant doing the same.
+    /// Hal's convention: the loaded model with a status dot, and a row through to the
+    /// library. Posey copied it verbatim; this is the third tenant doing the same.
     ///
-    /// This section is the whole of what Mark went looking for and didn't find. The
-    /// downloader had been in the app for a day with no way to reach it.
+    /// **This replaced a second, older way of choosing the eye.** Preferences used to carry
+    /// its own `Picker` over Apple/Qwen plus a footer spelling out each one's trade-offs —
+    /// written when there was nowhere else for that to live. The library now selects models
+    /// and describes them (`ModelCatalog`'s blurbs are that footer's text, moved to where
+    /// the model is), so the picker was a second control for one setting and the footer was
+    /// a second copy of one description. Two places to change a thing is how they drift.
     private var modelSection: some View {
         Section {
             HStack {
@@ -275,6 +251,14 @@ struct PreferencesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // Kept from the old section — the one thing the library can't say, because it's
+            // about the eye you're *currently* shooting with. Three distinct reasons need
+            // three distinct messages; see NEXT.md on `UnavailableReason`.
+            if !settings.seer.isAvailable {
+                Text(unavailableReason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             NavigationLink {
                 ModelLibraryView()
             } label: {
@@ -284,14 +268,17 @@ struct PreferencesView: View {
         } header: {
             Text("Models")
         } footer: {
-            Text("Download the machines the camera runs on. Models are shared with Hal and Posey — anything they've already fetched is here for free.")
+            Text("Download the machines the camera runs on, and choose which eye is loaded. Models are shared with Hal and Posey — anything they've already fetched is here for free.")
         }
     }
 
     private var unavailableReason: String {
         switch settings.seer {
         case .apple: return Readiness.current.explanation
-        case .qwen:  return "Not in the shared store. Download it in Hal or Posey and it appears here."
+        // Was: "Download it in Hal or Posey and it appears here." That stopped being true
+        // the moment the library existed, and it was the app admitting it was a parasite on
+        // two apps that aren't released.
+        case .qwen:  return "Not downloaded yet — get it in the Model Library."
         }
     }
 
