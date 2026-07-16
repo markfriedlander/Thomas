@@ -22,12 +22,30 @@
 //
 
 import CoreGraphics
+import Photos
 import UIKit
 
 // ==== LEGO START: 30 The Shot (One Press, All Three Frames) ====
 
 @MainActor
 enum Shot {
+
+    /// Into the camera roll, where the shot develops.
+    ///
+    /// Shared so the live shutter (`CameraView.develop`) and a remote press (`POST /press`)
+    /// save the same way — a remote press is a real press and lands in Photos like one.
+    static func save(_ images: [UIImage]) async {
+        guard !images.isEmpty else { return }
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else { return }
+        try? await PHPhotoLibrary.shared().performChanges {
+            // One change block so the pair (photo + words, for "Separate images") lands
+            // together, in order.
+            for image in images {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+        }
+    }
 
     /// See, then draw from what was seen. Returns the words and the optional drawing.
     ///

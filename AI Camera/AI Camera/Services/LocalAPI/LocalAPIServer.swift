@@ -402,8 +402,95 @@ extension LocalAPIServer {
         case ("POST", "/release"):   return await handleRelease(req)
         case ("POST", "/draw"):      return await handleDraw(req)
         case ("POST", "/shoot"):     return await handleShoot(req)
+        case ("POST", "/press"):     return await handlePress(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
+    }
+
+    /// POST /press — **thumbs on the phone.** Press the shutter, for real, from here.
+    ///
+    ///   X-Draw: true|false (optional; default true)
+    ///
+    /// Mark, 2026-07-16: *"You need to have thumbs on the phone. Please add whatever you need
+    /// to do that."* And he is right that it was always the charter — the antenna exists so
+    /// *"the API can do everything a human can do that isn't blocked by Apple security
+    /// policies."* A human points the lens and presses the shutter; this is that.
+    ///
+    /// The difference from `/shoot` is the whole point: `/shoot` runs the pipeline on a
+    /// photograph handed IN (a test file), which is how the flower got drawn — it never
+    /// touched the sensor. **This captures from the live lens** (`Lens.current`, the same
+    /// camera the viewfinder is showing), runs the identical `Shot` pipeline, and **saves to
+    /// Photos** exactly like the button. It is indistinguishable from a real press, except
+    /// that it also hands the drawing and the memory numbers back so a session can see what
+    /// it took.
+    ///
+    /// Requires the app foregrounded with the camera on screen — otherwise there is no live
+    /// lens, and it says so rather than guessing.
+    private func handlePress(_ req: ParsedRequest) async -> (Int, String) {
+        // The live lens, and a frame from it — on the main actor, where capture lives.
+        let lens = await MainActor.run { Lens.current }
+        guard let lens else {
+            return (200, json([
+                "pressed": false,
+                "error": "No live lens. Foreground the app with the camera on screen, then press."
+            ]))
+        }
+        guard let photograph = await lens.capture() else {
+            return (200, json(["pressed": false, "error": "The lens returned no frame."]))
+        }
+
+        let seer = await MainActor.run { Settings.shared.seer }
+        let drawThird = (req.headers["x-draw"] ?? "true") != "false"
+
+        let availBefore = processAvailableMemoryMB()
+        let started = Date()
+
+        struct PressOut: Sendable { let words: String; let outcome: String; let drawn: CGImage? }
+        let out = await ModelLane.shared.run("press") { () -> PressOut in
+            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            // A real press develops and saves — reality's receipt included.
+            let frames = await MainActor.run { () -> [UIImage] in
+                // `place: nil` — the GPS footer needs CameraView's live `Place` instance,
+                // which the antenna can't reach (there's no `Place.current` the way there's
+                // a `Lens.current`). A remote press therefore lands without the place stamp.
+                // Cosmetic for a test press; add `Place.current` if a remote press ever needs
+                // reality's full receipt.
+                let f = Darkroom.develop(photograph: photograph,
+                                         words: perception.wireText,
+                                         place: nil,
+                                         layout: Settings.shared.layout)
+                return f
+            }
+            var toSave = frames
+            if let drawnImage { toSave.append(drawnImage) }
+            await Shot.save(toSave)
+            return PressOut(words: perception.wireText,
+                            outcome: perception.wireName,
+                            drawn: drawnImage?.cgImage)
+        }
+
+        let seconds = Date().timeIntervalSince(started)
+        let snapshot = MLX.Memory.snapshot()
+        var payload: [String: Any] = [
+            "pressed":           true,
+            "savedToPhotos":     true,
+            "seer":              seer == .qwen ? "qwen" : "afm",
+            "drewThirdFrame":    out.drawn != nil,
+            "outcome":           out.outcome,
+            "words":             out.words,
+            "width":             photograph.width,
+            "height":            photograph.height,
+            "totalSeconds":      round(seconds * 100) / 100,
+            "mlxPeakMB":         Int(Double(snapshot.peakMemory) / 1_048_576),
+            "availableMBBefore": availBefore.isInfinite ? "unavailable" : Int(availBefore),
+            "availableMBAfter":  processAvailableMemoryMB().isInfinite ? "unavailable" : Int(processAvailableMemoryMB()),
+            "log":               MemoryLog.shared.recent(60)
+        ]
+        if let drawn = out.drawn, let png = try? Self.pngData(drawn) {
+            payload["pngBytes"] = png.count
+            payload["pngBase64"] = png.base64EncodedString()
+        }
+        return (200, json(payload))
     }
 
     /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.

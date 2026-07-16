@@ -249,20 +249,7 @@ struct CameraView: View {
         }
 
         lastFrame = frames.last
-        await Self.save(frames)
-    }
-
-    /// Into the camera roll, where it develops.
-    private static func save(_ images: [UIImage]) async {
-        guard !images.isEmpty else { return }
-        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { return }
-        try? await PHPhotoLibrary.shared().performChanges {
-            // One change block so the pair lands together, in order.
-            for image in images {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            }
-        }
+        await Shot.save(frames)
     }
 }
 
