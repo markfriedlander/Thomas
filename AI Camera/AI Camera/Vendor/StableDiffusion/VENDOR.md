@@ -73,6 +73,16 @@ touched.
 **If this is ever made a real local SPM package, revert both renames** — the module boundary
 makes them unnecessary, and they are pure cost.
 
+### 3. `CLIPTokenizer.tokenize` truncates to 77 tokens (2026-07-16)
+
+`Tokenizer.swift`. Upstream returns `[bos] + allContent + [eos]` with no cap. CLIP's text
+encoder has a fixed `[77, 1024]` positional embedding, so any prompt over 77 tokens aborts MLX
+mid-draw with a **`Fatal error: [broadcast_shapes] Shapes (1,92,1024) and (77,1024) cannot be
+broadcast`** — the app dies (signal 5). Mark hit it on the first verbose description (a laptop
+→ 92 tokens). This caps content at 75 (BOS + 75 + EOS = 77), which is what every real CLIP
+tokenizer does. **This is a genuine upstream bug, not an AI-Camera-ism — worth reporting to
+mlx-swift-examples.** A re-sync must re-apply it.
+
 ---
 
 ## Known upstream issues, NOT fixed here

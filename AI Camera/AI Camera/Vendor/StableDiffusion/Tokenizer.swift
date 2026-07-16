@@ -127,8 +127,21 @@ nonisolated class CLIPTokenizer {
         // Split the tokens according to the byte-pair merge file
         let bpeTokens = tokens.flatMap { bpe(text: String($0)) }
 
-        // Map to token ids and return
-        let result = [bosToken] + bpeTokens.compactMap { vocabulary[$0] } + [eosToken]
+        // Map to token ids, TRUNCATED to CLIP's context length.
+        //
+        // ⚠️ VENDORED FIX (2026-07-16). Upstream returns every token; this caps at 77.
+        // CLIP's text encoder has a fixed [77, 1024] positional embedding, so a longer
+        // sequence aborts MLX mid-draw with `[broadcast_shapes] Shapes (1,92,1024) and
+        // (77,1024) cannot be broadcast` — a hard `Fatal error`, i.e. the app dies. Mark hit
+        // it on the first verbose description (a laptop, 92 tokens). Every real CLIP tokenizer
+        // truncates here; this one forgot. BOS + up to 75 content + EOS = 77.
+        //
+        // Consequence to know (not a bug, a property of SD/CLIP): the drawer only ever reads
+        // the first ~75 tokens of the eye's words. Qwen is verbose, so long descriptions get
+        // their tails dropped — including a hand style appended at the end. See NEXT.
+        let maxContentTokens = 77 - 2  // reserve BOS and EOS
+        let content = bpeTokens.compactMap { vocabulary[$0] }.prefix(maxContentTokens)
+        let result = [bosToken] + Array(content) + [eosToken]
 
         return result.map { Int32($0) }
     }
