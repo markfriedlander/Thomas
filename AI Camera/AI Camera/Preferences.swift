@@ -222,6 +222,22 @@ struct PreferencesView: View {
                 thirdFrameSection
                 resetSection
             }
+            // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
+            //
+            // It used to hang off the Section, and that is why it "hid itself as soon as you
+            // clicked" (Mark, 2026-07-16): `settings` is `@Observable`, the system-prompt
+            // TextEditor mutates it on the way in, the Section re-evaluates, and a `.sheet`
+            // bound to a view that's being rebuilt gets torn down — it opens and instantly
+            // dismisses. A sheet has to hang off a stable parent. The Form is stable; the
+            // Section is not.
+            .sheet(isPresented: $showingPresets) {
+                PresetPicker { preset in
+                    // Show your work: the preset writes into the visible fields. Nothing is
+                    // configured behind your back, and you can see exactly what it did.
+                    settings.systemPrompt = preset.systemPrompt
+                    settings.temperature = preset.temperature
+                }
+            }
             .navigationTitle("Preferences")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
@@ -328,14 +344,8 @@ struct PreferencesView: View {
         } footer: {
             Text("Higher temperature makes the machine reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific — not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
         }
-        .sheet(isPresented: $showingPresets) {
-            PresetPicker { preset in
-                // Show your work: the preset writes into the visible fields. Nothing is
-                // configured behind your back, and you can see exactly what it did.
-                settings.systemPrompt = preset.systemPrompt
-                settings.temperature = preset.temperature
-            }
-        }
+        // NOTE: the `.sheet` for presets is on the Form (see `body`), NOT here — attaching it
+        // to this Section made it dismiss itself on every re-render.
     }
 
     // MARK: - Factory reset

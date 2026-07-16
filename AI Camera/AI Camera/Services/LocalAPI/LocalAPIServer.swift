@@ -441,41 +441,61 @@ extension LocalAPIServer {
 
         let seer = await MainActor.run { Settings.shared.seer }
         let drawThird = (req.headers["x-draw"] ?? "true") != "false"
+        // Optional layout override, so a session can exercise every layout without reaching
+        // the app's UI — the raw case name, e.g. `X-Layout: separate`. Absent → whatever the
+        // app is set to.
+        let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
 
         let availBefore = processAvailableMemoryMB()
         let started = Date()
 
-        struct PressOut: Sendable { let words: String; let outcome: String; let drawn: CGImage? }
+        // Returns EVERY saved frame as PNG bytes, not just the drawing — so a session can see
+        // the whole triptych (reality, the words, the re-imagining), which is exactly what
+        // Mark said we need to diagnose anything: *"Without being able to look at all three
+        // we're gonna have some issues."*
+        struct PressOut: Sendable {
+            let words: String
+            let outcome: String
+            let drewThird: Bool
+            let layoutName: String
+            let framePNGs: [Data]
+        }
         let out = await ModelLane.shared.run("press") { () -> PressOut in
             let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
             // A real press develops and saves — reality's receipt included.
-            let frames = await MainActor.run { () -> [UIImage] in
+            let (frames, layoutName): ([UIImage], String) = await MainActor.run {
+                let layout = layoutOverride ?? Settings.shared.layout
                 // `place: nil` — the GPS footer needs CameraView's live `Place` instance,
-                // which the antenna can't reach (there's no `Place.current` the way there's
-                // a `Lens.current`). A remote press therefore lands without the place stamp.
-                // Cosmetic for a test press; add `Place.current` if a remote press ever needs
-                // reality's full receipt.
+                // which the antenna can't reach (there's no `Place.current` the way there's a
+                // `Lens.current`). A remote press lands without the place stamp. Cosmetic.
                 let f = Darkroom.develop(photograph: photograph,
                                          words: perception.wireText,
                                          place: nil,
-                                         layout: Settings.shared.layout)
-                return f
+                                         layout: layout)
+                return (f, layout.name)
             }
-            var toSave = frames
-            if let drawnImage { toSave.append(drawnImage) }
+            // The drawing is a frame of the shot too. Appended so "Separate images" saves all
+            // three (photo, words, drawing) — the thing Mark reported missing.
+            let toSave = drawnImage.map { frames + [$0] } ?? frames
             await Shot.save(toSave)
+            let pngs = await MainActor.run { toSave.compactMap { $0.pngData() } }
             return PressOut(words: perception.wireText,
                             outcome: perception.wireName,
-                            drawn: drawnImage?.cgImage)
+                            drewThird: drawnImage != nil,
+                            layoutName: layoutName,
+                            framePNGs: pngs)
         }
 
         let seconds = Date().timeIntervalSince(started)
         let snapshot = MLX.Memory.snapshot()
-        var payload: [String: Any] = [
+        let payload: [String: Any] = [
             "pressed":           true,
             "savedToPhotos":     true,
             "seer":              seer == .qwen ? "qwen" : "afm",
-            "drewThirdFrame":    out.drawn != nil,
+            "layout":            out.layoutName,
+            "drewThirdFrame":    out.drewThird,
+            // ⭐ The count that answers the "separate images" bug: how many assets landed.
+            "savedCount":        out.framePNGs.count,
             "outcome":           out.outcome,
             "words":             out.words,
             "width":             photograph.width,
@@ -484,12 +504,10 @@ extension LocalAPIServer {
             "mlxPeakMB":         Int(Double(snapshot.peakMemory) / 1_048_576),
             "availableMBBefore": availBefore.isInfinite ? "unavailable" : Int(availBefore),
             "availableMBAfter":  processAvailableMemoryMB().isInfinite ? "unavailable" : Int(processAvailableMemoryMB()),
+            // Every saved frame, in save order, base64'd. Reality → words → re-imagining.
+            "frames":            out.framePNGs.map { $0.base64EncodedString() },
             "log":               MemoryLog.shared.recent(60)
         ]
-        if let drawn = out.drawn, let png = try? Self.pngData(drawn) {
-            payload["pngBytes"] = png.count
-            payload["pngBase64"] = png.base64EncodedString()
-        }
         return (200, json(payload))
     }
 
