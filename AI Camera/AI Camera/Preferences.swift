@@ -202,6 +202,7 @@ struct PreferencesView: View {
         NavigationStack {
             Form {
                 eyeSection
+                modelSection
                 promptSection
                 layoutSection
                 resetSection
@@ -251,6 +252,41 @@ struct PreferencesView: View {
     }
 
     private var qwenSize: Int64 { SharedModelStore.sizeOnDisk(Qwen.repo) }
+
+    // MARK: - The door on the downloader
+
+    /// Hal's convention exactly: the active model with a status dot, and a row through to
+    /// the library. Posey copied it verbatim; this is the third tenant doing the same.
+    ///
+    /// This section is the whole of what Mark went looking for and didn't find. The
+    /// downloader had been in the app for a day with no way to reach it.
+    private var modelSection: some View {
+        Section {
+            HStack {
+                Text("Loaded")
+                    .font(.subheadline)
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(settings.seer.isAvailable ? Color.green : Color.secondary.opacity(0.4))
+                        .frame(width: 8, height: 8)
+                    Text(settings.seer.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            NavigationLink {
+                ModelLibraryView()
+            } label: {
+                Label("Browse Model Library", systemImage: "square.grid.2x2")
+            }
+            .foregroundStyle(.primary)
+        } header: {
+            Text("Models")
+        } footer: {
+            Text("Download the machines the camera runs on. Models are shared with Hal and Posey — anything they've already fetched is here for free.")
+        }
+    }
 
     private var unavailableReason: String {
         switch settings.seer {

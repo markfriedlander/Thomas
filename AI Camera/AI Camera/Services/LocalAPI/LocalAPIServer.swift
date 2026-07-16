@@ -518,9 +518,16 @@ extension LocalAPIServer {
             ]))
         }
 
-        // Size: caller's figure if given, otherwise measured from the repo through the same
-        // filter the downloader will apply. Never assumed.
-        var sizeGB: Double? = req.headers["x-size-gb"].flatMap(Double.init)
+        // If the camera knows this model, take the catalog's terms — the same size and the
+        // same file allowlist the Download button in the library would use. The antenna
+        // must exercise the path a human exercises, not a parallel one that could pass
+        // while the real one is broken. That is the whole point of the directive it exists
+        // to serve.
+        let known = ModelCatalog.model(id: repoID)
+
+        // Size: caller's figure, else the catalog's, else measured from the repo through
+        // the same filter the downloader will apply. Never assumed.
+        var sizeGB: Double? = req.headers["x-size-gb"].flatMap(Double.init) ?? known?.sizeGB
         var measured = false
         if sizeGB == nil {
             if let bytes = await Self.measureRepoBytes(repoID) {
@@ -556,15 +563,20 @@ extension LocalAPIServer {
             ]))
         }
 
-        cameraLog("DOWNLOAD: antenna starting \(repoID) sizeGB=\(sizeGB) measured=\(measured)")
+        cameraLog("DOWNLOAD: antenna starting \(repoID) sizeGB=\(sizeGB) measured=\(measured) allowlist=\(known?.fileAllowlist?.count.description ?? "none")")
         // Fire and return. A multi-GB download does not finish inside an HTTP request —
         // poll GET /downloads.
-        Task { await MLXModelDownloader.shared.startDownload(modelID: repoID, repoID: repoID, sizeGB: sizeGB) }
+        Task {
+            await MLXModelDownloader.shared.startDownload(
+                modelID: repoID, repoID: repoID, sizeGB: sizeGB, files: known?.fileAllowlist)
+        }
 
         return (200, json([
             "repo":     repoID,
             "started":  true,
             "measured": measured,
+            "inCatalog": known != nil,
+            "fileCount": known?.fileAllowlist?.count ?? 0,
             "sizeGB":   (sizeGB * 100).rounded() / 100,
             "message":  "Started. Poll GET /downloads."
         ]))

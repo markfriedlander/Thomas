@@ -65,8 +65,15 @@ import Darwin
 // them, since loads and unloads happen off the main actor by design.
 
 /// A small ring of recent memory-log lines, readable through the antenna.
-final class MemoryLog: @unchecked Sendable {
-    nonisolated static let shared = MemoryLog()
+///
+/// `nonisolated` on the **type**, not just on the methods. The methods were already marked
+/// nonisolated — correctly, since every caller is off the main actor — but the stored
+/// properties were left to the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
+/// default, which made them `@MainActor` and left `log()` unable to touch its own storage.
+/// That is six warnings, and this project treats warnings as errors. The `NSLock` is what
+/// actually makes this safe, which is what `@unchecked Sendable` is asserting.
+nonisolated final class MemoryLog: @unchecked Sendable {
+    static let shared = MemoryLog()
 
     private let lock = NSLock()
     private var lines: [String] = []
@@ -129,13 +136,13 @@ nonisolated func processAvailableMemoryMB() -> Double {
 
 /// Effective dirty-memory ratio for 4-bit quantized safetensors loaded via mmap. Hal's
 /// figure, hard-won. Covers tokenizer/vocab residency and the first prefill's scratch.
-private let dirtyMemoryRatio: Double = 0.75
+nonisolated private let dirtyMemoryRatio: Double = 0.75
 
 /// Safety margin in MB above the process baseline and iOS's dirty-memory cliff. Hal's.
-private let safetyMarginMB: Double = 250.0
+nonisolated private let safetyMarginMB: Double = 250.0
 
 /// Conservative fallback when a size is genuinely unknown. Hal's.
-private let assumedSizeGB: Double = 2.5
+nonisolated private let assumedSizeGB: Double = 2.5
 
 /// Estimated MB the process needs available to load a model of `sizeGB`.
 ///

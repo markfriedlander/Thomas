@@ -63,6 +63,12 @@
 //  MLXModelDownloader.swift
 //   26  The Downloader (Fetching Weights)
 //
+//  ModelCatalog.swift
+//   27  Model Catalog (What The Camera Can Load)
+//
+//  ModelLibraryView.swift
+//   28  ModelLibraryView (The Model Library)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

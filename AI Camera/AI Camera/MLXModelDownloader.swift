@@ -102,7 +102,18 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
     /// Background URLSession identifier. Must be stable across app launches so
     /// iOS can reconnect us to in-flight downloads from a previous run.
-    static let backgroundSessionID = "com.MarkFriedlander.Hal-Universal.modelDownload.v1"
+    /// AI Camera's own, **not Hal's** — the port carried
+    /// `com.MarkFriedlander.Hal-Universal.modelDownload.v1` across verbatim.
+    ///
+    /// A background `URLSession` identifier is scoped to the app, so sharing the string
+    /// with Hal was not corrupting anything, and nothing had ever downloaded on it. But it
+    /// is the identifier iOS uses to hand a finished transfer back to the right session
+    /// after it relaunches the app, and `AI_CameraApp` compares
+    /// `handleEventsForBackgroundURLSession`'s identifier against this constant to decide
+    /// whether a wake-up is ours. A name that says Hal on a value that must mean *this app*
+    /// is a trap for whoever reads it next, and this file is going to be re-synced from Hal
+    /// repeatedly. Renamed while nothing depends on the old value.
+    static let backgroundSessionID = "com.MarkFriedlander.AI-Camera.modelDownload.v1"
 
     /// Completion handler passed in by `CameraAppDelegate`. Invoked once all
     /// pending background events have been processed so iOS knows it's safe
@@ -286,8 +297,15 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     /// `repoID` is the full HF repo path (e.g. "mlx-community/gemma-4-e2b-it-4bit").
     /// `modelID` is what MLXModelDownloader uses to identify the model — usually
     /// identical to `repoID`.
-    func startDownload(modelID: String, repoID: String) async throws {
-        cameraLog("HALDEBUG-BGDL: startDownload modelID=\(modelID) repoID=\(repoID)")
+    /// - Parameter files: the exact paths to fetch, or `nil` to take every MLX-shaped file
+    ///   in the repo (the rule Hal has always used, and the right one for an LLM repo).
+    ///
+    ///   **Non-nil is required for diffusion repos and the reason is measured, not
+    ///   theoretical:** a diffusion repo carries the same weights at several precisions, so
+    ///   the pattern rule takes `stabilityai/sd-turbo` — a 2.4 GB model — as **12.07 GB**,
+    ///   and SD 1.5 as 22.01 GB. See `ModelCatalog.Delivery`.
+    func startDownload(modelID: String, repoID: String, files: [String]? = nil) async throws {
+        cameraLog("HALDEBUG-BGDL: startDownload modelID=\(modelID) repoID=\(repoID) allowlist=\(files?.count.description ?? "none")")
 
         // DEDUP: cancel any in-flight tasks for this model in EITHER session
         // before enqueuing fresh ones. Without this, repeat calls accumulate
@@ -313,14 +331,33 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
         // Fetch the file list from the HF tree API.
         let allFiles = try await fetchRepoFileList(repoID: repoID)
-        let mlxFiles = allFiles.filter { Self.matchesMLXPattern($0) }
+
+        let mlxFiles: [String]
+        if let files {
+            // An allowlist is checked against the repo rather than trusted. A typo'd path
+            // would otherwise become a silent 404 per file and a "download" that finishes
+            // with a model missing its UNet — which fails later, somewhere else, as a
+            // shape mismatch deep in MLX. Fail here instead, naming the file.
+            let present = Set(allFiles)
+            let missing = files.filter { !present.contains($0) }
+            if !missing.isEmpty {
+                cameraLog("HALDEBUG-BGDL: allowlist names files not in \(repoID): \(missing.joined(separator: ", "))")
+                throw NSError(domain: "BackgroundDownloadCoordinator", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: "\(repoID) is missing \(missing.count) file(s) this model needs: \(missing.joined(separator: ", ")). The repository may have changed."
+                ])
+            }
+            mlxFiles = files
+        } else {
+            mlxFiles = allFiles.filter { Self.matchesMLXPattern($0) }
+        }
+
         if mlxFiles.isEmpty {
             cameraLog("HALDEBUG-BGDL: No MLX-compatible files found in \(repoID); aborting")
             throw NSError(domain: "BackgroundDownloadCoordinator", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "No MLX-compatible files found in repository \(repoID)."
             ])
         }
-        cameraLog("HALDEBUG-BGDL: Found \(mlxFiles.count) MLX files for \(modelID): \(mlxFiles.joined(separator: ", "))")
+        cameraLog("HALDEBUG-BGDL: Taking \(mlxFiles.count) file(s) for \(modelID)\(files == nil ? " (pattern)" : " (allowlist)"): \(mlxFiles.joined(separator: ", "))")
 
         // Ensure target directory exists.
         let modelDir = modelDirectory(for: modelID)
@@ -376,6 +413,10 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     @Published var bytesWrittenByModel: [String: Int64] = [:]
     @Published var bytesExpectedByModel: [String: Int64] = [:]
     private var filesPendingByModel: [String: Set<String>] = [:]
+    /// Files that downloaded but could not be saved: modelID → filename → error.
+    /// Non-empty at the end of a download means the model FAILED, however cleanly every
+    /// individual transfer reported. See `didFinishDownloadingTo`.
+    private var filesFailedByModel: [String: [String: String]] = [:]
 
     func progress(for modelID: String) -> Double {
         let expected = bytesExpectedByModel[modelID] ?? 0
@@ -392,8 +433,27 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     //
     // GET https://huggingface.co/api/models/<repo>/tree/main
     // Returns a JSON array of {"type": "file"|"directory", "path": "...", "size": Int}
+    //
+    // ⚠️ `?recursive=1` is load-bearing, and its absence was a real bug — fixed 2026-07-15
+    // after the first download this app ever attempted failed on it.
+    //
+    // Without it the tree API returns **only the top level**: root files, plus directories
+    // as entries of `type: "directory"`, which the filter below drops. Hal never noticed
+    // because an MLX LLM repo is flat — `model.safetensors`, `config.json`, and the
+    // tokenizer all sit at the root, so the top level *is* the repo.
+    //
+    // A diffusion repo is not flat. Its weights live in `unet/`, `vae/`, `text_encoder/`,
+    // so a non-recursive listing sees none of them. The failure is quiet and misleading:
+    // the file list comes back with the READMEs in it, and either the allowlist reports
+    // every file "missing" (what happened) or the pattern rule downloads a couple of JSONs
+    // and calls it a model.
+    //
+    // This is copy-drift of the same species as `clearHubCache`: correct code whose
+    // premise ("repos are flat") stopped holding when the subject changed, and nothing
+    // re-checked it. Hal should take this fix too — it is harmless there and wrong to
+    // leave asymmetric.
     private func fetchRepoFileList(repoID: String) async throws -> [String] {
-        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/main") else {
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/main?recursive=1") else {
             throw NSError(domain: "BackgroundDownloadCoordinator", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Bad repo ID: \(repoID)"
             ])
@@ -466,24 +526,96 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         // synchronously inside the delegate callback — iOS deletes `location`
         // as soon as we return.
         let target = URL(fileURLWithPath: context.targetPath)
+
+        // ⚠️ Create the file's own folder first. `startDownload` creates the *model*
+        // directory, but a file like `unet/diffusion_pytorch_model.fp16.safetensors` needs
+        // `<model>/unet/` to exist as well, and `moveItem` will not create intermediates —
+        // it throws. Hal never needed this because an MLX LLM repo is flat.
+        //
+        // Measured 2026-07-15, first download this app ever ran: without it, all 9 files of
+        // sd-turbo failed to move, and **the bytes are unrecoverable** — iOS deletes
+        // `location` the instant this delegate returns. 2.4 GB fetched, nothing kept.
+        do {
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+        } catch {
+            cameraLog("HALDEBUG-BGDL: ❌ Could not create folder for \(context.filename): \(error.localizedDescription)")
+        }
+
         try? FileManager.default.removeItem(at: target)
+        var moveError: String?
         do {
             try FileManager.default.moveItem(at: location, to: target)
             cameraLog("HALDEBUG-BGDL: Moved \(context.filename) → \(target.path) (\(kind == .foreground ? "fg" : "bg") task \(downloadTask.taskIdentifier))")
         } catch {
+            moveError = error.localizedDescription
             cameraLog("HALDEBUG-BGDL: ❌ Move failed for \(context.filename): \(error.localizedDescription)")
         }
 
         // Update bookkeeping. Note: didCompleteWithError will fire shortly
         // after this; final cleanup happens there.
+        // `let` so the closure captures a value, not the var — a captured `var` is a
+        // warning today and an error under Swift 6.
+        let failure = moveError
         Task { @MainActor in
             var pending = self.filesPendingByModel[context.modelID] ?? []
             pending.remove(context.filename)
             self.filesPendingByModel[context.modelID] = pending
+
+            // ⭐ A file that failed to move is NOT a finished file.
+            //
+            // This `catch` used to log and swallow, and the line above removed the file from
+            // `pending` regardless — so a download in which *every single file failed* still
+            // emptied the checklist, called `notifyModelDownloadComplete`, **claimed the
+            // model in the shared manifest**, marked it downloaded, and told the user "Model
+            // ready." That is exactly what happened here tonight, and the ledger asserting
+            // ownership of files that don't exist is the same second-order failure that made
+            // `clearHubCache` so bad: the manifest kept its entries while the vault was
+            // empty, and the next reader reasoned from fiction.
+            //
+            // Fixing the directory creation above hides this. It does not fix it — any
+            // future move failure (full disk, permissions, a sandbox change) would go back to
+            // reporting success. So failures are tracked and the model refuses to complete.
+            if let failure {
+                self.filesFailedByModel[context.modelID, default: [:]][context.filename] = failure
+            }
             if pending.isEmpty {
-                self.notifyModelDownloadComplete(modelID: context.modelID)
+                if let failures = self.filesFailedByModel[context.modelID], !failures.isEmpty {
+                    self.notifyModelDownloadFailed(modelID: context.modelID, failures: failures)
+                    self.filesFailedByModel[context.modelID] = nil
+                } else {
+                    self.notifyModelDownloadComplete(modelID: context.modelID)
+                }
             }
         }
+    }
+
+    /// A download that finished with files missing. **Never claims, never marks downloaded.**
+    ///
+    /// The mirror of `notifyModelDownloadComplete`, and deliberately its opposite in the two
+    /// ways that matter: no `SharedModelStore.claim` (the ledger must not describe files that
+    /// aren't there) and no `markModelAsDownloadedFromBackground`. The download lock IS
+    /// released — we're done with it either way, and a sibling waiting behind us should get
+    /// its turn rather than wait out the stale-lock timeout.
+    ///
+    /// Partial files are removed. A half-model on disk is worse than none: `isRepoDownloaded`
+    /// is a disk check, so leftovers would make the next launch believe the model is present.
+    @MainActor
+    private func notifyModelDownloadFailed(modelID: String, failures: [String: String]) {
+        let summary = failures.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
+        cameraLog("HALDEBUG-BGDL: ❌ Model \(modelID) FAILED — \(failures.count) file(s) did not land. \(summary)")
+
+        let dir = SharedModelStore.mlxModelDir(modelID)
+        if FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.removeItem(at: dir)
+            cameraLog("HALDEBUG-BGDL: removed partial \(modelID) so nothing mistakes it for installed")
+        }
+        SharedModelStore.releaseDownloadLock(modelID: modelID)
+
+        let first = failures.first.map { "\($0.key) — \($0.value)" } ?? "unknown error"
+        MLXModelDownloader.shared.reportDownloadFailure(
+            modelID: modelID,
+            message: "\(modelID) didn't finish: \(failures.count) file(s) couldn't be saved. \(first)")
     }
 
     func urlSession(_ session: URLSession,
@@ -814,6 +946,10 @@ class MLXModelDownloader: ObservableObject {
         let modelID: String
         let repoID: String
         let sizeGB: Double?
+        /// Carried through the queue so a download that waited behind another still takes
+        /// the right files. Dropping it here would mean a queued diffusion model quietly
+        /// reverting to the pattern rule and pulling 12 GB instead of 2.4.
+        let files: [String]?
     }
     
     // MARK: - Multi-Model State
@@ -1203,7 +1339,10 @@ class MLXModelDownloader: ObservableObject {
         return "Downloading \(modelDisplayName) needs about \(requiredStr) free, but only \(availableStr) is available on this device. Free up some space and try again."
     }
 
-    func startDownload(modelID: String, repoID: String, sizeGB: Double? = nil) async {
+    /// - Parameter files: exact paths to fetch, or `nil` for every MLX file in the repo.
+    ///   Diffusion models must pass one — see `ModelCatalog.Delivery` and the measurements
+    ///   in `ModelCatalog.swift`'s header.
+    func startDownload(modelID: String, repoID: String, sizeGB: Double? = nil, files: [String]? = nil) async {
         // Check if already downloaded
         if isModelDownloaded(modelID) {
             await MainActor.run {
@@ -1228,7 +1367,7 @@ class MLXModelDownloader: ObservableObject {
         if currentDownloadTask != nil {
             await MainActor.run {
                 // Add to queue
-                let queuedDownload = QueuedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB)
+                let queuedDownload = QueuedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB, files: files)
                 downloadQueue.append(queuedDownload)
 
                 var state = downloadStates[modelID] ?? DownloadState(
@@ -1313,14 +1452,14 @@ class MLXModelDownloader: ObservableObject {
                 state.message = "Downloading in \(SharedModelStore.displayName(forAppID: holder))…"
                 self.downloadStates[modelID] = state
                 self.currentDownloadTask = Task {
-                    await self.awaitSharedDownloadThenAdopt(modelID: modelID, repoID: repoID, sizeGB: sizeGB)
+                    await self.awaitSharedDownloadThenAdopt(modelID: modelID, repoID: repoID, sizeGB: sizeGB, files: files)
                 }
             }
             return
         }
 
         // We hold the cross-app lock — run the actual download.
-        await performLockedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB)
+        await performLockedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB, files: files)
     }
 
     /// Runs the real download once the cross-app download lock is held. Split out
@@ -1331,7 +1470,7 @@ class MLXModelDownloader: ObservableObject {
     /// `BackgroundDownloadCoordinator.notifyModelDownloadComplete` (next to the
     /// claim) so a completion delivered after a background relaunch still clears
     /// the lock.
-    private func performLockedDownload(modelID: String, repoID: String, sizeGB: Double?) async {
+    private func performLockedDownload(modelID: String, repoID: String, sizeGB: Double?, files: [String]?) async {
         // Start download
         await MainActor.run {
             currentDownloadModelID = modelID
@@ -1439,7 +1578,7 @@ class MLXModelDownloader: ObservableObject {
                 // run in iOS-managed background tasks that survive app
                 // suspension and termination — which fixes the "user
                 // pockets the phone mid-download" case from yesterday.
-                try await BackgroundDownloadCoordinator.shared.startDownload(modelID: modelID, repoID: repoID)
+                try await BackgroundDownloadCoordinator.shared.startDownload(modelID: modelID, repoID: repoID, files: files)
 
                 // If every file was already present on disk (e.g. an interrupted
                 // download we're resuming), the coordinator may have posted the
@@ -1526,7 +1665,7 @@ class MLXModelDownloader: ObservableObject {
     /// the sibling releases without finishing, or its lock goes stale (crash /
     /// force-quit), we take over and download it ourselves. Runs inside
     /// `currentDownloadTask`, so a user cancel (which cancels that task) ends it.
-    private func awaitSharedDownloadThenAdopt(modelID: String, repoID: String, sizeGB: Double?) async {
+    private func awaitSharedDownloadThenAdopt(modelID: String, repoID: String, sizeGB: Double?, files: [String]?) async {
         let modelDir = SharedModelStore.mlxModelDir(modelID)
         let expectedBytes = sizeGB.map { Int64($0 * 1_073_741_824) } ?? 0
         cameraLog("HALDEBUG-DOWNLOAD: awaiting sibling download of \(modelID) to adopt")
@@ -1558,7 +1697,7 @@ class MLXModelDownloader: ObservableObject {
                     return
                 }
                 cameraLog("HALDEBUG-DOWNLOAD: took over \(modelID) download (prior holder released or went stale)")
-                await performLockedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB)
+                await performLockedDownload(modelID: modelID, repoID: repoID, sizeGB: sizeGB, files: files)
                 return
             }
 
@@ -1617,7 +1756,7 @@ class MLXModelDownloader: ObservableObject {
         print("HALDEBUG-DOWNLOAD: Processing queued download: \(nextDownload.modelID)")
         
         Task {
-            await startDownload(modelID: nextDownload.modelID, repoID: nextDownload.repoID, sizeGB: nextDownload.sizeGB)
+            await startDownload(modelID: nextDownload.modelID, repoID: nextDownload.repoID, sizeGB: nextDownload.sizeGB, files: nextDownload.files)
         }
     }
     
@@ -1757,6 +1896,25 @@ class MLXModelDownloader: ObservableObject {
     /// mirror the bookkeeping that the legacy HubApi-based startDownload
     /// did at its success site: persist the model ID, update the
     /// DownloadState, clear the in-flight marker, and refresh the catalog.
+    /// Surface a download failure in the UI's state, so the library row shows the reason
+    /// rather than a bar frozen at 100%.
+    ///
+    /// Separate from the `markModelAsDownloaded…` path on purpose: this is the one place a
+    /// finished-but-broken download lands, and it must never touch `downloadedModelIDs`.
+    func reportDownloadFailure(modelID: String, message: String) {
+        var state = downloadStates[modelID] ?? DownloadState(
+            isDownloading: false, progress: 0, message: "", error: nil, localPath: nil)
+        state.isDownloading = false
+        state.progress = 0
+        state.message = "Download failed."
+        state.error = message
+        state.localPath = nil
+        downloadStates[modelID] = state
+        clearInFlight(modelID)
+        currentDownloadTask = nil
+        processNextInQueue()
+    }
+
     func markModelAsDownloadedFromBackground(modelID: String) {
         let finalURL = modelPath(for: modelID)
         var modelIDs = self.downloadedModelIDs
