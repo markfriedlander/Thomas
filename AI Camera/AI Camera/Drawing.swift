@@ -287,6 +287,19 @@ actor DrawerLoader {
     /// the film developing* — and a shot that finishes slowly beats a process that dies.
     func draw(_ drawing: Drawing, prompt: String,
               onStep: (@Sendable (Int, Int) -> Void)? = nil) async throws -> CGImage {
+        // ⭐ Mark's rule, 2026-07-16: *"building and tearing down the drawer each time... one
+        // operation has its own world and all its resources from scratch."* This `defer`
+        // makes teardown unconditional — however `draw` exits, throw or return, the drawer
+        // does not survive it. On the happy path the body below has already released
+        // everything and this is a no-op; on a throw mid-generation it is the teardown that
+        // would otherwise be skipped, leaving 2.7 GB resident to crash the next op. All three
+        // calls are synchronous, so they are legal in a `defer`.
+        defer {
+            MLX.Stream.gpu.synchronize()
+            loaded = nil
+            MLX.Memory.clearCache()
+        }
+
         // ⚠️ **Optionals, and every one of them is load-bearing.** The demo app's only comment
         // on this reads "Note: The optionals are used to discard parts of the model as it
         // runs" — which is easy to skim past and is in fact the entire mechanism.
@@ -372,6 +385,9 @@ enum DrawingError: LocalizedError {
     case notEnoughMemory(message: String)
     case wrongKind
     case producedNothing
+    /// A failure captured across the ModelLane boundary, where the original error type
+    /// isn't Sendable, so its message is carried as a string.
+    case drawFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -383,6 +399,8 @@ enum DrawingError: LocalizedError {
             return "\(Drawing.repo) loaded, but not as something that can draw from text."
         case .producedNothing:
             return "The drawing finished with no image. That shouldn't happen — check the step count."
+        case .drawFailed(let message):
+            return message
         }
     }
 }

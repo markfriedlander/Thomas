@@ -29,7 +29,7 @@
 //
 //  Services/LocalAPI/LocalAPIServer.swift
 //    9  The Antenna (Class, Token, Address)
-//   10  The Look Queue (Serialization)
+//   10  The Model Lane (Serialization + Settle)
 //   11  HTTP Plumbing (Parse, Respond)
 //   12  Routes (Dispatch)
 //
@@ -71,6 +71,9 @@
 //
 //  Drawing.swift
 //   29  The Hand (Frame 3 — Drawing From Words)
+//
+//  Shot.swift
+//   30  The Shot (One Press, All Three Frames)
 //
 //  Created by Mark Friedlander on 7/14/26.
 //

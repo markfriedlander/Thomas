@@ -211,78 +211,45 @@ struct CameraView: View {
     /// **All three frames, in one press.** This is the whole thesis of the app, and until
     /// 2026-07-16 two thirds of it were a document.
     ///
-    /// Deliberately NOT awaited by the shutter: press it again while this runs and you
-    /// get a second frame in the bath. Serialization is `LookQueue`'s job, not the
-    /// user's problem — they should be shooting, not waiting.
+    /// Deliberately NOT blocking the shutter: press it again while this runs and you get a
+    /// second frame in the bath. Serialization is `ModelLane`'s job, not the user's problem —
+    /// they should be shooting, not waiting — and it is what keeps two shots' models from
+    /// running at once and jetsamming the app.
     private func develop(_ photograph: CGImage) async {
         developing += 1
         defer { developing -= 1 }
 
-        // ── Frame 2. The eye reads the world and says what it sees. ──
-        let perception = await settings.seer.look(at: photograph)
+        // The whole heavy pipeline of one shot — frame 2 (see) then frame 3 (draw) — runs in
+        // the ModelLane: **one shot at a time across the entire app, each torn down and the
+        // phone let to settle before the next.**
+        //
+        // ⭐ Mark's rule, 2026-07-16: *"we should be drawing one at a time in sequence...
+        // one operation has its own world and all its resources from scratch."* The shutter
+        // is fire-and-forget by design (press again, keep shooting), which is exactly what
+        // crashed it: a second press ran a second 2.7 GB draw on top of the first and iOS
+        // jetsammed the app (measured, signal 9). Now a second press just queues another shot
+        // behind this one. The lane returns only Sendable values; the cheap work — the
+        // compositor and the save — stays out here on the main actor.
+        // Frame 2 (see) then frame 3 (draw) — the shared pipeline, so the antenna's /shoot
+        // measures exactly this. See `Shot`.
+        let seer = settings.seer
+        let drawThird = settings.drawsThirdFrame
+        let result: (perception: Perception, drawn: UIImage?) =
+            await ModelLane.shared.run("shot") { @MainActor in
+                await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            }
 
         // A shot yields one frame — or two, for "Separate images". Still one press.
         var frames = Darkroom.develop(photograph: photograph,
-                                      words: perception.wireText,
+                                      words: result.perception.wireText,
                                       place: place.name,
                                       layout: settings.layout)
-
-        // ── Frame 3. The hand draws what the eye said. ──
-        if let drawn = await reimagine(perception) {
+        if let drawn = result.drawn {
             frames.append(drawn)
         }
 
         lastFrame = frames.last
         await Self.save(frames)
-    }
-
-    /// The third frame, or nothing.
-    ///
-    /// ── Why the eye is torn down first ──
-    ///
-    /// Mark's design, verbatim: *"there are three separate steps and each one should be
-    /// completely separate and offload models in between... at no point should the app
-    /// maintain overhead from one frame into another."* Frame 2 is finished the moment the
-    /// words exist. Holding 1.6 GB of Qwen through a 2.7 GB diffusion load asks the phone for
-    /// 4.3 GB to do a job that needs 2.7, and iOS answers that by killing the app.
-    ///
-    /// The handoff was the thing everyone feared and it is cheap: measured 2026-07-16,
-    /// `unload()` returns ~1,664 MB in **79 ms**. Not lazy. The whole worry was misplaced.
-    ///
-    /// ── Why a failure here is silent ──
-    ///
-    /// **Frames 1 and 2 have already succeeded** by the time this runs, and they are a
-    /// complete photograph. If the drawing can't happen — no model, no memory, whatever —
-    /// the shot still lands, with the photograph and the words. Taking the whole frame down
-    /// because the optional third panel failed would be the worst possible trade.
-    ///
-    /// **This is NOT Principle 3 being softened.** Principle 3 governs what the *machine says
-    /// about a photograph* — no hedging, no apology, and a refusal is content. It does not
-    /// govern an engineering failure to allocate memory. Confusing the two would be a
-    /// category error, the same one `ProcessMemoryGuard` calls out about its own refusal.
-    private func reimagine(_ perception: Perception) async -> UIImage? {
-        guard settings.drawsThirdFrame else { return nil }
-
-        // The hand draws from words. If the machine didn't produce any — a filter blocked
-        // the image, or the model declined — there is nothing to draw FROM. That is a real
-        // outcome and it is already recorded in frame 2; it is not a failure to log about.
-        let words = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !words.isEmpty else { return nil }
-
-        // Frame 2 is over. Let the eye go before the hand arrives.
-        await QwenLoader.shared.unload()
-
-        do {
-            let image = try await DrawerLoader.shared.draw(Drawing(), prompt: words)
-            // And frame 3 is over. Nothing carries into the next shot; the next press
-            // reloads the eye, which is the same path a cold start takes.
-            await DrawerLoader.shared.unload()
-            return UIImage(cgImage: image)
-        } catch {
-            cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
-            await DrawerLoader.shared.unload()
-            return nil
-        }
     }
 
     /// Into the camera roll, where it develops.

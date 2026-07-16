@@ -35,6 +35,7 @@ import Network
 import Security
 import CoreGraphics
 import ImageIO
+import UIKit              // UIImage.cgImage — /shoot returns the drawn frame's CGImage
 
 // Posey Task 13 #1 (2026-05-03), adopted here: the entire server compiles only in DEBUG
 // builds. Release binaries ship no HTTP runtime, no bearer-token Keychain handling, and
@@ -172,46 +173,98 @@ final class LocalAPIServer {
 
 // ==== LEGO END: 9 The Antenna (Class, Token, Address) ====
 
-// ==== LEGO START: 10 The Look Queue (Serialization) ====
+// ==== LEGO START: 10 The Model Lane (Serialization + Settle) ====
 
-/// Serializes looks so that two never overlap.
+/// The single lane every heavy model operation passes through, one at a time, with the
+/// phone let to settle between each.
 ///
 /// ⚠️ This exists instead of a note telling you to pace your calls.
 ///
-/// Two facts made it necessary. First, the Foundation Models SDK has a
-/// `concurrentRequests` error case — AFM rejects overlapping sessions outright. Second,
-/// the family's antennas have historically destabilized under rapid back-to-back calls;
-/// `posey_test.py` carries the warning *"leave a short gap (~1s) between calls."* Mark's
-/// call on 2026-07-14: **fix it in the code rather than in behavior, because instances
-/// forget constraints over time.** A rule written in a doc has to be remembered by every
-/// future session. A rule written here cannot be forgotten, because overlapping looks
-/// are simply unreachable.
+/// **Mark's rule, 2026-07-16, and it is the whole design of this file:** *"we should be
+/// drawing one at a time in sequence. We should also be building and tearing down the drawer
+/// each time. Give it time to settle between as well just the same way we move between frames
+/// or if you look at Hal between prompts. This is how we make sure that one operation has its
+/// own world and all its resources from scratch."*
 ///
-/// Note this is NOT a bare actor. Actors are re-entrant across `await`: a plain
-/// `actor { func look() async }` would happily suspend mid-look and let a second look
-/// start, which is precisely the bug we're preventing. Serialization comes from chaining
-/// each new task behind the previous one's completion; the actor only protects `tail`.
-actor LookQueue {
-    static let shared = LookQueue()
+/// It started life as `LookQueue`, serializing only AFM looks (the Foundation Models SDK has
+/// a `concurrentRequests` error — AFM rejects overlapping sessions outright). **That was not
+/// enough, and the gap crashed the app.** Measured 2026-07-16: two draws fired at once, or a
+/// draw started while the eye was still resident, jetsams the process (signal 9) — a
+/// 2.7 GB diffusion load has no room to run twice. Looks were serialized; **draws were not**,
+/// and neither the shutter's own looks nor either engine's draws shared a lane. So this is
+/// now the lane for *everything* heavy: every look and every draw, from the shutter and from
+/// the antenna alike.
+///
+/// Two guarantees:
+///   1. **One at a time.** FIFO. A second caller queues behind the first rather than racing
+///      it. The actor only protects `tail`; the serialization is the task chaining. (A bare
+///      `actor` would NOT do this — actors are re-entrant across `await` and would let a
+///      second op start mid-suspension, which is exactly the bug.)
+///   2. **Settle between.** After each op finishes, drain the GPU, clear MLX's cache, and
+///      **poll until iOS has actually reclaimed the memory** before the next op starts. Not
+///      a guessed sleep — the same measured wait Hal does between model swaps
+///      (`waitForMemoryHeadroom`). Every op therefore begins in a clean world: whatever ran
+///      before it is not merely released but *reclaimed*.
+actor ModelLane {
+    static let shared = ModelLane()
 
-    /// Completes when everything enqueued so far has finished.
+    /// Completes when everything enqueued so far has finished (including its settle).
     private var tail: Task<Void, Never> = Task {}
 
-    /// Run `work` once every previously-enqueued item has finished. FIFO.
-    func run<T: Sendable>(_ work: @Sendable @escaping () async -> T) async -> T {
+    /// Run `work` once every previously-enqueued item has finished, then settle before the
+    /// lane is handed to the next caller. FIFO.
+    ///
+    /// - Parameter label: names the op in the log, so the sequence reads as a story —
+    ///   `look` … `settle` … `draw` … `settle` — rather than anonymous waits.
+    func run<T: Sendable>(_ label: String, _ work: @Sendable @escaping () async -> T) async -> T {
         let previous = tail
         let mine = Task<T, Never> {
             await previous.value
-            return await work()
+            let result = await work()
+            // The settle is part of the op, not a courtesy after it: the next caller must
+            // not begin until this one's world is not just dropped but reclaimed.
+            await Self.settle(after: label)
+            return result
         }
-        // Update the tail synchronously, before any suspension, so a second caller
-        // entering `run` queues behind `mine` rather than racing it.
+        // Update the tail synchronously, before any suspension, so a second caller entering
+        // `run` queues behind `mine` (and its settle) rather than racing it.
         tail = Task { _ = await mine.value }
         return await mine.value
     }
+
+    /// Let the phone settle: drain GPU work, release MLX's cache, and wait for iOS to give
+    /// the memory back, so the next operation starts from scratch.
+    ///
+    /// iOS reclaims Mach VM lazily. Measured 2026-07-16, the reclaim is usually fast (a Qwen
+    /// teardown returned ~1.6 GB in 79 ms) — but *usually* is not *always*, and the whole
+    /// point of settling is that the next 2.7 GB load never races a reclaim that hasn't
+    /// finished. So this polls until availability plateaus (two reads within 50 MB) rather
+    /// than trusting a fixed delay. Bounded, because a settle that never ends is worse than a
+    /// settle that's a little early.
+    private static func settle(after label: String) async {
+        MLX.Stream.gpu.synchronize()
+        MLX.Memory.clearCache()
+        let start = Date()
+        let deadline = start.addingTimeInterval(2.0)
+        var last = processAvailableMemoryMB()
+        var plateaus = 0
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            let now = processAvailableMemoryMB()
+            // A plateau: the reclaim has stopped climbing. Two in a row = settled.
+            if abs(now - last) < 50 {
+                plateaus += 1
+                if plateaus >= 2 { break }
+            } else {
+                plateaus = 0
+            }
+            last = now
+        }
+        cameraLog("LANE: settled after \(label) — availableMB=\(formatMB(processAvailableMemoryMB())) in \(String(format: "%.2f", Date().timeIntervalSince(start)))s")
+    }
 }
 
-// ==== LEGO END: 10 The Look Queue (Serialization) ====
+// ==== LEGO END: 10 The Model Lane (Serialization + Settle) ====
 
 // ==== LEGO START: 11 HTTP Plumbing (Parse, Respond) ====
 
@@ -348,8 +401,94 @@ extension LocalAPIServer {
         case ("GET",  "/downloads"): return await handleDownloads()
         case ("POST", "/release"):   return await handleRelease(req)
         case ("POST", "/draw"):      return await handleDraw(req)
+        case ("POST", "/shoot"):     return await handleShoot(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
+    }
+
+    /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.
+    ///
+    ///   Body:      the photograph bytes (as /look). Required.
+    ///   X-Model:   afm|qwen   (optional; default = the loaded seer)
+    ///   X-Draw:    true|false (optional; default true — this route exists to exercise frame 3)
+    ///   X-Orientation, X-System-Prompt, X-Temperature — as /look.
+    ///
+    /// **Why this is not `/draw`.** `/draw` runs the drawer in isolation — no eye, no
+    /// photograph resident — and it passed while the real shutter crashed. This runs the
+    /// exact code a press runs (`Shot.seeThenDraw`, the same function `CameraView.develop`
+    /// calls), holds the captured photograph across the draw the way the shutter does, and
+    /// **builds the composited frames** so the memory in flight is the memory of a real shot.
+    /// The number it reports is therefore the number that decides whether the shutter lives.
+    /// It does not save to Photos — that needs a permission prompt and is not memory-relevant.
+    private func handleShoot(_ req: ParsedRequest) async -> (Int, String) {
+        guard let data = req.bodyData, !data.isEmpty,
+              let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let raw = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            return (400, #"{"error":"POST the photograph bytes"}"#)
+        }
+        let orientation: CGImagePropertyOrientation = {
+            if let s = req.headers["x-orientation"], let n = UInt32(s),
+               let o = CGImagePropertyOrientation(rawValue: n) { return o }
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+            let n = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
+            return CGImagePropertyOrientation(rawValue: n) ?? .up
+        }()
+        let photograph = raw.uprighted(orientation)
+
+        // Which eye, and whether to draw. Default to the loaded seer, drawing on.
+        let seer: Seer
+        switch req.headers["x-model"] {
+        case "qwen":         seer = .qwen
+        case "afm", "apple": seer = .apple
+        default:             seer = await MainActor.run { Settings.shared.seer }
+        }
+        let drawThird = (req.headers["x-draw"] ?? "true") != "false"
+
+        let availBefore = processAvailableMemoryMB()
+        let started = Date()
+
+        // The whole shot, in the lane, exactly as the shutter runs it. `run` can't throw and
+        // `seeThenDraw` doesn't throw — a failed drawing comes back as `drawn == nil`.
+        struct ShotOut: Sendable { let words: String; let outcome: String; let drawn: CGImage? }
+        let out = await ModelLane.shared.run("shoot") { () -> ShotOut in
+            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            // Build the composited frames, so this holds the same memory a real shot holds
+            // while everything is still warm — reality's receipt, the words over the world.
+            let frames = await MainActor.run {
+                Darkroom.develop(photograph: photograph,
+                                 words: perception.wireText,
+                                 place: nil,   // footer text; not memory-relevant
+                                 layout: Settings.shared.layout)
+            }
+            _ = frames.count  // held to end of scope on purpose; this is the memory under test
+            return ShotOut(words: perception.wireText,
+                           outcome: perception.wireName,
+                           drawn: drawnImage?.cgImage)
+        }
+
+        let seconds = Date().timeIntervalSince(started)
+        let snapshot = MLX.Memory.snapshot()
+        var payload: [String: Any] = [
+            "shot":              true,
+            "seer":              seer == .qwen ? "qwen" : "afm",
+            "drewThirdFrame":    out.drawn != nil,
+            "outcome":           out.outcome,
+            "words":             out.words,
+            "totalSeconds":      round(seconds * 100) / 100,
+            // ⭐ The number Mark asked for — the REAL peak, holding a photograph and the
+            // composited frames the way the shutter does, not the drawer alone.
+            "mlxPeakMB":         Int(Double(snapshot.peakMemory) / 1_048_576),
+            "availableMBBefore": availBefore.isInfinite ? "unavailable" : Int(availBefore),
+            "availableMBAfter":  processAvailableMemoryMB().isInfinite ? "unavailable" : Int(processAvailableMemoryMB()),
+            "log":               MemoryLog.shared.recent(60)
+        ]
+        if let drawn = out.drawn, let png = try? Self.pngData(drawn) {
+            payload["width"] = drawn.width
+            payload["height"] = drawn.height
+            payload["pngBytes"] = png.count
+            payload["pngBase64"] = png.base64EncodedString()
+        }
+        return (200, json(payload))
     }
 
     /// POST /draw — frame 3, on demand. Words in, a picture out.
@@ -379,15 +518,30 @@ extension LocalAPIServer {
             return (400, #"{"error":"POST the prompt as the body"}"#)
         }
 
-        var drawing = Drawing()
-        if let s = req.headers["x-steps"], let v = Int(s) { drawing.steps = v }
-        if let c = req.headers["x-cfg"], let v = Float(c) { drawing.cfgWeight = v }
-        if let s = req.headers["x-seed"], let v = UInt64(s) { drawing.seed = v }
+        var built = Drawing()
+        if let s = req.headers["x-steps"], let v = Int(s) { built.steps = v }
+        if let c = req.headers["x-cfg"], let v = Float(c) { built.cfgWeight = v }
+        if let s = req.headers["x-seed"], let v = UInt64(s) { built.seed = v }
+        // Frozen to a `let` before the lane closure captures it — a captured `var` is a
+        // warning today and an error under Swift 6, and this file treats warnings as errors.
+        let drawing = built
 
         let availableBefore = processAvailableMemoryMB()
         let started = Date()
+        // Through the lane, exactly like a look: one at a time, torn down, settled after.
+        // Two `/draw` calls fired at once used to jetsam the process (measured 2026-07-16);
+        // now the second waits for the first to finish AND for the phone to reclaim.
+        // `run` can't throw, so the throw is captured as a Sendable outcome and rethrown
+        // here, preserving the existing do/catch.
+        struct DrawOutcome: Sendable { let image: CGImage?; let error: String? }
+        let outcome = await ModelLane.shared.run("draw") { () -> DrawOutcome in
+            do { return DrawOutcome(image: try await DrawerLoader.shared.draw(drawing, prompt: prompt), error: nil) }
+            catch { return DrawOutcome(image: nil, error: error.localizedDescription) }
+        }
         do {
-            let image = try await DrawerLoader.shared.draw(drawing, prompt: prompt)
+            guard let image = outcome.image else {
+                throw DrawingError.drawFailed(outcome.error ?? "unknown error")
+            }
             let seconds = Date().timeIntervalSince(started)
 
             let png = try Self.pngData(image)
@@ -933,7 +1087,8 @@ extension LocalAPIServer {
     ///   X-Guardrails:    default|permissive   (optional; AFM only — Qwen has no filter)
     ///   X-Orientation:   1...8            (optional; otherwise read from the file's EXIF)
     ///
-    /// Every look goes through LookQueue, so a caller may fire as fast as it likes.
+    /// Every look goes through ModelLane, so a caller may fire as fast as it likes — the
+    /// lane serializes and settles between.
     private func handleLook(_ req: ParsedRequest) async -> (Int, String) {
         guard let data = req.bodyData, !data.isEmpty else {
             return (400, #"{"error":"Empty body — POST the image bytes"}"#)
@@ -979,7 +1134,7 @@ extension LocalAPIServer {
         if modelName == "qwen" {
             let qwen = Qwen(systemPrompt: eye.systemPrompt, temperature: eye.temperature)
             let started = Date()
-            let perception = await LookQueue.shared.run {
+            let perception = await ModelLane.shared.run("look:qwen") {
                 await qwen.look(at: cgImage)
             }
             let now = Date()
@@ -1008,12 +1163,18 @@ extension LocalAPIServer {
 
         let frozen = eye
         let started = Date()
-        // Serialized: overlapping looks are unreachable. See LookQueue.
-        let price = await LookQueue.shared.run { await frozen.priceOfLooking(at: cgImage) }
-        let lookStarted = Date()
-        let result = await LookQueue.shared.run {
-            await frozen.lookWithRetry(at: cgImage, retryOnBlock: retryOnBlock)
+        // The whole AFM look — the pre-flight token count AND the look itself — as ONE lane
+        // op, so it never overlaps another look or a draw, and settles once when done rather
+        // than twice. `lookSeconds` (the look alone) is measured inside; see `AFMLook`.
+        struct AFMLook: Sendable { let price: Int?; let look: Look; let lookSeconds: Double }
+        let afm = await ModelLane.shared.run("look:afm") { () -> AFMLook in
+            let price = await frozen.priceOfLooking(at: cgImage)
+            let lookStarted = Date()
+            let look = await frozen.lookWithRetry(at: cgImage, retryOnBlock: retryOnBlock)
+            return AFMLook(price: price, look: look, lookSeconds: Date().timeIntervalSince(lookStarted))
         }
+        let price = afm.price
+        let result = afm.look
         let now = Date()
 
         let shown = result.best
@@ -1028,8 +1189,9 @@ extension LocalAPIServer {
             "guardrails":    result.retry != nil ? "permissive (retry)" : guardrailName,
             "temperature":   frozen.temperature,
             // Measured separately, unlike the UI's single stopwatch: `lookSeconds` is the
-            // look alone, `totalSeconds` includes the pre-flight token count.
-            "lookSeconds":   round(now.timeIntervalSince(lookStarted) * 1000) / 1000,
+            // look alone (timed inside the lane op), `totalSeconds` includes the pre-flight
+            // token count and the lane settle.
+            "lookSeconds":   round(afm.lookSeconds * 1000) / 1000,
             "totalSeconds":  round(now.timeIntervalSince(started) * 1000) / 1000
         ]
         if let price { payload["tokensToLook"] = price }
@@ -1063,7 +1225,10 @@ extension LocalAPIServer {
 // a harness can count them as findings rather than throw them away as failures.
 
 extension Perception {
-    var wireName: String {
+    // `nonisolated` (both) — pure switches over a nonisolated enum, read from off-main
+    // contexts like the ModelLane closure in /shoot. Without it the project's default
+    // MainActor isolation makes them main-only and every off-main read warns.
+    nonisolated var wireName: String {
         switch self {
         case .spoke:   return "spoke"
         case .refused: return "refused"
@@ -1071,7 +1236,7 @@ extension Perception {
         case .broke:   return "broke"
         }
     }
-    var wireText: String {
+    nonisolated var wireText: String {
         switch self {
         case .spoke(let text, _):          return text
         case .refused(let explanation):    return explanation
