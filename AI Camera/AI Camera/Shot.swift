@@ -67,9 +67,12 @@ enum Shot {
     /// words. Taking the whole frame down because the optional third panel failed would be the
     /// worst trade available. **This is not Principle 3 softened:** Principle 3 governs what
     /// the machine *says about a photograph*, not an engineering failure to allocate memory.
+    /// - Parameter handStyleOverride: for the antenna to A/B styles without the app UI. `nil`
+    ///   (the shutter's path) reads the user's `Settings.handPrompt`.
     static func seeThenDraw(_ photograph: CGImage,
                             seer: Seer,
-                            drawThird: Bool) async -> (perception: Perception, drawn: UIImage?) {
+                            drawThird: Bool,
+                            handStyleOverride: String? = nil) async -> (perception: Perception, drawn: UIImage?) {
         // ── Frame 2. The eye reads the world and says what it sees. ──
         let perception = await seer.look(at: photograph)
 
@@ -81,12 +84,20 @@ enum Shot {
         let words = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return (perception, nil) }
 
+        // The hand's system prompt — how it draws — appended to what the eye said. Blank by
+        // default, so the baseline is the words drawn straight (Principle 3). Non-empty is the
+        // user's chosen style, added as diffusion-standard trailing terms. Subject first
+        // (the eye's perception is primary), style second.
+        let handStyle = (handStyleOverride ?? Settings.shared.handPrompt)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = handStyle.isEmpty ? words : "\(words), \(handStyle)"
+
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
 
         // ── Frame 3. The hand draws what the eye said. ──
         do {
-            let image = try await DrawerLoader.shared.draw(Drawing(), prompt: words)
+            let image = try await DrawerLoader.shared.draw(Drawing(), prompt: prompt)
             // Frame 3 is over too. Nothing carries into the next shot; the next press reloads
             // the eye, the same path a cold start takes. (The drawer also tears itself down in
             // `draw`'s `defer` — this is belt to that braces.)

@@ -82,6 +82,18 @@ final class Settings {
     var temperature: Double {
         didSet { store(temperature, "temperature") }
     }
+    /// The hand's system prompt — how it draws, parallel to the eye's system prompt for how
+    /// it looks. Mark, 2026-07-16: *"a system prompt for both eye and hand... When they aren't
+    /// being fed as in the case now for the hand, it should be blank."*
+    ///
+    /// **Blank by default, and that is the honest baseline.** Empty means the hand draws the
+    /// eye's words straight, nothing added — Principle 3 preserved. Non-empty is the user's
+    /// visible, editable style ("oil painting", "in the style of a woodcut"), appended to the
+    /// words. It is film stock the user chooses, not the app secretly stuffing "4k
+    /// masterpiece" onto the machine's perception to flatter the result.
+    var handPrompt: String {
+        didSet { store(handPrompt, "handPrompt") }
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -90,6 +102,7 @@ final class Settings {
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
+        handPrompt = d.string(forKey: "handPrompt") ?? ""
     }
 
     private func store(_ value: Any, _ key: String) {
@@ -126,6 +139,7 @@ final class Settings {
         drawsThirdFrame = false
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
+        handPrompt = ""
     }
 }
 
@@ -217,9 +231,9 @@ struct PreferencesView: View {
         NavigationStack {
             Form {
                 modelSection
-                promptSection
+                eyeSection
+                handSection
                 layoutSection
-                thirdFrameSection
                 resetSection
             }
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
@@ -314,9 +328,13 @@ struct PreferencesView: View {
         }
     }
 
-    // MARK: - How it's told to look
+    // MARK: - The eye — how it looks
 
-    private var promptSection: some View {
+    /// Mark, 2026-07-16, on the metaphors: *"let's use eye and hand as the metaphors for
+    /// now."* So the section is "The eye" (metaphor for the object) and the control inside is
+    /// a system prompt (honest terminology for the control) — Principle 2 exactly: metaphor
+    /// for the thing, real name for the knob.
+    private var eyeSection: some View {
         Section {
             // Principle 2: this is a system prompt, it is called a system prompt, and you
             // can read and change every word of it.
@@ -335,17 +353,65 @@ struct PreferencesView: View {
             Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
 
             Button("Presets…") { showingPresets = true }
-            Button("Reset system prompt and temperature") {
+            Button("Reset the eye's prompt and temperature") {
                 promptFocused = false
                 settings.resetPromptToDefault()
             }
         } header: {
-            Text("System prompt")
+            Text("The eye — how it looks")
         } footer: {
-            Text("Higher temperature makes the machine reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific — not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
+            Text("The system prompt tells the eye how to describe what it sees. Higher temperature makes it reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific — not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
         }
         // NOTE: the `.sheet` for presets is on the Form (see `body`), NOT here — attaching it
         // to this Section made it dismiss itself on every re-render.
+    }
+
+    // MARK: - The hand — how it draws
+
+    /// The hand's own system prompt, parallel to the eye's, plus the toggle that turns frame 3
+    /// on. Folded together because both are "the hand" — one section for the third frame,
+    /// rather than a lone toggle elsewhere.
+    ///
+    /// The prompt is **blank by default on purpose** (Principle 3): the hand draws the eye's
+    /// words straight until you choose to style them. The field disables when the drawing
+    /// model isn't downloaded — no point editing how a hand draws when there's no hand.
+    private var handSection: some View {
+        Section {
+            Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
+                .disabled(!DrawerLoader.isAvailable)
+
+            if DrawerLoader.isAvailable {
+                // The hand's system prompt. Honest terminology, editable, blank = draw the
+                // words straight.
+                TextEditor(text: $settings.handPrompt)
+                    .font(.system(.footnote, design: .monospaced))
+                    .frame(minHeight: 90)
+                    .focused($promptFocused)
+                    .overlay(alignment: .topLeading) {
+                        // A hint, only while empty, so the blank field isn't a mystery.
+                        if settings.handPrompt.isEmpty {
+                            Text("e.g. oil painting · charcoal sketch · leave blank to draw the words as they are")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                Button("Clear the hand's prompt") {
+                    promptFocused = false
+                    settings.handPrompt = ""
+                }
+                .disabled(settings.handPrompt.isEmpty)
+            } else {
+                Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("The hand — how it draws")
+        } footer: {
+            Text("The hand draws the scene again from the eye's words — it never sees your photograph. Its system prompt is a style added to those words; leave it blank and the hand draws them plainly. Drawing adds about ten seconds to a shot.")
+        }
     }
 
     // MARK: - Factory reset
@@ -366,36 +432,11 @@ struct PreferencesView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The eye, the system prompt, the temperature, and the layout all go back to how the camera shipped. Your photographs are untouched.")
+            Text("The eye and the hand, their system prompts, the temperature, and the layout all go back to how the camera shipped. Your photographs are untouched.")
         }
     }
 
     // MARK: - How the words meet the picture
-
-    // MARK: - The third frame
-
-    /// The re-imagining. Off unless the model is here.
-    ///
-    /// Its own section rather than a row in Layout, because it is not a layout — it is
-    /// whether the camera takes a third frame at all. The toggle disables itself when the
-    /// model isn't downloaded: an ON switch that produces nothing on every press is worse
-    /// than no switch, and the fix is one tap away in the library above.
-    private var thirdFrameSection: some View {
-        Section {
-            Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
-                .disabled(!DrawerLoader.isAvailable)
-            if !DrawerLoader.isAvailable {
-                Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("The re-imagining")
-        } footer: {
-            // Said plainly, with the real cost, and no verdict on whether it's worth it.
-            Text("The machine draws the scene again from its own words. It never sees your photograph — it only reads what the eye said about it. The drawing is saved alongside the frame. It adds about ten seconds to a shot.")
-        }
-    }
 
     private var layoutSection: some View {
         Section {
