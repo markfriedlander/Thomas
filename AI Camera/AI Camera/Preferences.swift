@@ -27,7 +27,7 @@
 
 import SwiftUI
 
-// ==== LEGO START: 22 Settings (What The Camera Is Loaded With) ====
+// ==== LEGO START: 23 Settings (What The Camera Is Loaded With) ====
 
 /// What the camera is loaded with. Set before you raise it; never per-shot.
 ///
@@ -38,8 +38,27 @@ import SwiftUI
 final class Settings {
     static let shared = Settings()
 
+    /// Which eye is loaded.
+    ///
+    /// Switching away from Qwen **unloads it**. Mark's instruction (2026-07-15): the model
+    /// should go "when the app is in the background or is about to switch to a different
+    /// model." Without this, choosing Apple in Preferences left 1.75 GB of Qwen resident
+    /// and unreachable for the rest of the session — paying the full memory price of a
+    /// model the camera had stopped using. The teardown is real (GPU drain, cache clear);
+    /// see `QwenLoader.unload()`.
+    ///
+    /// Fire-and-forget because `unload()` is actor-isolated and a setter can't await. The
+    /// ordering is safe either way: a look already in flight holds its own container
+    /// reference, and the next look re-loads through `container()`, which is the same path
+    /// a cold start takes.
     var seer: Seer {
-        didSet { store(seer.rawValue, "seer") }
+        didSet {
+            store(seer.rawValue, "seer")
+            if oldValue == .qwen && seer != .qwen {
+                cameraLog("MEMORY: seer \(oldValue.rawValue) → \(seer.rawValue) — unloading the eye we just left")
+                Task { await QwenLoader.shared.unload() }
+            }
+        }
     }
     var layout: Layout {
         didSet { store(layout.rawValue, "layout") }
@@ -168,9 +187,9 @@ struct Preset: Identifiable {
     ]
 }
 
-// ==== LEGO END: 22 Settings (What The Camera Is Loaded With) ====
+// ==== LEGO END: 23 Settings (What The Camera Is Loaded With) ====
 
-// ==== LEGO START: 23 PreferencesView (The Film Drawer) ====
+// ==== LEGO START: 24 PreferencesView (The Film Drawer) ====
 
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
@@ -358,4 +377,4 @@ private struct PresetPicker: View {
     }
 }
 
-// ==== LEGO END: 23 PreferencesView (The Film Drawer) ====
+// ==== LEGO END: 24 PreferencesView (The Film Drawer) ====

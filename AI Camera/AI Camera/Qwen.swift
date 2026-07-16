@@ -33,7 +33,7 @@ import MLXVLM
 import MLXHuggingFace
 import Tokenizers
 
-// ==== LEGO START: 17 Qwen (The Unguarded Eye) ====
+// ==== LEGO START: 18 Qwen (The Unguarded Eye) ====
 
 /// The Qwen3.5-2B vision-language model, loaded from the family's shared store.
 ///
@@ -151,6 +151,35 @@ actor QwenLoader {
                 throw QwenError.notInstalled(Qwen.repo)
             }
 
+            // PRE-FLIGHT REFUSAL. Everything below this line mmaps 1.75 GB of weights and
+            // faults the pages in. If there isn't room, iOS kills the process — no error,
+            // no message, the camera just vanishes from the user's hand. So we ask first.
+            //
+            // The requirement is computed from the weights' ACTUAL size on disk, not a
+            // catalog figure (see ProcessMemoryGuard). If iOS hasn't finished reclaiming
+            // from a previous unload, wait for it — that's the lazy-VM problem, and the
+            // poll is the only honest way to know when it's done rather than sleeping a
+            // fixed interval and hoping.
+            let requiredMB = requiredMemoryMBForLoad(repo: Qwen.repo)
+            var availableMB = processAvailableMemoryMB()
+            cameraLog("MEMORY: pre-flight for \(Qwen.repo) requiredMB=\(formatMB(requiredMB)) availableMB=\(formatMB(availableMB))")
+
+            if availableMB < requiredMB {
+                cameraLog("MEMORY: short on headroom — waiting for iOS to reclaim")
+                let result = await waitForMemoryHeadroom(requiredMB: requiredMB)
+                availableMB = result.finalAvailableMB
+                cameraLog("MEMORY: headroom wait \(result.success ? "succeeded" : "TIMED OUT") after \(result.pollsTaken) polls / \(String(format: "%.2f", result.elapsedSeconds))s — availableMB=\(formatMB(availableMB))")
+            }
+
+            // A timeout is not itself fatal; the number is. Refuse on the number.
+            guard availableMB >= requiredMB else {
+                let message = memoryRefusalMessage(modelName: "Qwen3.5-2B",
+                                                   availableMB: availableMB,
+                                                   requiredMB: requiredMB)
+                cameraLog("MEMORY: REFUSED load — \(message)")
+                throw QwenError.notEnoughMemory(message: message)
+            }
+
             // Adopt it: record our claim so Hal's or Posey's delete can't pull the
             // weights out from under a shot in progress. This is the whole point of the
             // refcount manifest — see SharedModelStore.
@@ -177,22 +206,61 @@ actor QwenLoader {
         return container
     }
 
-    /// Drop the model from memory. Not wired to anything yet; it exists because a camera
-    /// that holds 1.75 GB forever is a camera that gets killed in the background.
+    /// Drop the model from memory — properly.
+    ///
+    /// This used to be `loaded = nil` and a comment saying it wasn't wired to anything.
+    /// Both halves of that were bugs. Rebuilt 2026-07-15 from Hal's `unloadModel()`, which
+    /// is what Mark asked for on day one.
+    ///
+    /// ⚠️ **The GPU drain is not optional and it is not a nicety.** Releasing the container
+    /// while Metal command buffers from the last look are still in flight means their
+    /// completion handlers fire against memory ARC has already freed; the buffers come back
+    /// with `.error` set, MLX's `check_error` throws an uncaught C++ exception, and the app
+    /// takes a SIGABRT. Hal has a crash log for exactly this. `loaded = nil` on its own was
+    /// a latent crash waiting for someone to call it — which is the only reason it never
+    /// crashed: nothing ever did.
+    ///
+    /// Order matters: drain, then release, then clear MLX's cache. The before/after
+    /// snapshot goes to the log because iOS reclaims lazily — `iosAvail` at exit is usually
+    /// about what it was at entry, and that is *expected*, not a failure. Whoever loads
+    /// next is the one who has to wait for the OS to catch up (`waitForMemoryHeadroom`).
     func unload() {
+        guard loaded != nil else {
+            cameraLog("MEMORY: unload called with nothing resident — no-op")
+            return
+        }
+
+        let mb = { (b: Int) -> String in String(format: "%.1f MB", Double(b) / (1024.0 * 1024.0)) }
+        let before = MLX.Memory.snapshot()
+        let availBefore = processAvailableMemoryMB()
+        cameraLog("MEMORY: unload ENTRY active=\(mb(before.activeMemory)) cache=\(mb(before.cacheMemory)) peak=\(mb(before.peakMemory)) iosAvailMB=\(formatMB(availBefore))")
+
+        // GPU SYNC BARRIER — see the warning above. Synchronous; usually milliseconds.
+        cameraLog("MEMORY: draining in-flight GPU work before unload…")
+        MLX.Stream.gpu.synchronize()
+        cameraLog("MEMORY: GPU drain complete; releasing model")
+
         loaded = nil
+        MLX.Memory.clearCache()
+
+        let after = MLX.Memory.snapshot()
+        let availAfter = processAvailableMemoryMB()
+        cameraLog("MEMORY: unload EXIT  active=\(mb(after.activeMemory)) cache=\(mb(after.cacheMemory)) peak=\(mb(after.peakMemory)) iosAvailMB=\(formatMB(availAfter)) | ΔiosAvailMB=\(formatMB(availAfter - availBefore))")
     }
 }
 
 enum QwenError: LocalizedError {
     case notInstalled(String)
+    case notEnoughMemory(message: String)
 
     var errorDescription: String? {
         switch self {
         case .notInstalled(let repo):
             return "\(repo) isn't in the shared store. Download it in Hal or Posey and it appears here."
+        case .notEnoughMemory(let message):
+            return message
         }
     }
 }
 
-// ==== LEGO END: 17 Qwen (The Unguarded Eye) ====
+// ==== LEGO END: 18 Qwen (The Unguarded Eye) ====

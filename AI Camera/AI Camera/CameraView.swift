@@ -24,7 +24,7 @@ import Photos
 import PhotosUI
 import SwiftUI
 
-// ==== LEGO START: 19 Viewfinder ====
+// ==== LEGO START: 20 Viewfinder ====
 
 /// The live preview. A thin wrapper over AVFoundation's preview layer — SwiftUI has no
 /// native equivalent, so this is the one place UIKit shows through.
@@ -52,9 +52,9 @@ struct Viewfinder: UIViewRepresentable {
     }
 }
 
-// ==== LEGO END: 19 Viewfinder ====
+// ==== LEGO END: 20 Viewfinder ====
 
-// ==== LEGO START: 20 CameraView (The Sacred Screen) ====
+// ==== LEGO START: 21 CameraView (The Sacred Screen) ====
 
 struct CameraView: View {
 
@@ -239,9 +239,9 @@ struct CameraView: View {
     }
 }
 
-// ==== LEGO END: 20 CameraView (The Sacred Screen) ====
+// ==== LEGO END: 21 CameraView (The Sacred Screen) ====
 
-// ==== LEGO START: 21 Seer (Which Eye Is Loaded) ====
+// ==== LEGO START: 22 Seer (Which Eye Is Loaded) ====
 
 /// Which machine is doing the seeing.
 ///
@@ -289,4 +289,4 @@ enum Seer: String, CaseIterable, Hashable, Sendable {
     }
 }
 
-// ==== LEGO END: 21 Seer (Which Eye Is Loaded) ====
+// ==== LEGO END: 22 Seer (Which Eye Is Loaded) ====

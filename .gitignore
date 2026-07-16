@@ -29,6 +29,15 @@ build/
 # Scratch
 *.csv
 
+# The Core AI dead end (2026-07-15). A 4 GB float32 Stable Diffusion 1.5 export that works,
+# kept on disk because it cost real time to make — but it is an artifact, not a foundation,
+# and the direction was called off. See `coreai-export/README.md` and HISTORY 2026-07-15.
+#
+# Ignored rather than committed: 4 GB in git history follows every clone forever, and this
+# is a model we decided not to use. The folder's README is ignored along with it — HISTORY.md
+# is the durable record, not that file.
+coreai-export/
+
 # NOTE — a deliberate deviation from Posey's .gitignore, which excludes its test
 # materials as "large files, not for version control":
 #

@@ -188,6 +188,58 @@ extension SharedModelStore {
         readManifest(NSFileCoordinator()).models[modelID]?.claimedBy ?? []
     }
 
+    /// Read-only: every model id THIS app currently claims. The inverse of `claimants` —
+    /// that answers "who owns this model," this answers "what do I own."
+    ///
+    /// **The manifest is the authority here, never the disk.** Lifted verbatim in spirit
+    /// from Hal, along with the reason, which is subtle enough to be worth restating: a
+    /// model can sit in the shared container without this app claiming it (a sibling
+    /// downloaded it and we haven't adopted it). Those files are not ours to release or
+    /// delete. Enumerating from disk would sweep them up — and because `releaseClaim`
+    /// returns `true` for a model with **no manifest entry at all**, an unclaimed model
+    /// would come back "safe to delete" and be destroyed. Ask the ledger what we own;
+    /// don't infer it from what we can see.
+    ///
+    /// (History: AI Camera's CC suggested Hal fix `clearHubCache` by iterating
+    /// `installedRepos()` — the disk path. Hal's CC caught that it would reintroduce a
+    /// quieter version of the same data-loss bug and used the manifest instead. This
+    /// function is theirs, and the comment is why it exists rather than the obvious one.)
+    nonisolated static func modelsClaimedByThisApp() -> [String] {
+        readManifest(NSFileCoordinator()).models
+            .filter { $0.value.claimedBy.contains(thisAppID) }
+            .map(\.key)
+            .sorted()
+    }
+
+    /// A human name for a family app's bundle id, for UI that explains co-ownership
+    /// ("also used by Posey") or who is mid-download.
+    ///
+    /// **Derived, not a lookup table — deliberately, and this app is the proof.** Every
+    /// app in the family is `com.MarkFriedlander.<AppName>`, so the last component is the
+    /// name. Hal still carries an older hardcoded `appDisplayName` that lists only Posey
+    /// and Hal; a new tenant falls through it to `return id` and shows the user a raw
+    /// bundle identifier. **AI Camera is that new tenant, and would be the first to
+    /// display it.** Hal's own CC wrote this derived version today and left the table in
+    /// place; filed in Hal's NEXT.md. We take only this one.
+    nonisolated static func displayName(forAppID appID: String) -> String {
+        guard let last = appID.split(separator: ".").last, !last.isEmpty else {
+            return "another app"
+        }
+        return last.replacingOccurrences(of: "-", with: " ")
+    }
+
+    /// Optional-accepting overload.
+    ///
+    /// Hal's older `appDisplayName(_ bundleID: String?)` took an optional and mapped `nil`
+    /// to "another app"; the downloader's lock-holder call sites rely on that, because a
+    /// lock can be read as free. Rather than force-unwrap at three call sites to satisfy
+    /// the derived version — which would crash on exactly the case Hal handled on purpose —
+    /// the nil branch keeps Hal's answer and the rest derives.
+    nonisolated static func displayName(forAppID appID: String?) -> String {
+        guard let appID else { return "another app" }
+        return displayName(forAppID: appID)
+    }
+
     // MARK: coordinated read / write
 
     nonisolated private static func readManifest(_ coordinator: NSFileCoordinator) -> Manifest {
@@ -222,3 +274,131 @@ extension SharedModelStore {
 }
 
 // ==== LEGO END: 16 Shared Model Store (Refcount Manifest) ====
+
+// ==== LEGO START: 17 Shared Model Store (Cross-App Download Lock) ====
+
+// Lifted from Hal's `SharedModelStore` (block 44) on 2026-07-15. AI Camera never had this
+// because AI Camera never downloaded — it adopted whatever Hal and Posey had already
+// fetched. That changes with the downloader, and Mark's question is the reason:
+// *"what happens if somebody downloads the camera app and doesn't have Hal or Posey."*
+//
+// Once this app can download, two apps in the family can want the same multi-GB repo at
+// the same moment, and without a lock they write into the same directory concurrently.
+// Nobody has hit this yet because nobody has been sharing yet — Hal is the only released
+// app. That is exactly the window in which to get it right.
+//
+// ⚠️ Note what this protects and what it doesn't. The lock is **advisory** — it prevents a
+// duplicate *download*, not a filesystem race. Hal's framing, kept: the worst case without
+// it is one redundant download, never a corrupt file. So the staleness window is generous
+// rather than paranoid.
+//
+// Posey has NO lock at all (filed in Posey's next.md today). Its copy of the store predates
+// this section.
+
+extension SharedModelStore {
+
+    /// A lock older than this, with no refresh, is treated as abandoned. Hal's figure: long
+    /// enough that a slow-but-live background download isn't stolen, short enough that a
+    /// genuine crash frees the slot in a tolerable time.
+    nonisolated static let downloadLockStaleSeconds: TimeInterval = 600
+
+    nonisolated private static var downloadLocksURL: URL {
+        root.appendingPathComponent("download-locks.json")
+    }
+
+    nonisolated private struct DownloadLocks: Codable {
+        var version: Int = 1
+        var locks: [String: Lock] = [:]
+        nonisolated struct Lock: Codable {
+            var holder: String   // bundle id of the app currently downloading
+            var since: Double    // epoch seconds; refreshed by the live holder
+        }
+    }
+
+    /// Current lock record for `modelID`, or nil if the slot is free.
+    ///
+    /// Read-only and **does not consider staleness** — callers needing the take-over
+    /// decision use `acquireDownloadLock`, which does. This is for showing a human "Hal is
+    /// downloading this."
+    nonisolated static func downloadLock(modelID: String) -> (holder: String, since: Double)? {
+        guard let l = readDownloadLocks(NSFileCoordinator()).locks[modelID] else { return nil }
+        return (l.holder, l.since)
+    }
+
+    /// Try to claim the download slot for `modelID`.
+    ///
+    /// Atomic test-and-set under a **single write coordination** — that's what makes it a
+    /// lock rather than a suggestion; a read-then-write in two coordinations would let two
+    /// apps both see "free" and both proceed. Granted if the slot is free, already ours, or
+    /// stale (holder presumed dead). Returns `false` only when another app holds a fresh
+    /// lock, in which case the caller should wait and adopt rather than download a second
+    /// copy on top of the first.
+    nonisolated static func acquireDownloadLock(modelID: String) -> Bool {
+        var granted = false
+        mutateDownloadLocks { db in
+            if let l = db.locks[modelID],
+               l.holder != thisAppID,
+               (nowEpoch() - l.since) < downloadLockStaleSeconds {
+                granted = false          // someone else holds a fresh lock
+                return
+            }
+            db.locks[modelID] = DownloadLocks.Lock(holder: thisAppID, since: nowEpoch())
+            granted = true
+        }
+        return granted
+    }
+
+    /// Bump our lock's timestamp so a live download isn't judged stale and stolen. No-op if
+    /// we don't hold it. Called from the progress path.
+    nonisolated static func refreshDownloadLock(modelID: String) {
+        mutateDownloadLocks { db in
+            guard var l = db.locks[modelID], l.holder == thisAppID else { return }
+            l.since = nowEpoch()
+            db.locks[modelID] = l
+        }
+    }
+
+    /// Release our lock (no-op if we don't hold it). Called on completion — next to the
+    /// claim — and on cancel and failure. Every exit from a download passes through here.
+    nonisolated static func releaseDownloadLock(modelID: String) {
+        mutateDownloadLocks { db in
+            if db.locks[modelID]?.holder == thisAppID {
+                db.locks.removeValue(forKey: modelID)
+            }
+        }
+    }
+
+    nonisolated private static func nowEpoch() -> Double { Date().timeIntervalSince1970 }
+
+    // MARK: coordinated read / write (mirrors the manifest's discipline)
+
+    nonisolated private static func readDownloadLocks(_ coordinator: NSFileCoordinator) -> DownloadLocks {
+        var result = DownloadLocks()
+        var coordError: NSError?
+        coordinator.coordinate(readingItemAt: downloadLocksURL, options: [], error: &coordError) { url in
+            guard let data = try? Data(contentsOf: url),
+                  let decoded = try? JSONDecoder().decode(DownloadLocks.self, from: data) else { return }
+            result = decoded
+        }
+        return result
+    }
+
+    nonisolated private static func mutateDownloadLocks(_ body: (inout DownloadLocks) -> Void) {
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let coordinator = NSFileCoordinator()
+        var coordError: NSError?
+        coordinator.coordinate(writingItemAt: downloadLocksURL, options: [], error: &coordError) { url in
+            var db = DownloadLocks()
+            if let data = try? Data(contentsOf: url),
+               let decoded = try? JSONDecoder().decode(DownloadLocks.self, from: data) {
+                db = decoded
+            }
+            body(&db)
+            if let out = try? JSONEncoder().encode(db) {
+                try? out.write(to: url, options: .atomic)
+            }
+        }
+    }
+}
+
+// ==== LEGO END: 17 Shared Model Store (Cross-App Download Lock) ====

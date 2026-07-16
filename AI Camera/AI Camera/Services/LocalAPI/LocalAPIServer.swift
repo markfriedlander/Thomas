@@ -30,6 +30,7 @@
 
 import Foundation
 import FoundationModels   // Guardrails.permissiveContentTransformations
+import MLX                // Memory.snapshot() — GET /memory
 import Network
 import Security
 import CoreGraphics
@@ -339,8 +340,56 @@ extension LocalAPIServer {
         case ("GET",  "/state"):  return handleState()
         case ("GET",  "/models"): return handleModels()
         case ("GET",  "/rotation"): return handleRotation()
+        case ("GET",  "/memory"): return await handleMemory()
+        case ("POST", "/unload"): return await handleUnload()
         default: return (404, #"{"error":"Not found"}"#)
         }
+    }
+
+    /// GET /memory — what the process is holding, and the reclamation curve.
+    ///
+    /// The instrument for the thing nobody could see. iOS reclaims Mach VM lazily, so
+    /// "did the unload work?" is not answerable by reading the code — only by watching
+    /// `availableMB` climb over the seconds after a release. That curve decides whether
+    /// Mark's three-frame design (capture → words → drawing, each torn down before the
+    /// next loads) is survivable, and it is the number that will decide frame 3.
+    ///
+    /// Serves the log ring too, so a sweep can capture the poll lines without a cable.
+    private func handleMemory() async -> (Int, String) {
+        let snapshot = MLX.Memory.snapshot()
+        let resident = await QwenLoader.shared.isLoaded
+        return (200, json([
+            // iOS's view — the one that decides whether we get killed.
+            "availableMB":  processAvailableMemoryMB().isInfinite
+                ? "unavailable" : Int(processAvailableMemoryMB()),
+            // MLX's view — the bytes IT thinks it holds. The two disagree on purpose.
+            "mlxActiveMB":  Int(Double(snapshot.activeMemory) / 1_048_576.0),
+            "mlxCacheMB":   Int(Double(snapshot.cacheMemory) / 1_048_576.0),
+            "mlxPeakMB":    Int(Double(snapshot.peakMemory) / 1_048_576.0),
+            "qwenResident": resident,
+            "qwenRequiredMB": Int(requiredMemoryMBForLoad(repo: Qwen.repo)),
+            "log":          MemoryLog.shared.recent(200)
+        ]))
+    }
+
+    /// POST /unload — drop the eye on demand.
+    ///
+    /// Mark's standing directive: the API must do everything a human can that Apple's
+    /// security policy doesn't block. A human can background the app to force an unload;
+    /// this is that, without his thumbs — and it's what lets a harness measure the
+    /// reclamation curve repeatedly instead of once.
+    private func handleUnload() async -> (Int, String) {
+        let before = processAvailableMemoryMB()
+        await QwenLoader.shared.unload()
+        let after = processAvailableMemoryMB()
+        return (200, json([
+            "unloaded":       true,
+            "availableMBBefore": before.isInfinite ? "unavailable" : Int(before),
+            "availableMBAfter":  after.isInfinite ? "unavailable" : Int(after),
+            // Expect this to be ~0 immediately. That is the lazy-reclaim point, not a
+            // failure — poll GET /memory and watch it climb.
+            "deltaMB":        (before.isInfinite || after.isInfinite) ? "unavailable" : Int(after - before)
+        ]))
     }
 
     /// GET /rotation — the live rotation state of the lens.
