@@ -329,8 +329,10 @@ struct PreferencesView: View {
 
     // MARK: - Which machine is looking
 
-    /// Hal's convention: the loaded model with a status dot, and a row through to the
-    /// library. Posey copied it verbatim; this is the third tenant doing the same.
+    /// The models **in use** — each with the shared status dot — and a row through to the
+    /// library. Adapted from Hal's convention, but where Hal shows one active model this shows
+    /// as many as a shot enlists: the eye always, and the hand too when the third frame is
+    /// being drawn (Mark, 2026-07-16 — *"Models loaded should include both models in use"*).
     ///
     /// **This replaced a second, older way of choosing the eye.** Preferences used to carry
     /// its own `Picker` over Apple/Qwen plus a footer spelling out each one's trade-offs —
@@ -340,21 +342,17 @@ struct PreferencesView: View {
     /// a second copy of one description. Two places to change a thing is how they drift.
     private var modelSection: some View {
         Section {
-            HStack {
-                Text("Loaded")
-                    .font(.subheadline)
-                Spacer()
-                HStack(spacing: 6) {
-                    // The one shared dot (`ModelStatusDot`). The loaded eye IS the active one,
-                    // so it's green when it's ready to shoot and — per the metaphor — no dot at
-                    // all when it isn't (the reason text below says why). Grey never appears
-                    // here: this row only ever shows the model you're currently shooting with,
-                    // and there is no such thing as an inactive loaded eye.
-                    ModelStatusDot(isDownloaded: settings.seer.isAvailable, isActive: true)
-                    Text(settings.seer.name)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+            // The eye is always in use; green when it's ready to shoot, no dot when it isn't
+            // (the reason text below says why). See `ModelStatusDot`.
+            loadedRow(role: "Eye",
+                      name: settings.seer.name,
+                      downloaded: settings.seer.isAvailable)
+            // The hand joins it only when the third frame is being drawn — then both models are
+            // in use, and both are listed. Off, the hand isn't in use, so it isn't shown.
+            if settings.drawsThirdFrame {
+                loadedRow(role: "Hand",
+                          name: ModelCatalog.sdTurbo.displayName,
+                          downloaded: DrawerLoader.isAvailable)
             }
             // Kept from the old section — the one thing the library can't say, because it's
             // about the eye you're *currently* shooting with. Three distinct reasons need
@@ -374,6 +372,20 @@ struct PreferencesView: View {
             Text("Models")
         } footer: {
             Text("Download the machines the camera runs on, and choose which eye is loaded. Models are shared with Hal and Posey — anything they've already fetched is here for free.")
+        }
+    }
+
+    /// One "in use" row: a role label ("Eye" / "Hand"), the shared status dot, and the model
+    /// name. The row only appears for a model that IS in use, so within it the model is active
+    /// by definition — green when downloaded, no dot when not.
+    private func loadedRow(role: String, name: String, downloaded: Bool) -> some View {
+        HStack {
+            Text(role).font(.subheadline)
+            Spacer()
+            HStack(spacing: 6) {
+                ModelStatusDot(isDownloaded: downloaded, isActive: true)
+                Text(name).font(.subheadline).foregroundStyle(.secondary)
+            }
         }
     }
 

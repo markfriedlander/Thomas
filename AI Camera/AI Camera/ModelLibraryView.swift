@@ -109,8 +109,15 @@ struct ModelLibraryView: View {
 
     // MARK: - What the buttons do
 
+    /// "Active" is role-aware here, because this app has TWO active roles at once — where Hal
+    /// had one. A **seeing** model is active when it's the selected eye. A **drawing** model is
+    /// active when the third frame is being drawn (`drawsThirdFrame`) — it's enlisted for the
+    /// next shot, exactly as the eye is. So SD-Turbo goes green the moment you turn drawing on.
     private func isActive(_ model: CameraModel) -> Bool {
-        model.job == .seeing && ModelCatalog.model(for: settings.seer).id == model.id
+        switch model.job {
+        case .seeing:  return ModelCatalog.model(for: settings.seer).id == model.id
+        case .drawing: return settings.drawsThirdFrame
+        }
     }
 
     private func use(_ model: CameraModel) {
