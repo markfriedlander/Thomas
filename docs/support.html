@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thomas · Support</title>
+<meta name="description" content="Support for Thomas, a camera for iPhone that records in language.">
+<link rel="icon" href="assets/thomas-icon-512.png">
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --surface: #151417;
+    --text: #e9eaec;
+    --muted: #8a8a93;
+    --accent: #c5d2e0;
+    --accent-glow: #ffffff;
+    --border: #26252a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 18px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    background:
+      radial-gradient(ellipse 90% 60% at 50% 6%,
+                      rgba(197, 210, 224, 0.09) 0%,
+                      rgba(197, 210, 224, 0.00) 60%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 3.5rem 1.5rem 3rem; }
+  /* Sub-page masthead: small icon + wordmark + title, then a rule. */
+  .brand {
+    display: flex; align-items: center; gap: 1rem;
+    padding-bottom: 1.5rem; margin-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-icon {
+    width: 56px; height: 56px; border-radius: 13px; overflow: hidden; flex-shrink: 0;
+    display: block;
+    box-shadow: 0 0 24px rgba(197, 210, 224, 0.16), 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  .brand-icon img { width: 100%; height: 100%; display: block; }
+  .brand-text { flex: 1; }
+  .app-name { font-size: 0.95rem; color: var(--accent); letter-spacing: 0.04em; margin-bottom: 0.2rem; }
+  .app-name a { color: inherit; text-decoration: none; }
+  .app-name a:hover { color: var(--accent-glow); text-decoration: none; }
+  .page-title { font-size: 2rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; }
+  h2 {
+    font-size: 0.8rem; font-weight: 600; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin: 2.75rem 0 0.9rem;
+  }
+  .doc p { margin-bottom: 1.3rem; }
+  a { color: var(--accent); text-decoration: none; transition: color 0.15s ease; }
+  a:hover { color: var(--accent-glow); text-decoration: underline; }
+  footer { margin-top: 3rem; text-align: center; font-size: 0.9rem; color: var(--muted); line-height: 1.9; }
+  footer a { color: var(--accent); }
+  footer .sep { color: var(--border); padding: 0 0.4rem; }
+</style>
+</head>
+<body>
+  <main>
+
+    <header class="brand">
+      <a class="brand-icon" href="index.html">
+        <img src="assets/thomas-icon-512.png" alt="Thomas icon">
+      </a>
+      <div class="brand-text">
+        <p class="app-name"><a href="index.html">Thomas</a></p>
+        <h1 class="page-title">Support</h1>
+      </div>
+    </header>
+
+    <div class="doc">
+      <p>Thanks for using Thomas.</p>
+
+      <h2>Getting started</h2>
+      <p>Raise the camera and press the shutter. Thomas ships with Apple Intelligence as the eye, so the photograph and the words work on a fresh install with no download at all. Open Preferences to change which machine looks, how it describes what it sees, and how the frames meet.</p>
+
+      <h2>The third frame</h2>
+      <p>The drawing is a download, because it has to be: the model that draws is not built into the phone. Open Preferences, tap Browse Model Library, and download the drawing model. Then turn on Draw the third frame. A shot with a drawing takes about ten seconds longer, which is the film developing.</p>
+
+      <h2>Nothing appears on the capture screen</h2>
+      <p>That is deliberate. The camera does not show you the result, it shows you the world. Press the shutter and keep shooting: finished frames land in Photos, and the Photos glyph in the corner pulses when one arrives. Tap it to go and look.</p>
+
+      <h2>The eye</h2>
+      <p>Apple Intelligence is built in, needs no download, and has a filter that will sometimes stop a picture before the model ever sees it. Qwen is a download, sees a great deal more, and has no filter at all. Neither is better. They are different machines, and the point is to watch how each one finds the truth.</p>
+
+      <h2>The words are wrong</h2>
+      <p>Sometimes they will be. Thomas reports a perception rather than grading an answer, so it states what it sees without hedging, and your photograph is right there beside it to disagree with. If you want a different voice, the eye's system prompt and its temperature are in Preferences, in full, and every word of them is yours to change. The presets fill those same visible fields, so you can read exactly what each one did.</p>
+
+      <h2>Models and space</h2>
+      <p>Models are shared with the developer's other apps on the same phone, so anything Hal or Posey already downloaded is here for free. Preferences shows what is on the phone and what it costs. Deleting a model here gives up this camera's claim on it, and the files are removed only when no other app is still using them.</p>
+
+      <h2>Contact</h2>
+      <p>For questions, feedback, or anything else:</p>
+      <p>Mark Friedlander<br>
+      <a href="mailto:markfriedlander@yahoo.com">markfriedlander@yahoo.com</a></p>
+    </div>
+
+    <footer>
+      Coming soon<span class="sep">·</span><a href="privacy.html">Privacy</a><span class="sep">·</span><a href="support.html">Support</a><span class="sep">·</span><a href="https://github.com/markfriedlander/Thomas">Source</a><span class="sep">·</span><a href="index.html">Home</a><span class="sep">·</span>© 2026 <a href="https://markfriedlander.github.io/">Mark Friedlander</a>
+    </footer>
+
+  </main>
+</body>
+</html>

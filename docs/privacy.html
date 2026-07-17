@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thomas · Privacy</title>
+<meta name="description" content="Privacy policy for Thomas, a camera for iPhone that records in language.">
+<link rel="icon" href="assets/thomas-icon-512.png">
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --surface: #151417;
+    --text: #e9eaec;
+    --muted: #8a8a93;
+    --accent: #c5d2e0;
+    --accent-glow: #ffffff;
+    --border: #26252a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 18px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    background:
+      radial-gradient(ellipse 90% 60% at 50% 6%,
+                      rgba(197, 210, 224, 0.09) 0%,
+                      rgba(197, 210, 224, 0.00) 60%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 3.5rem 1.5rem 3rem; }
+  /* Sub-page masthead: small icon + wordmark + title, then a rule. */
+  .brand {
+    display: flex; align-items: center; gap: 1rem;
+    padding-bottom: 1.5rem; margin-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-icon {
+    width: 56px; height: 56px; border-radius: 13px; overflow: hidden; flex-shrink: 0;
+    display: block;
+    box-shadow: 0 0 24px rgba(197, 210, 224, 0.16), 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  .brand-icon img { width: 100%; height: 100%; display: block; }
+  .brand-text { flex: 1; }
+  .app-name { font-size: 0.95rem; color: var(--accent); letter-spacing: 0.04em; margin-bottom: 0.2rem; }
+  .app-name a { color: inherit; text-decoration: none; }
+  .app-name a:hover { color: var(--accent-glow); text-decoration: none; }
+  .page-title { font-size: 2rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; }
+  .doc p { margin-bottom: 1.3rem; }
+  a { color: var(--accent); text-decoration: none; transition: color 0.15s ease; }
+  a:hover { color: var(--accent-glow); text-decoration: underline; }
+  footer { margin-top: 3rem; text-align: center; font-size: 0.9rem; color: var(--muted); line-height: 1.9; }
+  footer a { color: var(--accent); }
+  footer .sep { color: var(--border); padding: 0 0.4rem; }
+</style>
+</head>
+<body>
+  <main>
+
+    <header class="brand">
+      <a class="brand-icon" href="index.html">
+        <img src="assets/thomas-icon-512.png" alt="Thomas icon">
+      </a>
+      <div class="brand-text">
+        <p class="app-name"><a href="index.html">Thomas</a></p>
+        <h1 class="page-title">Privacy</h1>
+      </div>
+    </header>
+
+    <div class="doc">
+      <p>Thomas does not collect, store, transmit, or share any personal data of any kind.</p>
+
+      <p>It has no accounts, no analytics, no telemetry, no advertising identifiers, no third-party SDKs. There are no servers operated by the developer.</p>
+
+      <p><strong>Your photographs.</strong> Both machines run on your iPhone: the vision model that describes what it sees, and the drawing model that redraws the scene from those words. Your photographs are not uploaded to the developer or to anyone else, and Thomas keeps no library of its own. Finished frames are saved to your photo library, and that is the only place they live.</p>
+
+      <p><strong>Apple Intelligence.</strong> When the eye is Apple Intelligence, inference occurs on-device when you are offline. When you are connected, Apple's Private Cloud Compute may be used: the request is encrypted in transit and processed only in short-lived, non-persistent memory on Apple-controlled servers. Apple states that no data is retained after processing, and the developer of Thomas does not see or have access to any of it. Choosing a downloaded model instead keeps the entire pass on your device, with no network calls at all.</p>
+
+      <p><strong>Location.</strong> Thomas stamps the place on the frame, the way a camera has always stamped the date. Stated plainly: to turn your coordinates into a place name, the coordinate is sent to Apple's mapping service, which is how reverse geocoding works on iOS. Thomas does not store your location, does not attach it to your photographs as data, and does not send it anywhere else. If you decline location, no lookup is ever made and frames simply carry no place stamp.</p>
+
+      <p><strong>Your photo library.</strong> Saving a finished frame uses add-only permission, which lets Thomas add pictures without being able to read the ones already there. If you choose to feed an existing picture into the camera, the system picker hands Thomas that one picture and nothing else.</p>
+
+      <p><strong>Model downloads.</strong> Models are fetched from Hugging Face over standard HTTPS, only at your explicit request. Once downloaded they run entirely on your device. They are shared with the developer's other apps on the same phone, so a model you already have is never downloaded twice.</p>
+
+      <p>Thomas is open source. If you would rather read the code than take any of this on faith, it is at <a href="https://github.com/markfriedlander/Thomas">github.com/markfriedlander/Thomas</a>.</p>
+    </div>
+
+    <footer>
+      Coming soon<span class="sep">·</span><a href="privacy.html">Privacy</a><span class="sep">·</span><a href="support.html">Support</a><span class="sep">·</span><a href="https://github.com/markfriedlander/Thomas">Source</a><span class="sep">·</span><a href="index.html">Home</a><span class="sep">·</span>© 2026 <a href="https://markfriedlander.github.io/">Mark Friedlander</a>
+    </footer>
+
+  </main>
+</body>
+</html>
