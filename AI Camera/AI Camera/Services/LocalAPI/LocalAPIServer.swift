@@ -464,8 +464,12 @@ extension LocalAPIServer {
         let out = await ModelLane.shared.run("press") { () -> PressOut in
             let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
             let fullWords = perception.wireText
-            // A real press develops and saves — reality's receipt included.
-            let (frames, layoutName): ([UIImage], String) = await MainActor.run {
+            // A real press develops and saves — reality's receipt included. The drawing is a
+            // frame of the shot too, and now gets the same plate treatment (bars + footer) as
+            // the others, so "Separate images" saves three frames that read as one object.
+            let toSave: [UIImage]
+            let layoutName: String
+            (toSave, layoutName) = await MainActor.run {
                 let layout = layoutOverride ?? Settings.shared.layout
                 // Frame 2 per the user's setting: the full perception, or the condensed words
                 // the hand drew from. See `FrameTwoWords`.
@@ -473,15 +477,15 @@ extension LocalAPIServer {
                 // `place: nil` — the GPS footer needs CameraView's live `Place` instance,
                 // which the antenna can't reach (there's no `Place.current` the way there's a
                 // `Lens.current`). A remote press lands without the place stamp. Cosmetic.
-                let f = Darkroom.develop(photograph: photograph,
+                var f = Darkroom.develop(photograph: photograph,
                                          words: frameTwo,
                                          place: nil,
                                          layout: layout)
+                if let drawnCG = drawnImage?.cgImage {
+                    f.append(Darkroom.frameDrawing(drawnCG, place: nil))
+                }
                 return (f, layout.name)
             }
-            // The drawing is a frame of the shot too. Appended so "Separate images" saves all
-            // three (photo, words, drawing) — the thing Mark reported missing.
-            let toSave = drawnImage.map { frames + [$0] } ?? frames
             await Shot.save(toSave)
             let pngs = await MainActor.run { toSave.compactMap { $0.pngData() } }
             return PressOut(words: fullWords,

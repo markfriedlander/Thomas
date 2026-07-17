@@ -246,13 +246,19 @@ struct CameraView: View {
             ? result.perception.wireText
             : result.wordsForHand
 
+        // One date for the whole shot, so every frame's footer stamps the same moment.
+        let now = Date()
+
         // A shot yields one frame — or two, for "Separate images". Still one press.
         var frames = Darkroom.develop(photograph: photograph,
                                       words: frameTwoWords,
                                       place: place.name,
-                                      layout: settings.layout)
-        if let drawn = result.drawn {
-            frames.append(drawn)
+                                      layout: settings.layout,
+                                      date: now)
+        // Frame 3 gets the same plate treatment — letterbox bars + footer — so the shot reads
+        // as one object. See `Darkroom.frameDrawing`.
+        if let drawn = result.drawn, let drawnCG = drawn.cgImage {
+            frames.append(Darkroom.frameDrawing(drawnCG, place: place.name, date: now))
         }
 
         lastFrame = frames.last

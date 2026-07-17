@@ -575,13 +575,16 @@ struct PreferencesView: View {
 
     private var layoutSection: some View {
         Section {
+            // A dropdown, not the old inline list. Mark, 2026-07-16: the inline picker was
+            // "growing and taking lots of screen space," and it only grows as layouts accrue
+            // (Triptych next). `.menu` shows one compact row — label + current choice — and pops
+            // the options on tap.
             Picker("Layout", selection: $settings.layout) {
                 ForEach(Layout.allCases, id: \.self) { layout in
                     Text(layout.name).tag(layout)
                 }
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
+            .pickerStyle(.menu)
         } header: {
             Text("Layout")
         } footer: {

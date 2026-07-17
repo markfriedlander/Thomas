@@ -104,6 +104,23 @@ enum Darkroom {
         }
     }
 
+    /// Give the re-imagining (frame 3) the same grammar as the other frames — letterbox bars
+    /// and the place/date footer — so the whole shot reads as one object. Mark, 2026-07-16: the
+    /// drawing lacked "the footer and the black borders that frame one and frame two have."
+    ///
+    /// The drawing carries **no words**: it *is* the machine's visual, and the words are frame
+    /// 2's — putting them here would conflate the two frames. The footer still testifies, and
+    /// honestly so: the re-imagining came from a look at a real place at a real time — the same
+    /// claim the words-only card makes once the photograph is gone. It attests to the *look*,
+    /// not to the drawing's accuracy, and the triptych makes plain this panel is a re-imagining.
+    ///
+    /// Internally this is `compose` with no words. The drawing is square (512/1080/2048); its
+    /// bars are 8.5% of its height, the same proportion a photograph's are, so the frames share
+    /// a grammar even though their pixel sizes differ.
+    static func frameDrawing(_ drawing: CGImage, place: String?, date: Date = Date()) -> UIImage {
+        compose(photograph: drawing, words: nil, place: place, layout: .superimposed, date: date)
+    }
+
     /// A frame containing a photograph. `words == nil` leaves it bare (the `.separate`
     /// case, where the words get their own card).
     private static func compose(photograph: CGImage,
