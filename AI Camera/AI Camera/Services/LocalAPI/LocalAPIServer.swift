@@ -479,13 +479,11 @@ extension LocalAPIServer {
                 // to close the gap Mark caught). nil only if there's no fix yet or it's denied,
                 // exactly as for a human.
                 let place = Place.current?.name
-                var f = Darkroom.develop(photograph: photograph,
+                let f = Darkroom.develop(photograph: photograph,
                                          words: frameTwo,
+                                         drawing: drawnImage?.cgImage,
                                          place: place,
                                          layout: layout)
-                if let drawnCG = drawnImage?.cgImage {
-                    f.append(Darkroom.frameDrawing(drawnCG, place: place))
-                }
                 return (f, layout.name)
             }
             await Shot.save(toSave)
@@ -583,6 +581,7 @@ extension LocalAPIServer {
                 let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
                 return Darkroom.develop(photograph: photograph,
                                         words: frameTwo,
+                                        drawing: drawnImage?.cgImage,   // measure the composite too
                                         place: nil,   // footer text; not memory-relevant
                                         layout: Settings.shared.layout)
             }

@@ -42,6 +42,13 @@ enum Layout: String, CaseIterable, Sendable {
     case diptychTextLeft
     /// Same, text RIGHT.
     case diptychTextRight
+    /// All three frames stitched into one plate, top to bottom: reality → perception →
+    /// re-imagining. Normalized to the drawing's resolution (the lowest of the three), so the
+    /// whole file scales with the drawing-size control. Needs the third frame — degrades to two
+    /// panels (photo + words) without it.
+    case triptychVertical
+    /// The same three, left to right — the museum-wall triptych.
+    case triptychHorizontal
     /// **Just the words.** No photograph at all.
     ///
     /// This is Mark's original idea, and it is not a degraded triptych — it's a quieter
@@ -57,15 +64,18 @@ enum Layout: String, CaseIterable, Sendable {
 
     var name: String {
         switch self {
-        case .superimposed:     return "Superimposed"
-        case .diptychTextLeft:  return "Diptych — text left"
-        case .diptychTextRight: return "Diptych — text right"
-        case .textOnly:         return "Words only"
-        case .separate:         return "Separate images"
+        case .superimposed:       return "Capture — superimposed"
+        case .diptychTextLeft:    return "Diptych — text left"
+        case .diptychTextRight:   return "Diptych — text right"
+        case .triptychVertical:   return "Triptych — vertical"
+        case .triptychHorizontal: return "Triptych — horizontal"
+        case .textOnly:           return "Words only"
+        case .separate:           return "Separate images"
         }
     }
 
     var isDiptych: Bool { self == .diptychTextLeft || self == .diptychTextRight }
+    var isTriptych: Bool { self == .triptychVertical || self == .triptychHorizontal }
 }
 
 enum Darkroom {
@@ -82,25 +92,36 @@ enum Darkroom {
     /// `.separate`. The shot is still atomic: one press, one set of artifacts.
     static func develop(photograph: CGImage,
                         words: String,
+                        drawing: CGImage? = nil,
                         place: String?,
                         layout: Layout = .superimposed,
                         date: Date = Date()) -> [UIImage] {
+        // For every non-triptych layout the drawing rides along as its own framed asset (bars +
+        // footer — `frameDrawing`). The triptych consumes it INTO one composite instead.
+        func withDrawing(_ frames: [UIImage]) -> [UIImage] {
+            guard let drawing else { return frames }
+            return frames + [frameDrawing(drawing, place: place, date: date)]
+        }
+
         switch layout {
+        case .triptychVertical, .triptychHorizontal:
+            return [triptych(photograph: photograph, words: words, drawing: drawing,
+                             axis: layout == .triptychVertical ? .vertical : .horizontal,
+                             place: place, date: date)]
         case .textOnly:
-            return [card(words: words, size: CGSize(width: photograph.width,
-                                                    height: photograph.height),
-                         place: place, date: date)]
+            return withDrawing([card(words: words,
+                                     size: CGSize(width: photograph.width, height: photograph.height),
+                                     place: place, date: date)])
         case .separate:
-            return [
+            return withDrawing([
                 compose(photograph: photograph, words: nil, place: place,
                         layout: .superimposed, date: date),
-                card(words: words, size: CGSize(width: photograph.width,
-                                                height: photograph.height),
+                card(words: words, size: CGSize(width: photograph.width, height: photograph.height),
                      place: place, date: date)
-            ]
+            ])
         default:
-            return [compose(photograph: photograph, words: words, place: place,
-                            layout: layout, date: date)]
+            return withDrawing([compose(photograph: photograph, words: words, place: place,
+                                        layout: layout, date: date)])
         }
     }
 
@@ -119,6 +140,103 @@ enum Darkroom {
     /// a grammar even though their pixel sizes differ.
     static func frameDrawing(_ drawing: CGImage, place: String?, date: Date = Date()) -> UIImage {
         compose(photograph: drawing, words: nil, place: place, layout: .superimposed, date: date)
+    }
+
+    // MARK: - The triptych
+
+    private enum TriptychAxis { case vertical, horizontal }
+    private enum TriptychPanel { case image(UIImage); case words(String) }
+
+    /// All three frames stitched into one plate: reality → perception → re-imagining.
+    ///
+    /// **Normalized to the drawing's resolution** — the lowest of the three — so the whole file
+    /// scales with the user's drawing-size control (Native/1080/2048). Mark's call, 2026-07-16:
+    /// "three times the lowest resolution one." The photograph is scaled *down* to match; keeping
+    /// it crisp (and the file very large) is a parked future option, the reverse of this.
+    ///
+    /// One footer for the whole object — place bottom-left, date bottom-right — which lands under
+    /// the first panel and the last exactly as Mark asked, in both axes. Black gutters between the
+    /// panels give the letterbox grammar without double bars. The words panel is square, balanced
+    /// against the square drawing; `drawWords` shrinks to fit whatever the machine said.
+    ///
+    /// Degrades gracefully with no drawing (third frame off): two panels, photo + words.
+    private static func triptych(photograph: CGImage,
+                                 words: String,
+                                 drawing: CGImage?,
+                                 axis: TriptychAxis,
+                                 place: String?,
+                                 date: Date) -> UIImage {
+        let photo = UIImage(cgImage: photograph)
+        let draw = drawing.map { UIImage(cgImage: $0) }
+
+        // The common dimension: the drawing's width (it's square). Without a drawing, fall back
+        // to a sane unit off the photo so the two-panel degrade isn't a giant file.
+        let unit: CGFloat = draw?.size.width ?? min(photo.size.width, 1200)
+        let gutter = (unit * 0.03).rounded()
+        let footerBar = (unit * 0.11).rounded()
+        let margin = unit * 0.045
+        let footerSize = unit * 0.03
+
+        // Order is the thesis: reality, perception (words), re-imagining.
+        var panels: [TriptychPanel] = [.image(photo), .words(words)]
+        if let draw { panels.append(.image(draw)) }
+
+        // Size each panel at the common dimension. Words panels are square; image panels keep
+        // their aspect, fitted to the common width (vertical) or height (horizontal).
+        func size(of panel: TriptychPanel) -> CGSize {
+            switch panel {
+            case .words:
+                return CGSize(width: unit, height: unit)
+            case .image(let img):
+                switch axis {
+                case .vertical:   return CGSize(width: unit, height: (unit * img.size.height / img.size.width).rounded())
+                case .horizontal: return CGSize(width: (unit * img.size.width / img.size.height).rounded(), height: unit)
+                }
+            }
+        }
+        let sizes = panels.map(size)
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+
+        let canvas: CGSize
+        switch axis {
+        case .vertical:
+            let contentH = sizes.reduce(0) { $0 + $1.height }
+            canvas = CGSize(width: unit,
+                            height: gutter + contentH + gutter * CGFloat(panels.count - 1) + footerBar)
+        case .horizontal:
+            let contentW = sizes.reduce(0) { $0 + $1.width }
+            canvas = CGSize(width: margin + contentW + gutter * CGFloat(panels.count - 1) + margin,
+                            height: gutter + unit + footerBar)
+        }
+
+        return UIGraphicsImageRenderer(size: canvas, format: format).image { ctx in
+            UIColor.black.setFill()
+            ctx.cgContext.fill(CGRect(origin: .zero, size: canvas))
+
+            var x = (axis == .horizontal) ? margin : 0
+            var y = gutter
+            for (panel, s) in zip(panels, sizes) {
+                let originX = (axis == .vertical) ? 0 : x
+                let rect = CGRect(x: originX, y: y, width: s.width, height: s.height)
+                switch panel {
+                case .image(let img):
+                    img.draw(in: rect)
+                case .words(let w):
+                    // Inside its square, with the same margin the single card uses. No shadow —
+                    // the panel is already black.
+                    drawWords(w, in: rect.insetBy(dx: margin, dy: margin),
+                              size: unit * 0.075, shadowed: false)
+                }
+                if axis == .vertical { y += s.height + gutter }
+                else { x += s.width + gutter }
+            }
+
+            drawFooter(place: place, date: date, in: ctx.cgContext, canvas: canvas,
+                       bar: footerBar, margin: margin, size: footerSize)
+        }
     }
 
     /// A frame containing a photograph. `words == nil` leaves it bare (the `.separate`
@@ -156,7 +274,10 @@ enum Darkroom {
             let footerSize = w * 0.026
 
             switch layout {
-            case .superimposed, .textOnly, .separate:
+            // Triptych never reaches `compose` — `develop` routes it to `triptych()` — but the
+            // switch must be exhaustive, and treating it as a full-frame plate is the safe
+            // fallback if that routing ever changed.
+            case .superimposed, .textOnly, .separate, .triptychVertical, .triptychHorizontal:
                 image.draw(in: CGRect(x: 0, y: bar, width: w, height: h))
                 if let words {
                     drawWords(words, in: CGRect(x: margin, y: bar + margin,

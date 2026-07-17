@@ -369,9 +369,14 @@ final class Place: NSObject {
 
     func stop() { manager.stopUpdatingLocation() }
 
-    /// The date, in the book's voice: "June 21, 2020".
+    /// The date and time, in the book's voice: "June 21, 2020 · 3:42 PM". Time was added
+    /// 2026-07-16 (Mark) so two shots the same day no longer stamp identically — the footer's
+    /// whole job is to testify *when*, and time sharpens it. One source, so every layout's
+    /// footer reads the same.
     static func stamp(_ date: Date = Date()) -> String {
-        date.formatted(.dateTime.month(.wide).day().year())
+        let day = date.formatted(.dateTime.month(.wide).day().year())
+        let time = date.formatted(.dateTime.hour().minute())
+        return "\(day) · \(time)"
     }
 
     private func resolve(_ location: CLLocation) {

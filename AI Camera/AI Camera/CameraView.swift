@@ -249,17 +249,15 @@ struct CameraView: View {
         // One date for the whole shot, so every frame's footer stamps the same moment.
         let now = Date()
 
-        // A shot yields one frame — or two, for "Separate images". Still one press.
-        var frames = Darkroom.develop(photograph: photograph,
+        // A shot yields one frame — or two, for "Separate images", or three appended, or a
+        // single stitched triptych. The drawing goes INTO develop now; it decides (append the
+        // framed drawing, or stitch all three). See `Darkroom.develop`.
+        let frames = Darkroom.develop(photograph: photograph,
                                       words: frameTwoWords,
+                                      drawing: result.drawn?.cgImage,
                                       place: place.name,
                                       layout: settings.layout,
                                       date: now)
-        // Frame 3 gets the same plate treatment — letterbox bars + footer — so the shot reads
-        // as one object. See `Darkroom.frameDrawing`.
-        if let drawn = result.drawn, let drawnCG = drawn.cgImage {
-            frames.append(Darkroom.frameDrawing(drawnCG, place: place.name, date: now))
-        }
 
         lastFrame = frames.last
         await Shot.save(frames)

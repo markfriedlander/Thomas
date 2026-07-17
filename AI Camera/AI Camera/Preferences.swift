@@ -575,20 +575,64 @@ struct PreferencesView: View {
 
     private var layoutSection: some View {
         Section {
-            // A dropdown, not the old inline list. Mark, 2026-07-16: the inline picker was
-            // "growing and taking lots of screen space," and it only grows as layouts accrue
-            // (Triptych next). `.menu` shows one compact row — label + current choice — and pops
-            // the options on tap.
-            Picker("Layout", selection: $settings.layout) {
-                ForEach(Layout.allCases, id: \.self) { layout in
-                    Text(layout.name).tag(layout)
+            // A dropdown, not the old inline list (Mark: it was "growing and taking lots of
+            // screen space"). It's a Menu of Buttons rather than a Picker because the triptych
+            // needs three states a Picker can't give a single row: hidden when there's no drawer
+            // model, greyed when the model's here but the third frame is off (a hint — flip the
+            // switch), live when drawing is on. See `layoutVisibility`.
+            Menu {
+                ForEach(Layout.allCases, id: \.self) { layoutMenuItem($0) }
+            } label: {
+                HStack {
+                    Text("Layout")
+                    Spacer()
+                    Text(settings.layout.name).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote).foregroundStyle(.tertiary)
                 }
             }
-            .pickerStyle(.menu)
+            .tint(.primary)
         } header: {
             Text("Layout")
         } footer: {
-            Text("Superimposed puts the words on the world they describe. A diptych sets them beside it, white on black, giving the words exactly as much room as the photograph. Words only keeps what the machine said and discards the photograph entirely. Separate images saves the photograph and the words as two pictures, and lets you do the comparing.")
+            Text("Capture — superimposed puts the words on the world they describe. A diptych sets them beside it, white on black. A triptych stitches all three frames — the photograph, the words, and the drawing — into one plate, top to bottom or left to right. Words only keeps what the machine said and discards the photograph. Separate images saves each frame as its own picture, and lets you do the comparing.")
+        }
+    }
+
+    private enum LayoutVisibility { case hidden, greyed, live }
+
+    /// The triptych's three states (Mark, 2026-07-16): not there when it's irrelevant (no drawer
+    /// model), greyed to hint at the possibility when the model's downloaded but the third frame
+    /// switch is off, and live when drawing is on. Every non-triptych layout is always live.
+    private func layoutVisibility(_ layout: Layout) -> LayoutVisibility {
+        guard layout.isTriptych else { return .live }
+        if !DrawerLoader.isAvailable { return .hidden }
+        return settings.drawsThirdFrame ? .live : .greyed
+    }
+
+    @ViewBuilder
+    private func layoutMenuItem(_ layout: Layout) -> some View {
+        switch layoutVisibility(layout) {
+        case .hidden:
+            EmptyView()
+        case .greyed:
+            // Visible but disabled — the hint. Still checked if it's the current selection.
+            Button {} label: {
+                if settings.layout == layout {
+                    Label(layout.name, systemImage: "checkmark")
+                } else {
+                    Text(layout.name)
+                }
+            }
+            .disabled(true)
+        case .live:
+            Button { settings.layout = layout } label: {
+                if settings.layout == layout {
+                    Label(layout.name, systemImage: "checkmark")
+                } else {
+                    Text(layout.name)
+                }
+            }
         }
     }
 }
