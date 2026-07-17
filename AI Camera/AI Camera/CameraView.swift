@@ -234,14 +234,21 @@ struct CameraView: View {
         // measures exactly this. See `Shot`.
         let seer = settings.seer
         let drawThird = settings.drawsThirdFrame
-        let result: (perception: Perception, drawn: UIImage?) =
+        let result: (perception: Perception, drawn: UIImage?, wordsForHand: String) =
             await ModelLane.shared.run("shot") { @MainActor in
                 await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
             }
 
+        // Which words go on frame 2: the eye's full perception, or the (possibly condensed)
+        // version the hand actually drew from. Default is the airtight chain. They're identical
+        // unless the description was long enough to condense. See `FrameTwoWords`.
+        let frameTwoWords = settings.frameTwoShows == .fullPerception
+            ? result.perception.wireText
+            : result.wordsForHand
+
         // A shot yields one frame — or two, for "Separate images". Still one press.
         var frames = Darkroom.develop(photograph: photograph,
-                                      words: result.perception.wireText,
+                                      words: frameTwoWords,
                                       place: place.name,
                                       layout: settings.layout)
         if let drawn = result.drawn {
@@ -299,6 +306,18 @@ enum Seer: String, CaseIterable, Hashable, Sendable {
             // No retry: there is no filter to get past.
             let qwen = Settings.shared.qwen
             return await qwen.look(at: image)
+        }
+    }
+
+    /// The same eye that saw, restating its words in fewer of them — dispatched to whichever
+    /// eye is loaded (purity of the chain: Mark, 2026-07-16, *"model who sees is the same model
+    /// who condenses"*). Its own compression instruction, so the user's Layer 2 doesn't apply
+    /// here. Returns nil on failure; `Shot` then hands the full words on under the hard cap.
+    @MainActor
+    func condense(_ text: String, toAtMostWords maxWords: Int) async -> String? {
+        switch self {
+        case .apple: return await Settings.shared.eye.condense(text, toAtMostWords: maxWords)
+        case .qwen:  return await Settings.shared.qwen.condense(text, toAtMostWords: maxWords)
         }
     }
 }

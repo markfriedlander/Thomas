@@ -455,21 +455,26 @@ extension LocalAPIServer {
         // we're gonna have some issues."*
         struct PressOut: Sendable {
             let words: String
+            let wordsToHand: String
             let outcome: String
             let drewThird: Bool
             let layoutName: String
             let framePNGs: [Data]
         }
         let out = await ModelLane.shared.run("press") { () -> PressOut in
-            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            let fullWords = perception.wireText
             // A real press develops and saves — reality's receipt included.
             let (frames, layoutName): ([UIImage], String) = await MainActor.run {
                 let layout = layoutOverride ?? Settings.shared.layout
+                // Frame 2 per the user's setting: the full perception, or the condensed words
+                // the hand drew from. See `FrameTwoWords`.
+                let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
                 // `place: nil` — the GPS footer needs CameraView's live `Place` instance,
                 // which the antenna can't reach (there's no `Place.current` the way there's a
                 // `Lens.current`). A remote press lands without the place stamp. Cosmetic.
                 let f = Darkroom.develop(photograph: photograph,
-                                         words: perception.wireText,
+                                         words: frameTwo,
                                          place: nil,
                                          layout: layout)
                 return (f, layout.name)
@@ -479,7 +484,8 @@ extension LocalAPIServer {
             let toSave = drawnImage.map { frames + [$0] } ?? frames
             await Shot.save(toSave)
             let pngs = await MainActor.run { toSave.compactMap { $0.pngData() } }
-            return PressOut(words: perception.wireText,
+            return PressOut(words: fullWords,
+                            wordsToHand: wordsForHand,
                             outcome: perception.wireName,
                             drewThird: drawnImage != nil,
                             layoutName: layoutName,
@@ -498,6 +504,8 @@ extension LocalAPIServer {
             "savedCount":        out.framePNGs.count,
             "outcome":           out.outcome,
             "words":             out.words,
+            // What the hand actually drew from — equals `words` unless it was condensed to fit.
+            "wordsToHand":       out.wordsToHand,
             "width":             photograph.width,
             "height":            photograph.height,
             "totalSeconds":      round(seconds * 100) / 100,
@@ -554,22 +562,27 @@ extension LocalAPIServer {
 
         // The whole shot, in the lane, exactly as the shutter runs it. `run` can't throw and
         // `seeThenDraw` doesn't throw — a failed drawing comes back as `drawn == nil`.
-        let handStyle = req.headers["x-hand-prompt"]
+        //
+        // (X-Hand-Prompt is gone — the hand style was deactivated 2026-07-16; the hand draws the
+        // eye's words, clean. See Shot / Settings.)
         let sizeOverride = req.headers["x-size"].flatMap { DrawingSize(rawValue: $0) }
         let methodOverride = req.headers["x-upscaler"].flatMap { UpscaleMethod(rawValue: $0) }
-        struct ShotOut: Sendable { let words: String; let outcome: String; let drawn: CGImage? }
+        struct ShotOut: Sendable { let words: String; let wordsToHand: String; let outcome: String; let drawn: CGImage? }
         let out = await ModelLane.shared.run("shoot") { () -> ShotOut in
-            let (perception, drawnImage) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird, handStyleOverride: handStyle, sizeOverride: sizeOverride, methodOverride: methodOverride)
+            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird, sizeOverride: sizeOverride, methodOverride: methodOverride)
+            let fullWords = perception.wireText
             // Build the composited frames, so this holds the same memory a real shot holds
             // while everything is still warm — reality's receipt, the words over the world.
             let frames = await MainActor.run {
-                Darkroom.develop(photograph: photograph,
-                                 words: perception.wireText,
-                                 place: nil,   // footer text; not memory-relevant
-                                 layout: Settings.shared.layout)
+                let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
+                return Darkroom.develop(photograph: photograph,
+                                        words: frameTwo,
+                                        place: nil,   // footer text; not memory-relevant
+                                        layout: Settings.shared.layout)
             }
             _ = frames.count  // held to end of scope on purpose; this is the memory under test
-            return ShotOut(words: perception.wireText,
+            return ShotOut(words: fullWords,
+                           wordsToHand: wordsForHand,
                            outcome: perception.wireName,
                            drawn: drawnImage?.cgImage)
         }
@@ -582,6 +595,8 @@ extension LocalAPIServer {
             "drewThirdFrame":    out.drawn != nil,
             "outcome":           out.outcome,
             "words":             out.words,
+            // What the hand actually drew from — equals `words` unless it was condensed to fit.
+            "wordsToHand":       out.wordsToHand,
             "totalSeconds":      round(seconds * 100) / 100,
             // ⭐ The number Mark asked for — the REAL peak, holding a photograph and the
             // composited frames the way the shutter does, not the drawer alone.

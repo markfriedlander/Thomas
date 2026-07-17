@@ -83,6 +83,13 @@ broadcast`** — the app dies (signal 5). Mark hit it on the first verbose descr
 tokenizer does. **This is a genuine upstream bug, not an AI-Camera-ism — worth reporting to
 mlx-swift-examples.** A re-sync must re-apply it.
 
+**NB — this truncation is now the FLOOR, not the primary defense.** As of 2026-07-16 the app
+condenses over-budget descriptions *before* they reach the drawer (the eye restates itself
+shorter — `Eye.condense` / `Qwen.condense`, driven from `Shot.seeThenDraw`), and a locked
+Layer-1 brevity line (`PromptLayers`) keeps the eye short at the source. So this cap should
+normally never engage. Keep it anyway: it is the belt that guarantees the drawer can never be
+handed a crashing prompt again, whatever happens upstream of it.
+
 ---
 
 ## Known upstream issues, NOT fixed here

@@ -67,32 +67,51 @@ enum Shot {
     /// words. Taking the whole frame down because the optional third panel failed would be the
     /// worst trade available. **This is not Principle 3 softened:** Principle 3 governs what
     /// the machine *says about a photograph*, not an engineering failure to allocate memory.
-    /// - Parameter handStyleOverride: for the antenna to A/B styles without the app UI. `nil`
-    ///   (the shutter's path) reads the user's `Settings.handPrompt`.
+    /// - Returns: the perception, the optional drawing, and `wordsForHand` — the exact text the
+    ///   hand was drawn from. That equals the full perception unless it had to be condensed to
+    ///   fit the drawer; the caller uses it to honor `Settings.frameTwoShows` (show the chain
+    ///   the hand actually received, or the eye's full words).
     static func seeThenDraw(_ photograph: CGImage,
                             seer: Seer,
                             drawThird: Bool,
-                            handStyleOverride: String? = nil,
                             sizeOverride: DrawingSize? = nil,
-                            methodOverride: UpscaleMethod? = nil) async -> (perception: Perception, drawn: UIImage?) {
+                            methodOverride: UpscaleMethod? = nil) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
         // ── Frame 2. The eye reads the world and says what it sees. ──
         let perception = await seer.look(at: photograph)
 
-        guard drawThird else { return (perception, nil) }
+        // The full perception — always what frame 2 shows by default, and the fallback for
+        // `wordsForHand` in every early return below.
+        let fullWords = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard drawThird else { return (perception, nil, fullWords) }
 
         // The hand draws from words. If the machine produced none — a filter blocked the
         // image, or the model declined — there is nothing to draw FROM. That outcome is
         // already recorded in frame 2; it is not a failure.
-        let words = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !words.isEmpty else { return (perception, nil) }
+        guard !fullWords.isEmpty else { return (perception, nil, fullWords) }
 
-        // The hand's system prompt — how it draws — appended to what the eye said. Blank by
-        // default, so the baseline is the words drawn straight (Principle 3). Non-empty is the
-        // user's chosen style, added as diffusion-standard trailing terms. Subject first
-        // (the eye's perception is primary), style second.
-        let handStyle = (handStyleOverride ?? Settings.shared.handPrompt)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = handStyle.isEmpty ? words : "\(words), \(handStyle)"
+        // ── Condense, but only if the words overrun the hand's budget. ──
+        //
+        // The drawer's text encoder (CLIP) reads ~75 tokens and no more; a longer prompt used
+        // to *crash* the app (VENDOR.md #3), and the tokenizer's hard truncation is now the
+        // floor beneath this. But truncation CHOPS — it hands the drawer the front of a
+        // sentence. So first we ask the SAME eye that saw to say the same thing in fewer words
+        // (Mark's call, 2026-07-16: summarize, don't truncate). Only when over budget, and only
+        // now, while the eye is still resident. On failure we pass the full words on and let the
+        // hard cap catch them — the belt stays buckled, we just try not to need it.
+        var wordsForHand = fullWords
+        if PromptBudget.exceedsDrawerBudget(fullWords),
+           let shorter = await seer.condense(fullWords, toAtMostWords: PromptBudget.condenseTargetWords) {
+            cameraLog("CONDENSE: \(PromptBudget.wordCount(fullWords)) words → \(PromptBudget.wordCount(shorter)) for the hand")
+            wordsForHand = shorter
+        }
+
+        // The hand takes ONLY the eye's words — no style, no framing, pure information. A
+        // user-facing "art direction" style prompt was built and then deliberately removed
+        // (2026-07-16): inserting one puts a human's aesthetic into a machine→machine chain and
+        // changes what the drawer perceives the eye to have seen. Parked in NEXT as an opt-in
+        // mode, clearly outside the pure chain.
+        let prompt = wordsForHand
 
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
@@ -111,12 +130,38 @@ enum Shot {
             // Enlarge after the draw — cheap, and it never touched the VAE spike. `.native`
             // returns the 512² unchanged.
             let sized = Upscaler.enlarge(drawn, to: size, method: method)
-            return (perception, UIImage(cgImage: sized))
+            return (perception, UIImage(cgImage: sized), wordsForHand)
         } catch {
             cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
             await DrawerLoader.shared.unload()
-            return (perception, nil)
+            return (perception, nil, wordsForHand)
         }
+    }
+}
+
+/// Whether the eye's words will overrun the hand's prompt budget — the trigger for
+/// condensation (`Eye.condense` / `Qwen.condense`).
+///
+/// **Word count, not exact CLIP tokens.** Mark's call for round one (2026-07-16); wiring the
+/// drawer's real CLIP tokenizer in here is a parked upgrade (see NEXT) that would let us
+/// condense *only* when strictly necessary. The drawer's CLIP encoder holds 75 content tokens;
+/// English descriptive prose runs very roughly 1.3–1.5 tokens per word, so ~50 words is the
+/// real ceiling. We trip well below it (45) and aim the condenser comfortably under (35), on
+/// purpose: **Mark wants truncation to be a genuine last resort**, so we'd rather condense a
+/// borderline shot that would have just fit than let the hard cap ever chop one. The cost is a
+/// short extra pass on wordy shots; the exact-tokenizer upgrade is what removes the guesswork.
+enum PromptBudget {
+    /// Above this many words, condense before handing off to the drawer.
+    static let triggerWords = 45
+    /// What the condenser aims for — safely under CLIP's 75 tokens even at a high token/word
+    /// ratio.
+    static let condenseTargetWords = 35
+
+    static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    }
+    static func exceedsDrawerBudget(_ text: String) -> Bool {
+        wordCount(text) > triggerWords
     }
 }
 

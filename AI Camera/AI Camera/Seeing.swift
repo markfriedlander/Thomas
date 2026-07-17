@@ -128,6 +128,35 @@ nonisolated enum Readiness {
 
 // ==== LEGO START: 4 Eye (How The Machine Looks) ====
 
+/// The two-layer system prompt, adopted from Hal's `effectiveSystemPrompt`.
+///
+/// **Layer 1 — ours, locked, but visible.** App-functional guidance the user can read but
+/// not edit or delete. Right now it holds exactly one rule: keep the description brief. That
+/// is what makes truncation a *true* last resort — the eye is steered short at the source, so
+/// the hand's ~75-token drawer budget is rarely even approached, the condensation step
+/// (`Eye.condense`) rarely fires, and the tokenizer's hard cap is a net nothing normally lands
+/// in. Principle 2 is honored by *showing* Layer 1 — locked, with an explanation — not hiding
+/// it (see `PreferencesView.eyeSection`).
+///
+/// **Layer 2 — the user's, fully editable.** Everything about *how* the eye should describe:
+/// voice, focus, and the no-hedging rules. This is `Settings.systemPrompt`.
+///
+/// Composed Layer 1 + blank line + Layer 2, so the model reads the brevity framing first and
+/// the user's direction second — Hal's order.
+///
+/// (Open, deferred — see NEXT: whether the no-hedging rules, which are also app-functional,
+/// should move up into Layer 1. That touches Principle 3, so it's decided on its own.)
+nonisolated enum PromptLayers {
+    /// Layer 1: locked, visible, app-functional. Brevity only, for now.
+    static let brevity = "Describe what you see in no more than two or three sentences."
+
+    /// Layer 1 prepended to the user's Layer 2. An empty Layer 2 leaves just Layer 1.
+    static func compose(userPrompt layerTwo: String) -> String {
+        let l2 = layerTwo.trimmingCharacters(in: .whitespacesAndNewlines)
+        return l2.isEmpty ? brevity : brevity + "\n\n" + l2
+    }
+}
+
 /// How the machine looks. Principle 2 (CLAUDE.md): these are a **system prompt** and a
 /// **temperature**, and we call them a system prompt and a temperature. No cute names.
 nonisolated struct Eye: Sendable {
@@ -151,9 +180,10 @@ nonisolated struct Eye: Sendable {
             You are reporting your own perception.
 
             Do not mention that this is a photograph or an image. Describe the world in it.
-
-            Two or three sentences.
             """,
+            // Length now lives in Layer 1 (`PromptLayers.brevity`), locked and shared by both
+            // eyes — not buried in this editable text where a user could delete it and hand
+            // the drawer a wall of words. See `PromptLayers`.
         // 0.6, not 1.0. Mark called this before we measured it — *"a temperature of 1.0 is
         // very hot"* — and the revolver proved it: at 1.0 the machine called it "a long,
         // ornate object"; at 0.6 it says "I see a revolver. The cylinder is covered in
@@ -176,7 +206,11 @@ nonisolated struct Eye: Sendable {
             return .broke(reason: readiness.explanation)
         }
 
-        let session = LanguageModelSession(model: model, instructions: Instructions(systemPrompt))
+        // Layer 1 (locked brevity) + Layer 2 (the user's `systemPrompt`). See `PromptLayers`.
+        let session = LanguageModelSession(
+            model: model,
+            instructions: Instructions(PromptLayers.compose(userPrompt: systemPrompt))
+        )
 
         do {
             let response = try await session.respond(
@@ -241,6 +275,48 @@ nonisolated struct Eye: Sendable {
             return spoken.content
         }
         return refusal.debugDescription
+    }
+
+    /// The eye, restating its own words in fewer of them.
+    ///
+    /// Mark's answer to the truncation stopgap (2026-07-16): when a description overruns the
+    /// hand's ~75-token drawer budget, don't *chop* its tail off — have the **same eye** that
+    /// saw say the same perception more briefly. "Models summarizing themselves," the pattern
+    /// Hal and Posey use (`TextSummarizer`), pared to what this app needs: one low-temperature
+    /// pass, no verification. (A future embedding-grounded correctness pass, and wiring CLIP's
+    /// exact tokenizer for the trigger, are both known upgrades — see NEXT.)
+    ///
+    /// Called only when over budget, and only while the eye is still resident (`Shot` condenses
+    /// *before* it tears the eye down). Returns nil on any failure — the caller then hands the
+    /// full words on and the tokenizer's hard cap catches them. The belt is still buckled; we
+    /// just try not to need it.
+    ///
+    /// Temperature is fixed low (0.3, Hal's compression setting) — this is faithful restatement,
+    /// not the imaginative reach the *looking* temperature buys. Its own instruction, not the
+    /// user's Layer 2: the job here is to shorten, not to re-describe.
+    func condense(_ text: String, toAtMostWords maxWords: Int) async -> String? {
+        guard Readiness.current.isReady else { return nil }
+        let model = SystemLanguageModel(useCase: .general, guardrails: guardrails)
+        let session = LanguageModelSession(
+            model: model,
+            instructions: Instructions("""
+                You shorten a description while keeping its concrete visual content — the \
+                things named, and their colors, textures, and arrangement. Remove nothing that \
+                could be drawn; drop only what couldn't. Output the shortened description and \
+                nothing else — no preamble, no explanation.
+                """)
+        )
+        do {
+            let response = try await session.respond(
+                options: GenerationOptions(temperature: 0.3)
+            ) {
+                "Rewrite this in no more than \(maxWords) words:\n\n\(text)"
+            }
+            let out = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return out.isEmpty ? nil : out
+        } catch {
+            return nil
+        }
     }
 }
 

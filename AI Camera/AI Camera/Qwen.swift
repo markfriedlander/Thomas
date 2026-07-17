@@ -103,7 +103,9 @@ nonisolated struct Qwen: Sendable {
 
             let session = ChatSession(
                 container,
-                instructions: systemPrompt,
+                // Layer 1 (locked brevity) + Layer 2 (the user's prompt). Same as the Apple
+                // eye — both eyes get the same brevity floor. See `PromptLayers`.
+                instructions: PromptLayers.compose(userPrompt: systemPrompt),
                 generateParameters: Self.visionRecipe(temperature: temperature)
             )
             let text = try await session.respond(to: "Describe what you see.",
@@ -112,6 +114,34 @@ nonisolated struct Qwen: Sendable {
                           tokens: nil)
         } catch {
             return .broke(reason: "\(error)")
+        }
+    }
+
+    /// The eye restating its own words in fewer of them — the Qwen path. See `Eye.condense`
+    /// for the why and the whole design; this is the same step for the unguarded eye.
+    ///
+    /// Cheap: the container is already resident (the look just used it, and `Shot` condenses
+    /// before the teardown), so this is a text-only generation — no image, no reload. Its own
+    /// compression instruction, not the user's Layer 2. Returns nil on failure; the caller
+    /// falls back to the full words under the tokenizer's hard cap.
+    func condense(_ text: String, toAtMostWords maxWords: Int) async -> String? {
+        do {
+            let container = try await QwenLoader.shared.container()
+            let session = ChatSession(
+                container,
+                instructions: """
+                    You shorten a description while keeping its concrete visual content — the \
+                    things named, and their colors, textures, and arrangement. Remove nothing \
+                    that could be drawn; drop only what couldn't. Output the shortened \
+                    description and nothing else — no preamble.
+                    """,
+                generateParameters: Self.visionRecipe(temperature: 0.3)
+            )
+            let out = try await session.respond(to: "Rewrite this in no more than \(maxWords) words:\n\n\(text)")
+            let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        } catch {
+            return nil
         }
     }
 }

@@ -29,6 +29,29 @@ import SwiftUI
 
 // ==== LEGO START: 23 Settings (What The Camera Is Loaded With) ====
 
+/// What frame 2 prints — the eye's words, in one of two honesties.
+///
+/// The app's chain is reality → the eye's words → the hand's drawing. When a description runs
+/// too long for the hand and gets condensed (`Shot` / `Eye.condense`), those two diverge, and
+/// Mark made the divergence a user-facing choice (2026-07-16): do you want to see *what the eye
+/// saw*, or *what the eye saw and passed on*?
+///
+/// Default `.sentToHand` — the airtight chain, where frame 2 is literally what frame 3 was
+/// drawn from, no hidden step. `.fullPerception` is the opt-in "show me everything the eye
+/// said, even the part the hand didn't get." The two read identically on any shot short enough
+/// to need no condensing — which, with Layer 1 keeping the eye brief, is most of them.
+nonisolated enum FrameTwoWords: String, CaseIterable, Sendable {
+    case sentToHand
+    case fullPerception
+
+    var name: String {
+        switch self {
+        case .sentToHand:     return "What the hand received"
+        case .fullPerception: return "The eye's full words"
+        }
+    }
+}
+
 /// What the camera is loaded with. Set before you raise it; never per-shot.
 ///
 /// `@AppStorage` because a camera remembers its settings when you put it down. The shot
@@ -82,17 +105,24 @@ final class Settings {
     var temperature: Double {
         didSet { store(temperature, "temperature") }
     }
-    /// The hand's system prompt — how it draws, parallel to the eye's system prompt for how
-    /// it looks. Mark, 2026-07-16: *"a system prompt for both eye and hand... When they aren't
-    /// being fed as in the case now for the hand, it should be blank."*
-    ///
-    /// **Blank by default, and that is the honest baseline.** Empty means the hand draws the
-    /// eye's words straight, nothing added — Principle 3 preserved. Non-empty is the user's
-    /// visible, editable style ("oil painting", "in the style of a woodcut"), appended to the
-    /// words. It is film stock the user chooses, not the app secretly stuffing "4k
-    /// masterpiece" onto the machine's perception to flatter the result.
-    var handPrompt: String {
-        didSet { store(handPrompt, "handPrompt") }
+    // ── PARKED (2026-07-16): the hand's system prompt. ──
+    //
+    // A style added to the eye's words ("oil painting", "charcoal sketch") was built and then
+    // deliberately DEACTIVATED. Mark's reasoning: the hand's input should be the eye's words,
+    // clean — a user style prompt inserts a *human's* aesthetic into a machine→machine chain,
+    // and "changes what the drawer perceives the eye to have seen." Hidden from the UI and
+    // unread by `Shot`, so it cannot trigger. Commented out rather than deleted because it is a
+    // real future feature: an explicitly opt-in "art direction" mode, clearly outside the pure
+    // chain (like the silent loop). See NEXT.
+    //
+    // var handPrompt: String {
+    //     didSet { store(handPrompt, "handPrompt") }
+    // }
+
+    /// What frame 2 prints — the eye's full words, or the (possibly condensed) words the hand
+    /// actually received. See `FrameTwoWords`. Default is the airtight chain.
+    var frameTwoShows: FrameTwoWords {
+        didSet { store(frameTwoShows.rawValue, "frameTwoShows") }
     }
     /// How large the drawing is saved. The model draws at 512²; anything larger is upscaled
     /// AFTER the draw (the upscale is light and never touches the VAE memory spike). `native`
@@ -113,7 +143,8 @@ final class Settings {
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
-        handPrompt = d.string(forKey: "handPrompt") ?? ""
+        // handPrompt parked — see the property above.
+        frameTwoShows = FrameTwoWords(rawValue: d.string(forKey: "frameTwoShows") ?? "") ?? .sentToHand
         drawingSize = DrawingSize(rawValue: d.string(forKey: "drawingSize") ?? "") ?? .native
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
     }
@@ -152,7 +183,8 @@ final class Settings {
         drawsThirdFrame = false
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
-        handPrompt = ""
+        // handPrompt parked — see the property above.
+        frameTwoShows = .sentToHand
         drawingSize = .native
         upscaler = .metalFX
     }
@@ -240,6 +272,7 @@ struct PreferencesView: View {
     @State private var settings = Settings.shared
     @State private var showingPresets = false
     @State private var confirmingReset = false
+    @State private var showingLayerOneInfo = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -267,6 +300,13 @@ struct PreferencesView: View {
                     settings.systemPrompt = preset.systemPrompt
                     settings.temperature = preset.temperature
                 }
+            }
+            // Same reason as the presets sheet: alerts hang off the stable Form, not a Section
+            // that re-renders when `settings` changes.
+            .alert("Why can't I change this line?", isPresented: $showingLayerOneInfo) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("This keeps the eye's description short enough for the hand to draw from — the drawing model can only read about seventy-five words, and a longer description used to crash the camera. It's locked so it can't be removed by accident. Everything below it is yours.")
             }
             .navigationTitle("Preferences")
             .navigationBarTitleDisplayMode(.inline)
@@ -355,8 +395,30 @@ struct PreferencesView: View {
     /// for the thing, real name for the knob.
     private var eyeSection: some View {
         Section {
+            // Layer 1 — locked, but SHOWN. Principle 2 done honestly: we don't hide the line
+            // the app depends on, we display it and lock it. The ⓘ says why. Everything below
+            // is Layer 2, fully the user's. See `PromptLayers`.
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "lock.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 3)
+                Text(PromptLayers.brevity)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button {
+                    promptFocused = false
+                    showingLayerOneInfo = true
+                } label: {
+                    Image(systemName: "info.circle").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.borderless)
+            }
+
             // Principle 2: this is a system prompt, it is called a system prompt, and you
-            // can read and change every word of it.
+            // can read and change every word of it. (This is Layer 2 — the locked brevity line
+            // above is Layer 1.)
             TextEditor(text: $settings.systemPrompt)
                 .font(.system(.footnote, design: .monospaced))
                 .frame(minHeight: 160)
@@ -387,49 +449,56 @@ struct PreferencesView: View {
 
     // MARK: - The hand — how it draws
 
-    /// The hand's own system prompt, parallel to the eye's, plus the toggle that turns frame 3
-    /// on. Folded together because both are "the hand" — one section for the third frame,
-    /// rather than a lone toggle elsewhere.
+    /// The toggle that turns frame 3 on, and — once it's on — the one choice that only matters
+    /// when the hand is drawing: what frame 2 shows.
     ///
-    /// The prompt is **blank by default on purpose** (Principle 3): the hand draws the eye's
-    /// words straight until you choose to style them. The field disables when the drawing
-    /// model isn't downloaded — no point editing how a hand draws when there's no hand.
+    /// The hand takes **only the eye's words**, clean. A hand *style* prompt was built and then
+    /// deactivated (2026-07-16): styling the drawing inserts a human's aesthetic into a
+    /// machine→machine chain. The editor is commented out below (not deleted) — it's a real
+    /// future feature, an opt-in "art direction" mode outside the pure chain. See NEXT.
     private var handSection: some View {
         Section {
             Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
                 .disabled(!DrawerLoader.isAvailable)
 
-            if DrawerLoader.isAvailable {
-                // The hand's system prompt. Honest terminology, editable, blank = draw the
-                // words straight.
-                TextEditor(text: $settings.handPrompt)
-                    .font(.system(.footnote, design: .monospaced))
-                    .frame(minHeight: 90)
-                    .focused($promptFocused)
-                    .overlay(alignment: .topLeading) {
-                        // A hint, only while empty, so the blank field isn't a mystery.
-                        if settings.handPrompt.isEmpty {
-                            Text("e.g. oil painting · charcoal sketch · leave blank to draw the words as they are")
-                                .font(.footnote)
-                                .foregroundStyle(.tertiary)
-                                .padding(.top, 8)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                Button("Clear the hand's prompt") {
-                    promptFocused = false
-                    settings.handPrompt = ""
-                }
-                .disabled(settings.handPrompt.isEmpty)
-            } else {
+            if !DrawerLoader.isAvailable {
                 Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            } else if settings.drawsThirdFrame {
+                // Peekaboo: only once the third frame is on does "what frame 2 shows" mean
+                // anything — condensation exists solely to feed the hand. Default is the
+                // airtight chain (what the hand received); see `FrameTwoWords`.
+                Picker("Frame 2 shows", selection: $settings.frameTwoShows) {
+                    ForEach(FrameTwoWords.allCases, id: \.self) { choice in
+                        Text(choice.name).tag(choice)
+                    }
+                }
             }
+
+            // ── PARKED: the hand's system prompt (art-direction mode). ──
+            // Deactivated 2026-07-16 — see the `handSection` note and Settings. The hand draws
+            // the eye's words, clean. Kept commented so reviving it is trivial:
+            //
+            // if DrawerLoader.isAvailable {
+            //     TextEditor(text: $settings.handPrompt)
+            //         .font(.system(.footnote, design: .monospaced))
+            //         .frame(minHeight: 90)
+            //         .focused($promptFocused)
+            //         .overlay(alignment: .topLeading) {
+            //             if settings.handPrompt.isEmpty {
+            //                 Text("e.g. oil painting · charcoal sketch · leave blank to draw the words as they are")
+            //                     .font(.footnote).foregroundStyle(.tertiary)
+            //                     .padding(.top, 8).allowsHitTesting(false)
+            //             }
+            //         }
+            //     Button("Clear the hand's prompt") { promptFocused = false; settings.handPrompt = "" }
+            //         .disabled(settings.handPrompt.isEmpty)
+            // }
         } header: {
             Text("The hand — how it draws")
         } footer: {
-            Text("The hand draws the scene again from the eye's words — it never sees your photograph. Its system prompt is a style added to those words; leave it blank and the hand draws them plainly. Drawing adds about ten seconds to a shot.")
+            Text("The hand draws the scene again from the eye's words — it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. Drawing adds about ten seconds to a shot.")
         }
     }
 
@@ -451,7 +520,7 @@ struct PreferencesView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The eye and the hand, their system prompts, the temperature, and the layout all go back to how the camera shipped. Your photographs are untouched.")
+            Text("The eye's system prompt, the temperature, the layout, and the drawing settings all go back to how the camera shipped. Your photographs are untouched.")
         }
     }
 
