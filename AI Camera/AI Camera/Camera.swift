@@ -334,6 +334,16 @@ final class Place: NSObject {
     /// e.g. "Tulsa, Oklahoma" — nil until a fix arrives, and nil forever if denied.
     private(set) var name: String?
 
+    #if DEBUG
+    /// The live place, so the antenna can stamp the real location on a remote press — the
+    /// same app-level handle `Lens.current` gives it for the sensor. DEBUG-only, because the
+    /// antenna it serves doesn't ship. Without this the location was locked inside the camera
+    /// view and a remote press landed with no place stamp, which broke the antenna's own rule:
+    /// do everything a human can that Apple doesn't block. A human gets the stamp; now so does
+    /// the antenna. `weak`, like the lens — it auto-nils when the view lets the `Place` go.
+    static weak var current: Place?
+    #endif
+
     private let manager = CLLocationManager()
     private var lastGeocoded: CLLocation?
 
@@ -344,6 +354,12 @@ final class Place: NSObject {
     }
 
     func start() {
+        #if DEBUG
+        // Register as the live place the moment the camera starts tracking — the parallel to
+        // `Lens.current = self` in `Camera.attach`. This is what lets `POST /press` stamp the
+        // real location instead of nil.
+        Place.current = self
+        #endif
         switch manager.authorizationStatus {
         case .notDetermined: manager.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways: manager.startUpdatingLocation()

@@ -474,15 +474,17 @@ extension LocalAPIServer {
                 // Frame 2 per the user's setting: the full perception, or the condensed words
                 // the hand drew from. See `FrameTwoWords`.
                 let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
-                // `place: nil` — the GPS footer needs CameraView's live `Place` instance,
-                // which the antenna can't reach (there's no `Place.current` the way there's a
-                // `Lens.current`). A remote press lands without the place stamp. Cosmetic.
+                // The real place, from the live `Place` — a remote press now stamps the GPS the
+                // way a human press does (`Place.current`, the location's app-level handle, added
+                // to close the gap Mark caught). nil only if there's no fix yet or it's denied,
+                // exactly as for a human.
+                let place = Place.current?.name
                 var f = Darkroom.develop(photograph: photograph,
                                          words: frameTwo,
-                                         place: nil,
+                                         place: place,
                                          layout: layout)
                 if let drawnCG = drawnImage?.cgImage {
-                    f.append(Darkroom.frameDrawing(drawnCG, place: nil))
+                    f.append(Darkroom.frameDrawing(drawnCG, place: place))
                 }
                 return (f, layout.name)
             }
