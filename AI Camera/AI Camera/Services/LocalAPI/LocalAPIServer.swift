@@ -453,48 +453,46 @@ extension LocalAPIServer {
         // the whole triptych (reality, the words, the re-imagining), which is exactly what
         // Mark said we need to diagnose anything: *"Without being able to look at all three
         // we're gonna have some issues."*
-        struct PressOut: Sendable {
+        // ⭐ SEPARATE THE ACTIVITIES (Mark, 2026-07-16). The lane does ONLY the heavy model work
+        // — see, then draw — and at the end drains the GPU and *waits for iOS to actually reclaim*
+        // the models' memory (`ModelLane` settle). Everything after — compositing the frames,
+        // saving, base64 — runs OUTSIDE the lane, once that memory is truly gone. That is exactly
+        // how the real shutter is built (`CameraView.develop` composites outside the lane), and
+        // doing it *inside* here was the bug: a ~130 MB composite landed on top of the drawer's
+        // not-yet-reclaimed 2.7 GB and iOS jetsammed the app. The compositing itself is cheap and
+        // model-free; it just must not race the reclaim.
+        struct PressRaw: Sendable {
             let words: String
             let wordsToHand: String
             let outcome: String
-            let drewThird: Bool
-            let layoutName: String
-            let framePNGs: [Data]
+            let drawn: CGImage?
         }
-        let out = await ModelLane.shared.run("press") { () -> PressOut in
+        let raw = await ModelLane.shared.run("press") { () -> PressRaw in
             let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
-            let fullWords = perception.wireText
-            // A real press develops and saves — reality's receipt included. The drawing is a
-            // frame of the shot too, and now gets the same plate treatment (bars + footer) as
-            // the others, so "Separate images" saves three frames that read as one object.
-            let toSave: [UIImage]
-            let layoutName: String
-            (toSave, layoutName) = await MainActor.run {
-                let layout = layoutOverride ?? Settings.shared.layout
-                // Frame 2 per the user's setting: the full perception, or the condensed words
-                // the hand drew from. See `FrameTwoWords`.
-                let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
-                // The real place, from the live `Place` — a remote press now stamps the GPS the
-                // way a human press does (`Place.current`, the location's app-level handle, added
-                // to close the gap Mark caught). nil only if there's no fix yet or it's denied,
-                // exactly as for a human.
-                let place = Place.current?.name
-                let f = Darkroom.develop(photograph: photograph,
-                                         words: frameTwo,
-                                         drawing: drawnImage?.cgImage,
-                                         place: place,
-                                         layout: layout)
-                return (f, layout.name)
-            }
-            await Shot.save(toSave)
-            let pngs = await MainActor.run { toSave.compactMap { $0.pngData() } }
-            return PressOut(words: fullWords,
+            return PressRaw(words: perception.wireText,
                             wordsToHand: wordsForHand,
                             outcome: perception.wireName,
-                            drewThird: drawnImage != nil,
-                            layoutName: layoutName,
-                            framePNGs: pngs)
+                            drawn: drawnImage?.cgImage)
         }
+
+        // ── Outside the lane: the model memory has settled. Now build, save, encode. ──
+        let (toSave, layoutName): ([UIImage], String) = await MainActor.run {
+            let layout = layoutOverride ?? Settings.shared.layout
+            // Frame 2 per the user's setting: the full perception, or the condensed words the
+            // hand drew from. See `FrameTwoWords`.
+            let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? raw.words : raw.wordsToHand
+            // The real place, from the live `Place` (`Place.current`) — a remote press stamps the
+            // GPS the way a human press does. nil only if there's no fix yet or it's denied.
+            let place = Place.current?.name
+            let f = Darkroom.develop(photograph: photograph,
+                                     words: frameTwo,
+                                     drawing: raw.drawn,
+                                     place: place,
+                                     layout: layout)
+            return (f, layout.name)
+        }
+        await Shot.save(toSave)
+        let framePNGs: [Data] = await MainActor.run { toSave.compactMap { $0.pngData() } }
 
         let seconds = Date().timeIntervalSince(started)
         let snapshot = MLX.Memory.snapshot()
@@ -502,14 +500,14 @@ extension LocalAPIServer {
             "pressed":           true,
             "savedToPhotos":     true,
             "seer":              seer == .qwen ? "qwen" : "afm",
-            "layout":            out.layoutName,
-            "drewThirdFrame":    out.drewThird,
+            "layout":            layoutName,
+            "drewThirdFrame":    raw.drawn != nil,
             // ⭐ The count that answers the "separate images" bug: how many assets landed.
-            "savedCount":        out.framePNGs.count,
-            "outcome":           out.outcome,
-            "words":             out.words,
+            "savedCount":        framePNGs.count,
+            "outcome":           raw.outcome,
+            "words":             raw.words,
             // What the hand actually drew from — equals `words` unless it was condensed to fit.
-            "wordsToHand":       out.wordsToHand,
+            "wordsToHand":       raw.wordsToHand,
             "width":             photograph.width,
             "height":            photograph.height,
             "totalSeconds":      round(seconds * 100) / 100,
@@ -517,7 +515,7 @@ extension LocalAPIServer {
             "availableMBBefore": availBefore.isInfinite ? "unavailable" : Int(availBefore),
             "availableMBAfter":  processAvailableMemoryMB().isInfinite ? "unavailable" : Int(processAvailableMemoryMB()),
             // Every saved frame, in save order, base64'd. Reality → words → re-imagining.
-            "frames":            out.framePNGs.map { $0.base64EncodedString() },
+            "frames":            framePNGs.map { $0.base64EncodedString() },
             "log":               MemoryLog.shared.recent(60)
         ]
         return (200, json(payload))
