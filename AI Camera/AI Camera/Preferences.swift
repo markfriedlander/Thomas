@@ -595,7 +595,7 @@ struct PreferencesView: View {
         } header: {
             Text("Layout")
         } footer: {
-            Text("Capture — superimposed puts the words on the world they describe. A diptych sets them beside it, white on black. A triptych stitches all three frames — the photograph, the words, and the drawing — into one plate, top to bottom or left to right. Words only keeps what the machine said and discards the photograph. Separate images saves each frame as its own picture, and lets you do the comparing.")
+            Text("Capture — superimposed puts the words on the world they describe. A diptych sets them beside it, white on black. A triptych stitches all three frames — photograph, words, drawing — into one plate, top to bottom or left to right, all squared to match. Words only keeps what the machine said and discards the photograph. Separate — native saves each frame as its own picture at its own shape; Separate — square matches them all to the drawing's square so they pair. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
         }
     }
 

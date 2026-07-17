@@ -80,6 +80,10 @@ struct CameraView: View {
             if lens.isAuthorized {
                 Viewfinder(lens: lens)
                     .ignoresSafeArea()
+                    // The square framing guide, only for the square-format layouts (Triptych,
+                    // Separate — square). It shows the centred square the shot will be cropped
+                    // to, so you frame for it — see `squareGuide`.
+                    .overlay { squareGuide }
                     // Pinch to zoom, like every camera. The lens swap is the system's
                     // job, not ours — see `configure()`.
                     .gesture(
@@ -153,6 +157,40 @@ struct CameraView: View {
                 }
                 .padding(.trailing, 28)
             }
+        }
+    }
+
+    /// The square framing guide — shown only for the square-format layouts (Triptych,
+    /// Separate — square), where the photograph is centre-cropped to a square to match the
+    /// drawer's shape. It dims everything outside the centred square and outlines it, so you
+    /// compose *for the square the crop keeps* rather than being surprised by it later.
+    ///
+    /// ⚠️ This is a *framing* guide, not a pixel-exact crop preview: the preview layer fills the
+    /// screen (`aspectFill`), so the on-screen square and the sensor's centre square line up
+    /// closely but not perfectly. `Darkroom.centerCropSquare` takes the sensor's true centre.
+    /// Alignment is worth a device check once the phone's free.
+    @ViewBuilder
+    private var squareGuide: some View {
+        if settings.layout.isSquareFormat {
+            GeometryReader { geo in
+                let side = min(geo.size.width, geo.size.height)
+                let square = CGRect(x: (geo.size.width - side) / 2,
+                                    y: (geo.size.height - side) / 2,
+                                    width: side, height: side)
+                ZStack {
+                    // Dim outside the square (even-odd: the whole area minus the square).
+                    Path { p in
+                        p.addRect(CGRect(origin: .zero, size: geo.size))
+                        p.addRect(square)
+                    }
+                    .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
+                    // Outline the square itself, quietly.
+                    Path { p in p.addRect(square) }
+                        .stroke(Color.white.opacity(0.55), lineWidth: 1)
+                }
+            }
+            .allowsHitTesting(false)
+            .ignoresSafeArea()
         }
     }
 

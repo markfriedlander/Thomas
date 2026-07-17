@@ -56,11 +56,14 @@ enum Layout: String, CaseIterable, Sendable {
     /// poetry inspired by what it sees."* The photograph was taken; you simply don't keep
     /// it. What survives is what the machine said about a moment nobody else can check.
     case textOnly
-    /// Two assets, not one: the photograph, and the words, saved separately.
-    ///
-    /// Same dimensions so they pair. Reality and perception as distinct artifacts rather
-    /// than a composition arguing with itself — the viewer does the juxtaposition.
-    case separate
+    /// Separate assets — the photograph, the words, (and the drawing) as distinct files, at
+    /// their **own natural ratios**. Reality and perception as separate artifacts; the viewer
+    /// does the juxtaposition. (`rawValue "separate"` preserved so old saved settings still load.)
+    case separateNative = "separate"
+    /// Separate assets, but all **matched to one ratio** — square, the drawer's shape (the hand
+    /// trumps the camera; see the ratio rule below). Equal separate files you can pair or post
+    /// individually. The photograph is centre-cropped to the square you framed.
+    case separateSquare
 
     var name: String {
         switch self {
@@ -70,12 +73,20 @@ enum Layout: String, CaseIterable, Sendable {
         case .triptychVertical:   return "Triptych — vertical"
         case .triptychHorizontal: return "Triptych — horizontal"
         case .textOnly:           return "Words only"
-        case .separate:           return "Separate images"
+        case .separateNative:     return "Separate — native"
+        case .separateSquare:     return "Separate — square"
         }
     }
 
     var isDiptych: Bool { self == .diptychTextLeft || self == .diptychTextRight }
     var isTriptych: Bool { self == .triptychVertical || self == .triptychHorizontal }
+
+    /// The layouts that shoot **square** — the ones where the hand (the square drawer) trumps the
+    /// camera because its output must match the others in one composition (Triptych) or as equal
+    /// separate files (Separate — square). This is the trigger for the square viewfinder guide
+    /// AND for centre-cropping the photograph. Mark's rule (2026-07-16): elements that must match
+    /// take the hand's ratio when the hand is in play, the camera's otherwise.
+    var isSquareFormat: Bool { isTriptych || self == .separateSquare }
 }
 
 enum Darkroom {
@@ -112,11 +123,24 @@ enum Darkroom {
             return withDrawing([card(words: words,
                                      size: CGSize(width: photograph.width, height: photograph.height),
                                      place: place, date: date)])
-        case .separate:
+        case .separateNative:
             return withDrawing([
                 compose(photograph: photograph, words: nil, place: place,
                         layout: .superimposed, date: date),
                 card(words: words, size: CGSize(width: photograph.width, height: photograph.height),
+                     place: place, date: date)
+            ])
+        case .separateSquare:
+            // Every asset square (the hand's ratio), as separate files. The photo is centre-
+            // cropped to the square you framed; the words card is square; the drawing is already
+            // square. Same ratio, so they pair — kept at their own resolutions (separate files
+            // need not be the same pixel size, only the same shape).
+            let square = centerCropSquare(photograph)
+            let side = square.width
+            return withDrawing([
+                compose(photograph: square, words: nil, place: place,
+                        layout: .superimposed, date: date),
+                card(words: words, size: CGSize(width: side, height: side),
                      place: place, date: date)
             ])
         default:
@@ -140,6 +164,17 @@ enum Darkroom {
     /// a grammar even though their pixel sizes differ.
     static func frameDrawing(_ drawing: CGImage, place: String?, date: Date = Date()) -> UIImage {
         compose(photograph: drawing, words: nil, place: place, layout: .superimposed, date: date)
+    }
+
+    /// Centre-crop a photograph to a square — the largest centred square that fits. Used by the
+    /// square-format layouts (Triptych, Separate — square) so the photo matches the drawer's
+    /// shape. It takes the *centre* of the frame, which is exactly what the square viewfinder
+    /// guide shows the user, so what they framed is what they get.
+    static func centerCropSquare(_ image: CGImage) -> CGImage {
+        let side = min(image.width, image.height)
+        let x = (image.width - side) / 2
+        let y = (image.height - side) / 2
+        return image.cropping(to: CGRect(x: x, y: y, width: side, height: side)) ?? image
     }
 
     // MARK: - The triptych
@@ -166,7 +201,10 @@ enum Darkroom {
                                  axis: TriptychAxis,
                                  place: String?,
                                  date: Date) -> UIImage {
-        let photo = UIImage(cgImage: photograph)
+        // The photo is centre-cropped to a square so all three panels are EQUAL squares — the
+        // hand's ratio wins in the triptych (Mark's rule). What's inside the square viewfinder
+        // guide is what lands here.
+        let photo = UIImage(cgImage: centerCropSquare(photograph))
         let draw = drawing.map { UIImage(cgImage: $0) }
 
         // The common dimension: the drawing's width (it's square). Without a drawing, fall back
@@ -277,7 +315,8 @@ enum Darkroom {
             // Triptych never reaches `compose` — `develop` routes it to `triptych()` — but the
             // switch must be exhaustive, and treating it as a full-frame plate is the safe
             // fallback if that routing ever changed.
-            case .superimposed, .textOnly, .separate, .triptychVertical, .triptychHorizontal:
+            case .superimposed, .textOnly, .separateNative, .separateSquare,
+                 .triptychVertical, .triptychHorizontal:
                 image.draw(in: CGRect(x: 0, y: bar, width: w, height: h))
                 if let words {
                     drawWords(words, in: CGRect(x: margin, y: bar + margin,
