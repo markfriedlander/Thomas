@@ -23,6 +23,7 @@ import ImageIO
 import Photos
 import PhotosUI
 import SwiftUI
+import UIKit
 
 // ==== LEGO START: 20 Viewfinder ====
 
@@ -64,6 +65,8 @@ struct CameraView: View {
     @State private var lastFrame: UIImage?
     @State private var pickerItem: PhotosPickerItem?
     @State private var showPicker = false
+    /// Bumped each time a developed shot lands in Photos — drives the Photos glyph's pulse.
+    @State private var arrivals = 0
 
     /// What the camera is loaded with. Read at the moment of the press and not before —
     /// but chosen in Preferences, never here. The capture screen stays sacred.
@@ -99,12 +102,29 @@ struct CameraView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
 
+            // One glyph in each corner (Mark, 2026-07-16), the shutter alone at bottom-centre.
+            // Top: Preferences (left), flip (right), the developing toast between them. Bottom:
+            // upload a picture to feed IN (left), view what came OUT in Photos (right).
             VStack {
-                developingIndicator
+                HStack(alignment: .top) {
+                    preferencesButton
+                    Spacer()
+                    developingIndicator
+                    Spacer()
+                    flipButton
+                }
                 Spacer()
                 zoomReadout
-                shutterRow
+                HStack(alignment: .bottom) {
+                    uploadButton
+                    Spacer()
+                    shutterButton
+                    Spacer()
+                    photosButton
+                }
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
             .padding(.bottom, 28)
         }
         .task {
@@ -121,52 +141,69 @@ struct CameraView: View {
 
     // MARK: - The shutter
 
-    private var shutterRow: some View {
-        ZStack {
-            // The shutter. Centred, alone, unlabelled — you already know what it does.
-            Button {
-                Task { await shoot() }
-            } label: {
-                ZStack {
-                    Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
-                    Circle().fill(.white).frame(width: 62, height: 62)
-                }
+    /// The shutter. Centred, alone, unlabelled — you already know what it does.
+    private var shutterButton: some View {
+        Button {
+            Task { await shoot() }
+        } label: {
+            ZStack {
+                Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
+                Circle().fill(.white).frame(width: 62, height: 62)
             }
-            .buttonStyle(.plain)
-            .disabled(!lens.isAuthorized)
+        }
+        .buttonStyle(.plain)
+        .disabled(!lens.isAuthorized)
+    }
 
-            // Preferences and the picker: deliberately small, pushed to the edges, both
-            // losing every fight with the shutter. This screen is a viewfinder and a
-            // button; these are doors out of it, not part of it.
-            HStack {
-                Button { showingPreferences = true } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .frame(width: 44, height: 44)
-                }
-                .padding(.leading, 28)
+    /// The four corner glyphs — small, quiet, one to a corner. They lose every fight with the
+    /// shutter; they are doors out of the sacred screen, not part of it. Shared style so they
+    /// read as one family.
+    private func cornerGlyph(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.title3)
+            .foregroundStyle(.white.opacity(0.65))
+            .frame(width: 44, height: 44)
+    }
 
-                Spacer()
+    private var preferencesButton: some View {
+        Button { showingPreferences = true } label: { cornerGlyph("slider.horizontal.3") }
+    }
 
-                // Selfie flip — the standard camera-flip loop. First of Mark's blessed additions
-                // to the sacred screen. ⚠️ Placement here is provisional, for Mark's eye; and the
-                // front-camera mirroring is a device-tuning question (see `Lens.flip`).
-                Button { lens.flip() } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath.camera")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .frame(width: 44, height: 44)
-                }
+    /// Selfie flip — the standard camera-flip loop. ⚠️ Front-camera mirroring is a device-tuning
+    /// question (see `Lens.flip`).
+    private var flipButton: some View {
+        Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
+    }
 
-                PhotosPicker(selection: $pickerItem, matching: .images) {
-                    Image(systemName: "photo.on.rectangle")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .frame(width: 44, height: 44)
-                }
-                .padding(.trailing, 28)
-            }
+    /// Feed a picture IN — the library as an input door. A single photo-on-rectangle, distinct
+    /// from the output glyph opposite it.
+    private var uploadButton: some View {
+        PhotosPicker(selection: $pickerItem, matching: .images) {
+            cornerGlyph("photo.on.rectangle")
+        }
+    }
+
+    /// See what came OUT — opens the Photos app to the shots you've developed. A *stack* of
+    /// photos, deliberately different from the single-photo input glyph. It pulses when a shot
+    /// lands (`arrivals`), so you learn there's something new to see.
+    private var photosButton: some View {
+        Button { openPhotos() } label: {
+            Image(systemName: "photo.stack")
+                .font(.title3)
+                .foregroundStyle(.white.opacity(0.65))
+                .frame(width: 44, height: 44)
+                .symbolEffect(.bounce, value: arrivals)
+        }
+    }
+
+    /// Open the system Photos app. There is no official API for this; `photos-redirect://` is the
+    /// long-standing way apps do it, and it's Mark's explicit call — the shots live in the user's
+    /// own Photos, not in an in-app gallery that holds their pictures hostage.
+    /// (App Review note: this is an undocumented scheme; widely used, but worth watching at
+    /// submission.)
+    private func openPhotos() {
+        if let url = URL(string: "photos-redirect://") {
+            UIApplication.shared.open(url)
         }
     }
 
@@ -231,7 +268,6 @@ struct CameraView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(.black.opacity(0.35), in: Capsule())
-            .padding(.top, 12)
         }
     }
 
@@ -309,6 +345,8 @@ struct CameraView: View {
 
         lastFrame = frames.last
         await Shot.save(frames)
+        // A shot just landed in Photos — pulse the Photos glyph so the eye is drawn to it.
+        arrivals += 1
     }
 }
 
