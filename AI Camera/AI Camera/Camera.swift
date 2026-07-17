@@ -168,50 +168,47 @@ final class Lens: NSObject {
         }
     }
 
-    private func configure() {
-        guard !configured else { return }
-        session.beginConfiguration()
-        session.sessionPreset = .photo
+    /// Which way the camera faces. Back by default; the flip glyph toggles it.
+    private(set) var position: AVCaptureDevice.Position = .back
 
-        // ⭐ A VIRTUAL device, in preference order — this is what the native camera uses.
-        //
-        // `.builtInWideAngleCamera` is ONE physical lens, which is why the camera was
-        // stuck on a single focal length. A virtual device presents all the back lenses
-        // as one, and **switches between them automatically as you zoom** — Apple: "the
-        // virtual device chooses the best camera for the scene," picking the longest focal
-        // length that avoids digital upscaling, and falling back to a wider lens when the
-        // subject is closer than the tele's minimum focus distance. We get that for free;
-        // we just have to ask for the right device.
-        //
-        // Ordered most-lenses-first, degrading gracefully all the way down to one lens.
-        // EVERY back camera any iPhone has ever shipped is covered by the last entry, so
-        // this cannot come up empty on hardware that has a camera at all:
+    /// The back camera as a **virtual device**, in preference order — what the native camera
+    /// uses. `.builtInWideAngleCamera` is ONE physical lens (the old single-focal-length bug);
+    /// a virtual device presents all the back lenses as one and **switches between them as you
+    /// zoom** (Apple picks the best lens for the scene). Ordered most-lenses-first, degrading to
+    /// the single wide angle, which EVERY iPhone has — so this can't come up empty on real
+    /// hardware. Asked for by name in our order (not `DiscoverySession.first`, whose ordering CC
+    /// never verified).
+    private func backDevice() -> AVCaptureDevice? {
         let preferred: [AVCaptureDevice.DeviceType] = [
             .builtInTripleCamera,     // ultra-wide + wide + tele   (Pro)
             .builtInDualWideCamera,   // ultra-wide + wide          (standard 13/14/15/16)
             .builtInDualCamera,       // wide + tele                (older Plus/Pro)
             .builtInWideAngleCamera   // one lens                   (SE, and the floor)
         ]
-        // Walk the list explicitly and take the first that EXISTS.
-        //
-        // ⚠️ Not `DiscoverySession(...).devices.first` — that assumes the discovery
-        // session hands devices back in the order they were requested, which is an
-        // ordering guarantee CC never verified. An SE would then get whatever came out
-        // first. This asks for each device by name, in our order, and stops at the first
-        // real one. On a single-lens phone that's the wide angle, `zoomRange` collapses to
-        // whatever it supports, `switchOverZoomFactors` is empty, and pinch still works —
-        // it's just digital, because there's no second lens to switch to.
-        if let device = preferred.lazy.compactMap({
-               AVCaptureDevice.default($0, for: .video, position: .back)
-           }).first,
+        return preferred.lazy.compactMap {
+            AVCaptureDevice.default($0, for: .video, position: .back)
+        }.first
+    }
+
+    /// The front camera — a single wide-angle lens on every iPhone.
+    private func frontDevice() -> AVCaptureDevice? {
+        AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+    }
+
+    private func configure() {
+        guard !configured else { return }
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+
+        if let device = backDevice(),
            let input = try? AVCaptureDeviceInput(device: device),
            session.canAddInput(input) {
             session.addInput(input)
             self.device = device
-            // Start at 1× — the wide lens on every modern iPhone, not the ultra-wide.
-            // On a virtual device the zoom scale is continuous ACROSS lenses, so 1.0 is
-            // not necessarily the minimum; `switchOverZoomFactors` says where the seams
-            // are. Clamp into whatever this device actually supports.
+            self.position = .back
+            // Start at 1× — the wide lens on every modern iPhone, not the ultra-wide. On a
+            // virtual device the zoom scale is continuous ACROSS lenses, so 1.0 is not
+            // necessarily the minimum; `switchOverZoomFactors` says where the seams are.
             zoom = defaultZoom(for: device)
             applyZoom(zoom)
         }
@@ -220,6 +217,41 @@ final class Lens: NSObject {
         session.commitConfiguration()
         configured = true
         beginTrackingRotation()
+    }
+
+    /// Flip between the back and front cameras — the selfie toggle.
+    ///
+    /// A full session reconfiguration: swap the input, keep the one photo output, and rebuild
+    /// the rotation coordinator against the new device (its angles differ, and the front camera
+    /// is mounted the other way). Wrapped in begin/commit so the session never runs half-built.
+    ///
+    /// ⚠️ NEEDS A DEVICE CHECK. Two things can only be judged on real hardware: whether the
+    /// **front preview should be mirrored** (users expect a mirror; the *saved* photo usually
+    /// isn't), and the front camera's **capture orientation**. Left honest for now — no mirroring
+    /// applied — so we tune it against what the phone actually shows rather than guessing.
+    func flip() {
+        guard configured else { return }
+        let target: AVCaptureDevice.Position = (position == .back) ? .front : .back
+        guard let device = (target == .front ? frontDevice() : backDevice()),
+              let input = try? AVCaptureDeviceInput(device: device) else { return }
+
+        session.beginConfiguration()
+        for existing in session.inputs { session.removeInput(existing) }
+        if session.canAddInput(input) {
+            session.addInput(input)
+            self.device = device
+            self.position = target
+            zoom = defaultZoom(for: device)
+            applyZoom(zoom)
+        } else if let back = backDevice(), let backInput = try? AVCaptureDeviceInput(device: back),
+                  session.canAddInput(backInput) {
+            // Couldn't add the target — fall back to the back camera so we never end up input-less.
+            session.addInput(backInput)
+            self.device = back
+            self.position = .back
+        }
+        session.commitConfiguration()
+        beginTrackingRotation()   // the new device faces the other way; its angles must be remade
     }
 
     private func beginTrackingRotation() {

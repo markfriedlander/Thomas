@@ -149,6 +149,16 @@ struct CameraView: View {
 
                 Spacer()
 
+                // Selfie flip — the standard camera-flip loop. First of Mark's blessed additions
+                // to the sacred screen. ⚠️ Placement here is provisional, for Mark's eye; and the
+                // front-camera mirroring is a device-tuning question (see `Lens.flip`).
+                Button { lens.flip() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 44, height: 44)
+                }
+
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Image(systemName: "photo.on.rectangle")
                         .font(.title3)
