@@ -98,6 +98,21 @@ final class Lens: NSObject {
         return device.minAvailableVideoZoomFactor...min(device.maxAvailableVideoZoomFactor, 12)
     }
 
+    /// The RAW device zoom bounds, read without ever constructing `zoomRange` — because that
+    /// `ClosedRange` traps the instant `minAvailableVideoZoomFactor` exceeds the 12× cap
+    /// (`low...high` with low > high). This is the antenna's way to SEE those numbers, and
+    /// spot exactly that condition, without triggering the crash it's hunting for. `cap` is the
+    /// 12 the range clamps to; if `deviceMin > cap`, `zoomRange` above will crash on read.
+    var rawZoomBounds: [String: Double]? {
+        guard let device else { return nil }
+        return [
+            "deviceMin": Double(device.minAvailableVideoZoomFactor),
+            "deviceMax": Double(device.maxAvailableVideoZoomFactor),
+            "cap": 12.0,
+            "current": Double(zoom)
+        ]
+    }
+
     #if DEBUG
     /// The lens currently on screen, so the antenna can interrogate it. DEBUG-only —
     /// this exists to serve a diagnostic route that doesn't ship.
@@ -253,6 +268,11 @@ final class Lens: NSObject {
         session.commitConfiguration()
         beginTrackingRotation()   // the new device faces the other way; its angles must be remade
     }
+
+    /// Which way it faces, as a plain bool, so callers (and the antenna) don't have to import
+    /// AVFoundation to ask. `setCamera(front:)` flips only if it isn't already there.
+    var isFront: Bool { position == .front }
+    func setCamera(front: Bool) { if isFront != front { flip() } }
 
     private func beginTrackingRotation() {
         guard let device else { return }

@@ -403,6 +403,12 @@ extension LocalAPIServer {
         case ("POST", "/draw"):      return await handleDraw(req)
         case ("POST", "/shoot"):     return await handleShoot(req)
         case ("POST", "/press"):     return await handlePress(req)
+        // ── Driving the app the way a human does: configuration + the two gestures. ──
+        case ("GET",  "/settings"):        return await handleGetSettings()
+        case ("POST", "/settings"):        return await handleSetSettings(req)
+        case ("POST", "/zoom"):            return await handleZoom(req)
+        case ("POST", "/flip"):            return await handleFlip(req)
+        case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
     }
@@ -519,6 +525,145 @@ extension LocalAPIServer {
             "log":               MemoryLog.shared.recent(60)
         ]
         return (200, json(payload))
+    }
+
+    // MARK: - Driving the app the way a human does (config + the two gestures)
+
+    /// GET /settings — the full persistent Preferences state. This is the state the LIVE shutter
+    /// (`/press`) actually runs on, so a session reads it here before and after changing it.
+    private func handleGetSettings() async -> (Int, String) {
+        let snap = await MainActor.run { Self.readSettings() }
+        return (200, json(snap.dict))
+    }
+
+    /// POST /settings — set any persistent Preference, exactly as tapping in Preferences would.
+    ///
+    /// This was the biggest gap in the antenna: it could override a `/shoot` call per-request but
+    /// could never put the APP into a chosen state, so the live shutter could only ever run in
+    /// whatever state it happened to be left in. Now a session can configure the app and then
+    /// press. Body is a JSON object; every field is optional:
+    ///
+    ///   {"seer":"apple"|"qwen", "layout":"<rawValue>", "drawsThirdFrame":true,
+    ///    "systemPrompt":"…", "temperature":0.8, "frameTwoShows":"sentToHand"|"fullPerception",
+    ///    "drawingSize":"native"|"instagram"|"large", "upscaler":"metalFX"|"coreImage",
+    ///    "reset":"prompt"|"everything"}
+    private func handleSetSettings(_ req: ParsedRequest) async -> (Int, String) {
+        guard let data = req.bodyData,
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return (400, #"{"error":"POST a JSON object of settings to set"}"#)
+        }
+        let applied = await MainActor.run { () -> [String] in
+            let s = Settings.shared
+            var changed: [String] = []
+            if let v = obj["seer"] as? String, let x = Seer(rawValue: v) { s.seer = x; changed.append("seer=\(v)") }
+            if let v = obj["layout"] as? String, let x = Layout(rawValue: v) { s.layout = x; changed.append("layout=\(v)") }
+            if let v = obj["drawsThirdFrame"] as? Bool { s.drawsThirdFrame = v; changed.append("drawsThirdFrame=\(v)") }
+            if let v = obj["systemPrompt"] as? String { s.systemPrompt = v; changed.append("systemPrompt") }
+            if let v = obj["temperature"] as? Double { s.temperature = v; changed.append("temperature=\(v)") }
+            if let v = obj["frameTwoShows"] as? String, let x = FrameTwoWords(rawValue: v) { s.frameTwoShows = x; changed.append("frameTwoShows=\(v)") }
+            if let v = obj["drawingSize"] as? String, let x = DrawingSize(rawValue: v) { s.drawingSize = x; changed.append("drawingSize=\(v)") }
+            if let v = obj["upscaler"] as? String, let x = UpscaleMethod(rawValue: v) { s.upscaler = x; changed.append("upscaler=\(v)") }
+            if let v = obj["reset"] as? String {
+                if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
+                else if v == "prompt" { s.resetPromptToDefault(); changed.append("reset=prompt") }
+            }
+            return changed
+        }
+        var payload = await MainActor.run { Self.readSettings() }.dict
+        payload["applied"] = applied
+        return (200, json(payload))
+    }
+
+    /// A Sendable snapshot of the persistent settings, so it can cross the `MainActor.run`
+    /// boundary (a `[String: Any]` can't — `Any` isn't Sendable). `.dict` builds the JSON shape
+    /// off the actor.
+    private struct SettingsSnapshot: Sendable {
+        let seer, layout, frameTwoShows, drawingSize, upscaler, systemPrompt: String
+        let drawsThirdFrame: Bool
+        let temperature: Double
+        var dict: [String: Any] {
+            ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
+             "temperature": temperature, "frameTwoShows": frameTwoShows,
+             "drawingSize": drawingSize, "upscaler": upscaler, "systemPrompt": systemPrompt]
+        }
+    }
+
+    @MainActor
+    private static func readSettings() -> SettingsSnapshot {
+        let s = Settings.shared
+        return SettingsSnapshot(
+            seer: s.seer.rawValue, layout: s.layout.rawValue,
+            frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
+            upscaler: s.upscaler.rawValue, systemPrompt: s.systemPrompt,
+            drawsThirdFrame: s.drawsThirdFrame, temperature: s.temperature)
+    }
+
+    /// POST /zoom — drive the zoom the way a pinch does (a pinch just calls `lens.zoom`). Reports
+    /// the RAW device bounds first, which is SAFE to read; then, if `X-Zoom` is given, applies it,
+    /// which reads `zoomRange` and is the suspected zoom-crash site. `X-Zoom: max` pushes past the
+    /// 12× cap on purpose; a number sets an absolute factor. If `deviceMin` in `bounds` ever comes
+    /// back above `cap`, that alone is the bug: `zoomRange` traps on read.
+    private func handleZoom(_ req: ParsedRequest) async -> (Int, String) {
+        let live = await MainActor.run { Lens.current }
+        guard let lens = live else {
+            return (200, json(["ok": false, "error": "No live lens. Foreground the camera on screen, then zoom."]))
+        }
+        let bounds = await MainActor.run { lens.rawZoomBounds ?? [:] }
+        if let z = req.headers["x-zoom"] {
+            let factor: CGFloat
+            switch z {
+            case "max": factor = 999          // over the top on purpose; applyZoom clamps, or traps
+            case "min": factor = 0
+            default:    factor = CGFloat(Double(z) ?? 1)
+            }
+            // The next line reads `zoomRange`. If the range is backwards, it does not return —
+            // which is exactly the diagnosis. The console/log carries the trap.
+            let now = await MainActor.run { () -> Double in lens.zoom(by: factor, from: 1); return Double(lens.zoom) }
+            return (200, json(["ok": true, "bounds": bounds, "requested": z, "zoom": now]))
+        }
+        return (200, json(["ok": true, "bounds": bounds, "zoom": bounds["current"] ?? 1]))
+    }
+
+    /// POST /flip — switch the camera the way the flip glyph does (`lens.flip`), then hand back a
+    /// frame from the NEW camera so its mirroring and orientation can be eyeballed — the exact
+    /// things that couldn't be judged when the selfie flip shipped compile-only. Optional
+    /// `X-Camera: front|back` forces a side instead of toggling.
+    private func handleFlip(_ req: ParsedRequest) async -> (Int, String) {
+        let live = await MainActor.run { Lens.current }
+        guard let lens = live else {
+            return (200, json(["ok": false, "error": "No live lens. Foreground the camera on screen."]))
+        }
+        let position: String = await MainActor.run {
+            if let want = req.headers["x-camera"] { lens.setCamera(front: want == "front") }
+            else { lens.flip() }
+            return lens.isFront ? "front" : "back"
+        }
+        // Let the reconfigured session settle before we capture from the new camera.
+        try? await Task.sleep(for: .milliseconds(400))
+        let cg = await lens.capture()
+        var payload: [String: Any] = ["ok": true, "position": position]
+        if let cg {
+            let png = await MainActor.run { UIImage(cgImage: cg).pngData() }
+            if let png {
+                payload["frame"] = png.base64EncodedString()
+                payload["width"] = cg.width
+                payload["height"] = cg.height
+            }
+        }
+        if payload["frame"] == nil {
+            payload["note"] = "flip succeeded but the capture returned no frame (session may still be settling — try /flip again or /press)"
+        }
+        return (200, json(payload))
+    }
+
+    /// POST /cancel-download — cancel an in-flight download, as the Cancel button does. Keyed by
+    /// `X-Repo` (the download's id, same key `/download` starts it under).
+    private func handleCancelDownload(_ req: ParsedRequest) async -> (Int, String) {
+        guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
+            return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
+        }
+        await MainActor.run { MLXModelDownloader.shared.cancelDownload(modelID: repoID) }
+        return (200, json(["repo": repoID, "cancelled": true]))
     }
 
     /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.
