@@ -38,6 +38,16 @@ build/
 # is the durable record, not that file.
 coreai-export/
 
+# Mark's unpublished writing — drafts and notes he is NOT ready to make public
+# (2026-07-18). Purged from history and force-pushed; kept on disk, ignored here so a
+# stray `git add -A` can never put them back on GitHub. Git can't do "committed locally
+# but never pushed" on a shared branch, so these live on disk, untracked, until Mark
+# decides to publish (then remove the line). Other personal docs remain public by his
+# choice — this list is only what he asked to pull back.
+Thomas_Article_DRAFT.md
+Second_Article_NOTES.md
+Technical_Post_NOTES.md
+
 # NOTE — a deliberate deviation from Posey's .gitignore, which excludes its test
 # materials as "large files, not for version control":
 #
