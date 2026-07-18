@@ -132,7 +132,7 @@ nonisolated public struct SDImage {
         }
 
         let arrayData = raster.asData()
-        let (H, W, C) = raster.shape3
+        let (H, W, _) = raster.shape3
         let cs = CGColorSpace(name: CGColorSpace.sRGB)!
 
         return CIImage(

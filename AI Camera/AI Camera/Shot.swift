@@ -116,13 +116,15 @@ enum Shot {
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
 
-        // How big to save it, and with which upscaler. Read here on the main actor.
+        // How big to save it, with which upscaler, and which developer. Read here on the main actor.
         let size = sizeOverride ?? Settings.shared.drawingSize
         let method = methodOverride ?? Settings.shared.upscaler
+        let decoderPreference = Settings.shared.decoderChoice
 
         // ── Frame 3. The hand draws what the eye said. ──
         do {
-            let drawn = try await DrawerLoader.shared.draw(Drawing(), prompt: prompt)
+            let drawn = try await DrawerLoader.shared.draw(
+                Drawing(), prompt: prompt, decoderPreference: decoderPreference)
             // Frame 3's model is over. Tear it down BEFORE upscaling, so the upscale (which
             // uses the GPU too) runs with the drawer's memory already returned. (The drawer
             // also tears itself down in `draw`'s `defer` — this is belt to that braces.)

@@ -78,6 +78,9 @@
 //  Upscaler.swift
 //   31  The Upscaler (Making The Drawing Bigger)
 //
+//  TAESD.swift
+//   32  TAESD (A Tiny, Low-Memory Decoder For The Drawing)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

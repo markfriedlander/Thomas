@@ -92,6 +92,41 @@ handed a crashing prompt again, whatever happens upstream of it.
 
 ---
 
+### 4. Tiled VAE decode, to survive the decode on iPhone (2026-07-17)
+
+`VAE.swift` and `StableDiffusion.swift`. **Additions, not edits — nothing upstream changed
+behaviour.** The monolithic decode of a 64×64 latent to 512×512 peaks ~4.5 GB in intermediate
+activations (measured 2026-07-15, the VAE decode is where MLX diffusion jetsams on an 8 GB
+iPhone whose process ceiling is already maxed via the Increased Memory Limit entitlement). Added:
+
+| file | addition |
+|---|---|
+| `VAE.swift` | `Autoencoder.decodeTiled(_:tileLatent:overlapLatent:)` + two statics `tilePositions`, `taperWindow` |
+| `StableDiffusion.swift` | `StableDiffusion.detachedTiledDecoder(tileLatent:overlapLatent:)` — the tiled twin of `detachedDecoder()` |
+
+The tiled decoder splits the latent into overlapping tiles, decodes each (a fraction of the
+area, so a fraction of the peak), and feathers the pixel overlaps back together — `diffusers`'
+`enable_vae_tiling` in miniature. It tiles the *latent*, so it is model-agnostic across the
+KL-f8 SD family. `Drawing.draw` calls `detachedTiledDecoder` in place of `detachedDecoder`; the
+original `detachedDecoder`/`decode` are untouched and still callable. A re-sync must re-apply
+these two additions. **✅ Verified on device 2026-07-17 (iPhone 16 Plus): the tiled decode peaks
+~3,480 MB vs the monolithic ~4,559 MB, and produces a seamless image.**
+
+### 5. Cleared five pre-existing upstream warnings (2026-07-17)
+
+All five were in the vendored code from `357c97f`, not introduced by us. Cleared so the build has a
+**zero-warning baseline** — the point of "warnings are errors" (CLAUDE.md §6) is that a *new*
+warning stays visible, and five standing ones defeat that. Trivial and behaviour-neutral; a re-sync
+must re-apply them (small cost, accepted for the clean baseline while we develop against this code).
+
+| file | was | now |
+|---|---|---|
+| `Image.swift:135` | `let (H, W, C) = raster.shape3` (C unused) | `let (H, W, _) = …` |
+| `Load.swift:452` | `String(contentsOf: mergesURL)` (deprecated iOS 18) | `String(contentsOf: mergesURL, encoding: .utf8)` |
+| `UNet.swift:134` | `let dtype = x.dtype` (dead) | removed |
+| `UNet.swift:196` | `let dtype = x.dtype` (dead) | removed |
+| `UNet.swift:503` | `let dtype = x.dtype` (dead) | removed |
+
 ## Known upstream issues, NOT fixed here
 
 Recorded so nobody rediscovers them as bugs of ours.

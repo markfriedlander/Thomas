@@ -78,6 +78,28 @@ nonisolated struct Drawing: Sendable {
 
     var seed: UInt64?
 
+    /// Tiled VAE-decode geometry — see `Autoencoder.decodeTiled`. The monolithic decode of a
+    /// 64×64 latent to 512×512 peaked ~4.5 GB and jetsammed the process every time (measured
+    /// 2026-07-15); decoding in overlapping tiles caps the peak at roughly the tile's share of the
+    /// area. 40-unit tiles overlapping by 16 tile the 64×64 latent **2×2** (four 320×320-pixel
+    /// tiles, a ~0.39× area ceiling) with a wide feather to hide the seam. This is a device-tuning
+    /// knob: drop the tile size for a 3×3 grid if a device still cannot afford 2×2.
+    ///
+    /// **Fidelity-preserving:** this is sd-turbo's own VAE, just run in pieces — the re-imagining
+    /// is exactly what the full decode would have produced, only under a memory ceiling.
+    static let decodeTileLatent = 40
+    static let decodeOverlapLatent = 16
+
+    /// Peak memory of the *tiled* full-VAE decode, in MB — the bar the auto-fallback checks before
+    /// it commits a Detailed shot to the full VAE. ✅ **MEASURED 2026-07-17 on an iPhone 16 Plus:**
+    /// the monolithic decode peaked ~4,559 MB; 2×2 tiling brings it to **~3,480 MB** (a ~1,080 MB
+    /// drop, comfortably under the ~6,122 MB ceiling). Rounded up slightly for safety. With the 500
+    /// margin, Detailed runs when ~4 GB is free after the UNet is released, else falls back to TAESD.
+    static let tiledDecodePeakMB: Double = 3500
+    /// Headroom kept free above that estimate, so Detailed commits to the full VAE only with margin
+    /// to spare — and drops to TAESD (a few hundred MB, effectively always affordable) otherwise.
+    static let decodeHeadroomMarginMB: Double = 500
+
     /// The words the eye produced, handed to the hand unedited.
     ///
     /// **Principle 3, and this is the load-bearing decision in the file.** It is tempting to
@@ -285,7 +307,7 @@ actor DrawerLoader {
     ///
     /// Costs 4.3 s to reload on the next shot. That is the right trade here — *the latency is
     /// the film developing* — and a shot that finishes slowly beats a process that dies.
-    func draw(_ drawing: Drawing, prompt: String,
+    func draw(_ drawing: Drawing, prompt: String, decoderPreference: DecoderChoice,
               onStep: (@Sendable (Int, Int) -> Void)? = nil) async throws -> CGImage {
         // ⭐ Mark's rule, 2026-07-16: *"building and tearing down the drawer each time... one
         // operation has its own world and all its resources from scratch."* This `defer`
@@ -315,9 +337,13 @@ actor DrawerLoader {
         let started = Date()
         cameraLog("DRAW: begin steps=\(parameters.steps) cfg=\(parameters.cfgWeight) size=\(parameters.latentSize) seed=\(parameters.seed) prompt=\"\(prompt.prefix(120))\"")
 
-        // Take the decoder BEFORE anything is released. It closes over the autoencoder alone
-        // — that is what makes it safe to throw the rest away.
-        let decoder = generator!.detachedDecoder()
+        // Take the full-VAE decoder BEFORE anything is released. It closes over the autoencoder
+        // alone — that is what makes it safe to throw the rest away. Tiled, because the monolithic
+        // decode peaked ~4.5 GB and jetsammed the process here every time; tiling caps the peak at
+        // one tile's share of the image (see `Drawing.decodeTileLatent`). Held as a `var` so it can
+        // be dropped unused if we develop with TAESD instead — see the decode routing below.
+        var vaeDecoder: ImageDecoder? = generator!.detachedTiledDecoder(
+            tileLatent: Drawing.decodeTileLatent, overlapLatent: Drawing.decodeOverlapLatent)
 
         var latent: MLXArray?
         var step = 0
@@ -355,9 +381,38 @@ actor DrawerLoader {
         let atRelease = MLX.Memory.snapshot()
         cameraLog("DRAW: released the generator before decoding — iosAvailMB \(formatMB(beforeRelease)) → \(formatMB(afterRelease)) (freed \(formatMB(afterRelease - beforeRelease))) | mlxActive=\(String(format: "%.0f", Double(atRelease.activeMemory) / 1_048_576)) peakSoFar=\(String(format: "%.0f", Double(atRelease.peakMemory) / 1_048_576)) MB")
 
+        // ── Choose the developer. ──
+        //
+        // Two user choices (`decoderPreference`), plus one non-negotiable: the decode never
+        // crashes. Detailed develops with sd-turbo's own VAE, tiled to fit; Fast develops with the
+        // tiny bundled TAESD. And whatever was chosen, if the device is too tight *this shot* to
+        // afford even the tiled VAE decode, we fall back to TAESD rather than die — the promise the
+        // Preferences footer makes plain. The VAE peak here is a device-tuning estimate
+        // (`tiledDecodePeakMB`); TAESD's peak is a few hundred MB and effectively always fits.
+        let availableMB = afterRelease
+        let neededForVAE = Drawing.tiledDecodePeakMB + Drawing.decodeHeadroomMarginMB
+        let useVAE = decoderPreference == .detailed && availableMB >= neededForVAE
+
         let decodeStarted = Date()
-        let decoded = decoder(final)
-        eval(decoded)
+        let decoded: MLXArray
+        if useVAE {
+            decoded = vaeDecoder!(final)
+            eval(decoded)
+        } else {
+            // Fast, or a Detailed shot this device can't afford. Release the VAE side entirely so
+            // TAESD develops with maximum headroom, then decode with the tiny bundled model. Feed
+            // it the RAW latent — TAESD applies no VAE scaling (see TAESD.swift).
+            let why = decoderPreference == .fast
+                ? "user chose Fast"
+                : "Detailed, but availMB \(formatMB(availableMB)) < needed \(formatMB(neededForVAE)) — falling back so the shot still draws"
+            cameraLog("DRAW: developing with TAESD (\(why))")
+            vaeDecoder = nil
+            MLX.Stream.gpu.synchronize()
+            MLX.Memory.clearCache()
+            let taesd = try TAESDDecoder.bundled()
+            decoded = taesd.decodePixels(final)
+            eval(decoded)
+        }
         let decodeSeconds = Date().timeIntervalSince(decodeStarted)
 
         let snapshot = MLX.Memory.snapshot()

@@ -291,6 +291,133 @@ nonisolated class Autoencoder: Module {
         return decoder(postQuantProjection(z))
     }
 
+    /// Tiled VAE decode — the same result as ``decode(_:)``, but with peak memory bounded to a
+    /// fraction of the whole image. **AI Camera addition (not upstream); recorded in VENDOR.md.**
+    ///
+    /// Why it exists: the monolithic decode inflates a 64×64×4 latent to 512×512×3 through the
+    /// upsampling conv stack, and its intermediate activations peaked **~4.5 GB** on an iPhone —
+    /// over the ~6 GB process ceiling once the app is resident, so the process was jetsammed at
+    /// the decode *every time* (measured 2026-07-15). The denoise, by contrast, runs entirely at
+    /// 64×64 and is cheap. So the fix is here and only here: decode the latent in overlapping
+    /// spatial tiles, each a fraction of the area, and feather the pixel overlaps back together.
+    /// Peak scales with the tile, not the whole image.
+    ///
+    /// This is `diffusers`' `enable_vae_tiling` in miniature. Two honest costs. **(1)** The
+    /// decoder's GroupNorm and its bottleneck self-attention normalize/attend *within* whatever
+    /// they are handed, so a tile's statistics differ slightly from the whole — the
+    /// overlap-and-feather is what hides the resulting seam, and why the overlap must be generous
+    /// (wider than the conv receptive field, so a tile's zero-padded borders are down-weighted to
+    /// nothing and its neighbour's interior carries that region). **(2)** It runs the decoder once
+    /// per tile, so it is slower. Both are the right trade: *the latency is the film developing*,
+    /// and a shot that finishes softly beats a process that dies.
+    ///
+    /// Model-agnostic: it tiles the *latent*, so it works for any KL-f8 SD-family autoencoder
+    /// (sd-turbo, SD 1.5, SDXL) without change — the safety net for every drawer we add.
+    ///
+    /// - Parameters:
+    ///   - z: the final latent, `[B, H, W, C]` (this app draws one image, so `B == 1`).
+    ///   - tileLatent: tile edge in *latent* units. The pixel tile is this × the VAE's 8× upsample.
+    ///   - overlapLatent: overlap between neighbouring tiles, in latent units. Wider = smoother seam.
+    func decodeTiled(_ z: MLXArray, tileLatent: Int, overlapLatent: Int) -> MLXArray {
+        let (B, H, W, C) = z.shape4
+
+        // Already a single tile? Then there is nothing to tile — one plain decode, no overhead.
+        if H <= tileLatent && W <= tileLatent {
+            return decode(z)
+        }
+
+        let ys = Autoencoder.tilePositions(total: H, tile: tileLatent, overlap: overlapLatent)
+        let xs = Autoencoder.tilePositions(total: W, tile: tileLatent, overlap: overlapLatent)
+
+        var acc: MLXArray? = nil   // Σ (tile pixels · weight)
+        var wacc: MLXArray? = nil  // Σ weight — the per-pixel normaliser
+
+        for y0 in ys {
+            let th = min(tileLatent, H - y0)
+            for x0 in xs {
+                let tw = min(tileLatent, W - x0)
+
+                // Decode just this latent tile. `decode` is `z/scale → postQuant → decoder`; the
+                // first two are pointwise (per-pixel, per-channel), so a decoded tile equals the
+                // matching crop of a full decode up to the conv receptive field and the
+                // norm/attention locality above — exactly what the feather absorbs.
+                let zt = z[0 ..< B, y0 ..< (y0 + th), x0 ..< (x0 + tw), 0 ..< C]
+                let px = decode(zt).squeezed()          // [th*scale, tw*scale, 3]
+
+                let (ph, pw, _) = px.shape3
+                let scale = ph / th                     // the VAE's spatial upsample (8 for KL-f8)
+
+                // Feather window: tapers to a small positive floor at every edge, so overlapping
+                // tiles blend AND the normaliser is never exactly zero anywhere (no 0/0 at a
+                // corner covered by a single tile).
+                let taper = overlapLatent * scale
+                let wy = Autoencoder.taperWindow(length: ph, taper: taper)
+                let wx = Autoencoder.taperWindow(length: pw, taper: taper)
+                let w = wy.reshaped(ph, 1, 1) * wx.reshaped(1, pw, 1)   // [ph, pw, 1]
+
+                // Place the weighted tile into the full canvas by zero-padding it out to its
+                // offset, then accumulate. Only one padded canvas is alive per iteration and the
+                // accumulator is a single 512×512 float image (~3 MB), so the stitching's own
+                // footprint is negligible next to a decode.
+                let top = y0 * scale
+                let left = x0 * scale
+                let bottom = (H * scale) - top - ph
+                let right = (W * scale) - left - pw
+
+                let contribPx = padded(px * w, widths: [[top, bottom], [left, right], [0, 0]])
+                let contribW = padded(w, widths: [[top, bottom], [left, right], [0, 0]])
+
+                acc = acc == nil ? contribPx : acc! + contribPx
+                wacc = wacc == nil ? contribW : wacc! + contribW
+
+                // Evaluate the running sums each tile so the lazy graph — and the tile's own
+                // activations — do not pile up across the loop. This is what keeps the peak
+                // bounded to one tile at a time rather than all of them at once.
+                eval(acc!, wacc!)
+            }
+        }
+
+        // Restore the leading batch dim that `decode` returns, so callers see an identical shape.
+        return (acc! / wacc!)[.newAxis]
+    }
+
+    /// Start offsets that cover `total` with tiles of edge `tile`, each overlapping its
+    /// predecessor by at least `overlap`, with the final tile flush to the end. Ascending, deduped.
+    static func tilePositions(total: Int, tile: Int, overlap: Int) -> [Int] {
+        if total <= tile { return [0] }
+        let step = max(1, tile - overlap)
+        var positions: [Int] = []
+        var start = 0
+        while true {
+            if start + tile >= total {
+                positions.append(total - tile)   // last tile flush to the end
+                break
+            }
+            positions.append(start)
+            start += step
+        }
+        // The flush-to-end tile can land on a stride point; drop the exact duplicate if so.
+        var unique: [Int] = []
+        for p in positions where unique.last != p { unique.append(p) }
+        return unique
+    }
+
+    /// A 1-D blend window: ramps from a small positive floor up to 1 across `taper` samples at each
+    /// end, flat 1 in the middle. It never reaches 0, so summed across overlapping tiles it forms a
+    /// valid partition of unity everywhere — no division-by-zero in the normaliser, even at an
+    /// image corner covered by only one tile.
+    static func taperWindow(length: Int, taper: Int) -> MLXArray {
+        let floor: Float = 0.01
+        let t = max(1, min(taper, length / 2))
+        var w = [Float](repeating: 1, count: length)
+        for i in 0 ..< t {
+            let v = floor + (1 - floor) * Float(i + 1) / Float(t + 1)
+            w[i] = v                       // leading ramp
+            w[length - 1 - i] = v          // trailing ramp (symmetric)
+        }
+        return MLXArray(w)
+    }
+
     func encode(_ x: MLXArray) -> (MLXArray, MLXArray) {
         var x = encoder(x)
         x = quantProjection(x)

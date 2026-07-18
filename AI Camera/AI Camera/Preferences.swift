@@ -52,6 +52,23 @@ nonisolated enum FrameTwoWords: String, CaseIterable, Sendable {
     }
 }
 
+/// Which "developer" turns the drawing's latent into a finished image — the last, memory-heavy
+/// step of frame 3. Two honest choices. A third "Automatic" would make "Detailed" a broken
+/// promise, because we override toward safety *regardless* of the choice (a Detailed user who
+/// explicitly did not pick Automatic would still get silently switched). So instead: two
+/// preferences, and a plain notice that we are ultimately driving and will not let it crash.
+nonisolated enum DecoderChoice: String, CaseIterable, Sendable {
+    case detailed   // the full VAE, tiled to fit — sd-turbo's own decoder, best fidelity
+    case fast       // TAESD — a tiny distilled decoder, softer but nearly impossible to crash
+
+    var name: String {
+        switch self {
+        case .detailed: return "Detailed"
+        case .fast:     return "Fast"
+        }
+    }
+}
+
 /// What the camera is loaded with. Set before you raise it; never per-shot.
 ///
 /// `@AppStorage` because a camera remembers its settings when you put it down. The shot
@@ -135,6 +152,13 @@ final class Settings {
     var upscaler: UpscaleMethod {
         didSet { store(upscaler.rawValue, "upscaler") }
     }
+    /// Which decoder develops the drawing — the full VAE (Detailed) or the tiny bundled TAESD
+    /// (Fast). A preference, not an absolute: on a device too tight to afford the full decode this
+    /// shot, Detailed quietly falls back to Fast rather than crash (disclosed in `decoderSection`).
+    /// Default Detailed — best fidelity, kept safe by the fallback.
+    var decoderChoice: DecoderChoice {
+        didSet { store(decoderChoice.rawValue, "decoderChoice") }
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -147,6 +171,7 @@ final class Settings {
         frameTwoShows = FrameTwoWords(rawValue: d.string(forKey: "frameTwoShows") ?? "") ?? .sentToHand
         drawingSize = DrawingSize(rawValue: d.string(forKey: "drawingSize") ?? "") ?? .native
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
+        decoderChoice = DecoderChoice(rawValue: d.string(forKey: "decoderChoice") ?? "") ?? .detailed
     }
 
     private func store(_ value: Any, _ key: String) {
@@ -187,6 +212,7 @@ final class Settings {
         frameTwoShows = .sentToHand
         drawingSize = .native
         upscaler = .metalFX
+        decoderChoice = .detailed
     }
 }
 
@@ -281,6 +307,7 @@ struct PreferencesView: View {
                 modelSection
                 eyeSection
                 handSection
+                decoderSection
                 sizeSection
                 layoutSection
                 resetSection
@@ -538,7 +565,30 @@ struct PreferencesView: View {
 
     // MARK: - How the words meet the picture
 
-    // MARK: - How big the drawing is saved
+    // MARK: - Developing the drawing, and how big it's saved
+
+    /// Which developer finishes the drawing — Detailed (full VAE) or Fast (TAESD). Only in "The
+    /// hand"'s world, so it hides when the drawing model isn't downloaded. The footer carries the
+    /// one promise that makes two choices honest instead of three: whatever you pick, we override
+    /// toward safety and will not let a shot crash.
+    @ViewBuilder
+    private var decoderSection: some View {
+        if DrawerLoader.isAvailable {
+            Section {
+                Picker("Developer", selection: $settings.decoderChoice) {
+                    ForEach(DecoderChoice.allCases, id: \.self) { c in
+                        Text(c.name).tag(c)
+                    }
+                }
+            } header: {
+                Text("Developing the drawing")
+            } footer: {
+                Text(settings.decoderChoice == .detailed
+                     ? "Detailed uses the full decoder — sharper, and truer to what the model drew. If your device is low on memory for a shot, Thomas quietly switches that one to Fast so the drawing still finishes instead of failing."
+                     : "Fast uses a tiny, low-memory decoder — softer and less detailed, but it draws in almost any conditions. On a dreamy re-imagining, the softness can read as intentional.")
+            }
+        }
+    }
 
     /// The drawing's size, and which upscaler enlarges it. Only in "The hand"'s world — it's
     /// about frame 3, so it hides when the drawing model isn't downloaded.

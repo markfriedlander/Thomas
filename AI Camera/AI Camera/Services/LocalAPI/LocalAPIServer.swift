@@ -563,6 +563,7 @@ extension LocalAPIServer {
             if let v = obj["frameTwoShows"] as? String, let x = FrameTwoWords(rawValue: v) { s.frameTwoShows = x; changed.append("frameTwoShows=\(v)") }
             if let v = obj["drawingSize"] as? String, let x = DrawingSize(rawValue: v) { s.drawingSize = x; changed.append("drawingSize=\(v)") }
             if let v = obj["upscaler"] as? String, let x = UpscaleMethod(rawValue: v) { s.upscaler = x; changed.append("upscaler=\(v)") }
+            if let v = obj["decoderChoice"] as? String, let x = DecoderChoice(rawValue: v) { s.decoderChoice = x; changed.append("decoderChoice=\(v)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
                 else if v == "prompt" { s.resetPromptToDefault(); changed.append("reset=prompt") }
@@ -578,13 +579,14 @@ extension LocalAPIServer {
     /// boundary (a `[String: Any]` can't — `Any` isn't Sendable). `.dict` builds the JSON shape
     /// off the actor.
     private struct SettingsSnapshot: Sendable {
-        let seer, layout, frameTwoShows, drawingSize, upscaler, systemPrompt: String
+        let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let drawsThirdFrame: Bool
         let temperature: Double
         var dict: [String: Any] {
             ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
              "temperature": temperature, "frameTwoShows": frameTwoShows,
-             "drawingSize": drawingSize, "upscaler": upscaler, "systemPrompt": systemPrompt]
+             "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
+             "systemPrompt": systemPrompt]
         }
     }
 
@@ -594,7 +596,8 @@ extension LocalAPIServer {
         return SettingsSnapshot(
             seer: s.seer.rawValue, layout: s.layout.rawValue,
             frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
-            upscaler: s.upscaler.rawValue, systemPrompt: s.systemPrompt,
+            upscaler: s.upscaler.rawValue, decoderChoice: s.decoderChoice.rawValue,
+            systemPrompt: s.systemPrompt,
             drawsThirdFrame: s.drawsThirdFrame, temperature: s.temperature)
     }
 
@@ -797,6 +800,16 @@ extension LocalAPIServer {
         // warning today and an error under Swift 6, and this file treats warnings as errors.
         let drawing = built
 
+        // Which developer: `X-Decoder: fast|detailed` forces one for the test; absent → the live
+        // setting. Lets the antenna exercise both decode paths (and the memory fallback) directly.
+        let decoderOverride = req.headers["x-decoder"].flatMap { DecoderChoice(rawValue: $0) }
+        let decoderPreference: DecoderChoice
+        if let o = decoderOverride {
+            decoderPreference = o
+        } else {
+            decoderPreference = await MainActor.run { Settings.shared.decoderChoice }
+        }
+
         let availableBefore = processAvailableMemoryMB()
         let started = Date()
         // Through the lane, exactly like a look: one at a time, torn down, settled after.
@@ -806,7 +819,7 @@ extension LocalAPIServer {
         // here, preserving the existing do/catch.
         struct DrawOutcome: Sendable { let image: CGImage?; let error: String? }
         let outcome = await ModelLane.shared.run("draw") { () -> DrawOutcome in
-            do { return DrawOutcome(image: try await DrawerLoader.shared.draw(drawing, prompt: prompt), error: nil) }
+            do { return DrawOutcome(image: try await DrawerLoader.shared.draw(drawing, prompt: prompt, decoderPreference: decoderPreference), error: nil) }
             catch { return DrawOutcome(image: nil, error: error.localizedDescription) }
         }
         do {

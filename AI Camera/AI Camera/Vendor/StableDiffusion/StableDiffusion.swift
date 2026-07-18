@@ -70,6 +70,10 @@ nonisolated public protocol ImageGenerator {
     /// latents into raster images.
     func detachedDecoder() -> ImageDecoder
 
+    /// Like ``detachedDecoder()`` but decodes in overlapping spatial tiles to cap peak memory at
+    /// the VAE decode. **AI Camera addition (not upstream); recorded in VENDOR.md.**
+    func detachedTiledDecoder(tileLatent: Int, overlapLatent: Int) -> ImageDecoder
+
     /// the equivalent to the ``detachedDecoder()`` but without the detatching
     func decode(xt: MLXArray) -> MLXArray
 }
@@ -285,6 +289,20 @@ nonisolated open class StableDiffusion {
         let autoencoder = self.autoencoder
         func decode(xt: MLXArray) -> MLXArray {
             var x = autoencoder.decode(xt)
+            x = clip(x / 2 + 0.5, min: 0, max: 1)
+            return x
+        }
+        return decode(xt:)
+    }
+
+    /// Like ``detachedDecoder()`` but decodes in overlapping spatial tiles, capping peak memory at
+    /// the VAE decode — the step that jetsammed the process on iPhone. Same output otherwise.
+    /// **AI Camera addition (not upstream); recorded in VENDOR.md.** See
+    /// ``Autoencoder/decodeTiled(_:tileLatent:overlapLatent:)``.
+    public func detachedTiledDecoder(tileLatent: Int, overlapLatent: Int) -> ImageDecoder {
+        let autoencoder = self.autoencoder
+        func decode(xt: MLXArray) -> MLXArray {
+            var x = autoencoder.decodeTiled(xt, tileLatent: tileLatent, overlapLatent: overlapLatent)
             x = clip(x / 2 + 0.5, min: 0, max: 1)
             return x
         }
