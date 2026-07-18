@@ -47,6 +47,9 @@ coreai-export/
 Thomas_Article_DRAFT.md
 Second_Article_NOTES.md
 Technical_Post_NOTES.md
+Idea_AI_Camera.md
+Dream_Thread_Hal_IDEA.md
+on-device-stable-diffusion-iphone-findings.md
 
 # NOTE — a deliberate deviation from Posey's .gitignore, which excludes its test
 # materials as "large files, not for version control":
