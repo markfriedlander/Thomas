@@ -17,8 +17,10 @@
 //  detail. For an app whose thesis is the honest gap in panel 3, that is a *product* choice to A/B,
 //  not a free win — so this is built as an OPTION, never a silent replacement of the real VAE.
 //
-//  Our port. Architecture transliterated verbatim from madebyollin/taesd `taesd.py` (MIT); there
-//  is no mlx-swift TAESD anywhere, so this is also a small gift back to that ecosystem. Two scaling
+//  Our port. Architecture transliterated verbatim from madebyollin/taesd `taesd.py` (MIT,
+//  © 2023 Ollin Boer Bohan — license in Resources/taesd_decoder.LICENSE.txt, covering both this
+//  derivative port and the bundled weights); there is no mlx-swift TAESD anywhere, so this is also
+//  a small gift back to that ecosystem. Two scaling
 //  facts are load-bearing and were read from the reference source, not remembered — get either
 //  wrong and the image is washed-out garbage:
 //
