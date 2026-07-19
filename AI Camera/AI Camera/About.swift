@@ -64,6 +64,22 @@ struct Acknowledgement: Identifiable {
     var notice: String? = nil
 }
 
+/// A model the app is *running*, as opposed to code it *ships*. These are downloaded (or
+/// built into the OS), never redistributed by us — so they don't belong in the acknowledgements
+/// above. They live in their own section, and the app supplies only the ones ACTUALLY present
+/// on the device, because an attribution you don't owe is a claim you shouldn't make.
+///
+/// `attribution` is a line some licenses require to be shown prominently (sd-turbo's "Powered
+/// by Stability AI"); `notice` is the license's required Notice text.
+struct ModelCredit: Identifiable {
+    var id: String { name }
+    let name: String
+    let terms: String
+    let attribution: String?
+    let url: String?
+    var notice: String? = nil
+}
+
 // MARK: - The shared view
 
 /// The studio's About screen. Generic: it takes an app's identity and its list
@@ -75,6 +91,12 @@ struct AboutView: View {
     let ownLicense: String
     let ownCopyright: String
     let sourceURL: String?
+    /// The models actually in use right now — supplied by the app from live selection state,
+    /// so this section reflects what's genuinely running, not merely what's on disk. A model
+    /// that's installed but not selected isn't being *used*, so it doesn't appear here — and
+    /// crucially doesn't drag its attribution with it. An attribution you don't owe (because
+    /// nothing is using the model) is a claim you shouldn't make.
+    let models: [ModelCredit]
     let acknowledgements: [Acknowledgement]
 
     private var version: String {
@@ -128,6 +150,44 @@ struct AboutView: View {
                 Text("This app")
             } footer: {
                 Text("\(appName) is free and open source. You can read every line.")
+            }
+
+            if !models.isEmpty {
+                Section {
+                    ForEach(models) { m in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(m.name)
+                                .font(.subheadline)
+                            Text(m.terms)
+                                .font(.caption2).foregroundStyle(.secondary)
+                            if let attribution = m.attribution {
+                                Text(attribution)
+                                    .font(.caption).fontWeight(.semibold)
+                                    .padding(.top, 1)
+                            }
+                            if let notice = m.notice {
+                                Text(notice)
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let urlStr = m.url, let url = URL(string: urlStr) {
+                                Link(destination: url) {
+                                    HStack(spacing: 3) {
+                                        Text("Terms")
+                                        Image(systemName: "arrow.up.right").font(.caption2)
+                                    }
+                                    .font(.caption2)
+                                }
+                                .padding(.top, 1)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } header: {
+                    Text("Models in use")
+                } footer: {
+                    Text("The machines \(appName) is actually running right now, and the terms they're used under. A model that's installed but not selected doesn't appear here — it isn't being used, so its terms don't apply.")
+                }
             }
 
             ForEach(groups, id: \.license) { group in
@@ -408,8 +468,56 @@ extension AboutView {
             ownLicense: "MIT License",
             ownCopyright: "© 2026 Mark Friedlander",
             sourceURL: "https://github.com/markfriedlander/Thomas",
+            models: thomasActiveModels(),
             acknowledgements: thomasAcknowledgements
         )
+    }
+}
+
+/// The models actually IN USE right now — the selected eye, and the drawer only when the third
+/// frame is being drawn — mapped to their credits. Gated on *active selection*, not mere
+/// installation: a model sitting on disk unused isn't something the app is "using," so we don't
+/// display its attribution. This is the dispositive check (Mark, 2026-07-18) — it keeps us from
+/// ever claiming "Powered by Stability AI" while sd-turbo is dormant, which would overstate what
+/// Stability is actually contributing to a given shot.
+///
+/// sd-turbo carries the attribution its license requires when active ("Powered by Stability AI"
+/// + the Notice text); Qwen is Apache-2.0 (no prominent-attribution duty); Apple's model is
+/// built into the OS. The attribution/notice strings live here rather than in `ModelCatalog` on
+/// purpose: they're a presentation concern for this one screen.
+private func thomasActiveModels() -> [ModelCredit] {
+    let settings = Settings.shared
+    let active = ModelCatalog.all.filter { model in
+        switch model.job {
+        case .seeing:  return ModelCatalog.model(for: settings.seer).id == model.id
+        case .drawing: return settings.drawsThirdFrame && model.isInstalled
+        }
+    }
+    return active.map { model in
+        switch model.id {
+        case ModelCatalog.sdTurbo.id:
+            return ModelCredit(
+                name: model.displayName,
+                terms: model.licence ?? "Stability AI Community License",
+                attribution: "Powered by Stability AI",
+                url: "https://stability.ai/community-license-agreement",
+                notice: "This Stability AI Model is licensed under the Stability AI Community License, Copyright © Stability AI Ltd. All Rights Reserved"
+            )
+        case ModelCatalog.apple.id:
+            return ModelCredit(
+                name: model.displayName,
+                terms: "Apple on-device foundation model, built into iOS",
+                attribution: nil,
+                url: nil
+            )
+        default: // Qwen and any future downloaded MLX model
+            return ModelCredit(
+                name: model.displayName,
+                terms: model.licence ?? "See model card",
+                attribution: nil,
+                url: model.isBuiltIn ? nil : "https://huggingface.co/\(model.id)"
+            )
+        }
     }
 }
 
