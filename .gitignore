@@ -38,12 +38,23 @@ build/
 # is the durable record, not that file.
 coreai-export/
 
-# Mark's unpublished writing — drafts and notes he is NOT ready to make public
-# (2026-07-18). Purged from history and force-pushed; kept on disk, ignored here so a
-# stray `git add -A` can never put them back on GitHub. Git can't do "committed locally
-# but never pushed" on a shared branch, so these live on disk, untracked, until Mark
-# decides to publish (then remove the line). Other personal docs remain public by his
-# choice — this list is only what he asked to pull back.
+# ════════════════════════════════════════════════════════════════════════════════════
+# PRIVATE, BUT VERSIONED — tracked in the local-only .thomas-docs-git, NEVER pushed.
+# See STUDIO_REPO_HYGIENE.md. Public GitHub holds code + the docs/ website only; every-
+# thing below is committed to .thomas-docs-git (full history + rollback) and ignored here
+# so a stray `git add -A` can never push it. Drive that git with tools/docs.sh. This is
+# the two-gits-one-folder mechanism — the real answer to "committed locally, only code
+# public," which a single git can't do.
+# ════════════════════════════════════════════════════════════════════════════════════
+.thomas-docs-git/
+
+# Process docs + this standard
+CLAUDE.md
+HISTORY.md
+NEXT.md
+STUDIO_REPO_HYGIENE.md
+
+# Mark's unpublished writing — drafts/notes not ready for public (now versioned privately)
 Thomas_Article_DRAFT.md
 Second_Article_NOTES.md
 Technical_Post_NOTES.md
@@ -51,14 +62,10 @@ Idea_AI_Camera.md
 Dream_Thread_Hal_IDEA.md
 on-device-stable-diffusion-iphone-findings.md
 
-# NOTE — a deliberate deviation from Posey's .gitignore, which excludes its test
-# materials as "large files, not for version control":
-#
-#   `Test Materials/` IS committed here.
-#
-# Posey's corpus is a convenience; ours is a scientific instrument. Every
-# characterization result in HISTORY.md refers to specific images by name. The corpus
-# was fetched by searching Wikimedia Commons, and Commons search results CHANGE — a
-# re-fetch would silently return different pictures, and every recorded finding would
-# quietly stop corresponding to the thing it described. A corpus that drifts isn't a
-# corpus. It's ~15 MB. That's a cheap price for results that stay true.
+# The characterization corpus — a scientific instrument (HISTORY refers to images by name,
+# and a Wikimedia Commons re-fetch would drift). ~15 MB. Now versioned privately, not public.
+Test Materials/
+
+# Internal tooling — the LEGO validator + the antenna client (incl. its token config)
+scripts/
+tools/
