@@ -394,6 +394,7 @@ extension LocalAPIServer {
         case ("GET",  "/models"): return handleModels()
         case ("GET",  "/rotation"): return handleRotation()
         case ("GET",  "/memory"): return await handleMemory()
+        case ("GET",  "/thermal"): return handleThermal()
         case ("POST", "/unload"): return await handleUnload()
         case ("GET",  "/disk"):      return handleDisk()
         case ("GET",  "/repo"):      return await handleRepo(req)
@@ -1264,7 +1265,23 @@ extension LocalAPIServer {
             "mlxPeakMB":    Int(Double(snapshot.peakMemory) / 1_048_576.0),
             "qwenResident": resident,
             "qwenRequiredMB": Int(requiredMemoryMBForLoad(repo: Qwen.repo)),
+            // The companion instrument: thermal throttling and memory jetsam compound, so a
+            // memory trace that can't see heat is half-blind. Read it here beside availableMB.
+            "thermal":      thermalStateLabel(),
             "log":          MemoryLog.shared.recent(200)
+        ]))
+    }
+
+    /// GET /thermal — the device's current thermal pressure, the companion to /memory.
+    ///
+    /// Built so the next hot-phone draw crash is diagnosable without a cable: poll this alongside
+    /// /memory during a warm session and the two curves together say whether heat and jetsam
+    /// compounded. Read-only for now — the thermal-aware draw governor (Posey's `ThermalGovernor`
+    /// pattern) is the intended next step, and it will want a DEBUG setter here to force a state.
+    private func handleThermal() -> (Int, String) {
+        return (200, json([
+            "thermal": thermalStateLabel(),
+            "scale":   "nominal | fair | serious | critical (iOS ProcessInfo.thermalState)"
         ]))
     }
 

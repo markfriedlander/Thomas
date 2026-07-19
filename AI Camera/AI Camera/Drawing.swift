@@ -214,7 +214,7 @@ actor DrawerLoader {
             // the first thing to re-measure once this runs — watch GET /memory.
             let requiredMB = requiredMemoryMBForLoad(repo: Drawing.repo)
             var availableMB = processAvailableMemoryMB()
-            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (⚠️ ratio unverified for diffusion) availableMB=\(formatMB(availableMB))")
+            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (⚠️ ratio unverified for diffusion) availableMB=\(formatMB(availableMB)) thermal=\(thermalStateLabel())")
 
             if availableMB < requiredMB {
                 cameraLog("DRAW: short on headroom — waiting for iOS to reclaim")
@@ -416,7 +416,7 @@ actor DrawerLoader {
         let decodeSeconds = Date().timeIntervalSince(decodeStarted)
 
         let snapshot = MLX.Memory.snapshot()
-        cameraLog("DRAW: done denoise=\(String(format: "%.2f", denoiseSeconds))s decode=\(String(format: "%.2f", decodeSeconds))s total=\(String(format: "%.2f", Date().timeIntervalSince(started)))s | mlxPeak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB iosAvailMB=\(formatMB(processAvailableMemoryMB()))")
+        cameraLog("DRAW: done denoise=\(String(format: "%.2f", denoiseSeconds))s decode=\(String(format: "%.2f", decodeSeconds))s total=\(String(format: "%.2f", Date().timeIntervalSince(started)))s | mlxPeak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB iosAvailMB=\(formatMB(processAvailableMemoryMB())) thermal=\(thermalStateLabel())")
 
         // The decoder returns floats in 0…1 with a leading batch dimension — `[1, 512, 512, 3]`.
         // `SDImage` wants 8-bit samples and `precondition(data.ndim == 3)`. Handing it the raw

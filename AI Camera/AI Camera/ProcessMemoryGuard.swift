@@ -132,6 +132,35 @@ nonisolated func processAvailableMemoryMB() -> Double {
     #endif
 }
 
+// MARK: - Process thermal state
+
+/// The device's current thermal pressure, as iOS reports it — a companion instrument to
+/// `processAvailableMemoryMB()`.
+///
+/// **Why this exists (CLAUDE.md §5 corollary — build the instrument, don't guess).** Mark hit a
+/// draw crash with the phone running hot. Thermal throttling and memory jetsam compound: a warm
+/// phone slows the GPU *and* reclaims memory more aggressively, so the frame-3 VAE decode — already
+/// the process peak — is likeliest to be killed exactly when the device is hot. Reading and logging
+/// the thermal state around every draw means the NEXT such crash says whether heat was involved,
+/// instead of leaving us to guess a second time. This is the read-only instrument; a thermal-aware
+/// governor that paces or backs off the draw queue is the intended next step, once we can see this.
+@inline(__always)
+nonisolated func processThermalState() -> ProcessInfo.ThermalState {
+    ProcessInfo.processInfo.thermalState
+}
+
+/// A short label for the thermal state, for logs and the antenna.
+@inline(__always)
+nonisolated func thermalStateLabel(_ state: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState) -> String {
+    switch state {
+    case .nominal:  return "nominal"
+    case .fair:     return "fair"
+    case .serious:  return "serious"
+    case .critical: return "critical"
+    @unknown default: return "unknown"
+    }
+}
+
 // MARK: - Required-memory estimate
 
 /// Effective dirty-memory ratio for 4-bit quantized safetensors loaded via mmap. Hal's
