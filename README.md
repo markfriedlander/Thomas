@@ -10,8 +10,9 @@ vision model **describes what it sees** — and those words are the recording. T
 2. **The description** — what the machine *perceived*, in its own words.
 3. **The drawing** — the machine *re-imagining* the scene from that description.
 
-**Reality → machine perception → machine re-imagining.** The distance between the three is the point —
-a legible, pointable look at how a machine sees, and how far that is from what's really there.
+**Reality → machine perception → machine re-imagining.** The gap between the three is the point —
+a legible, pointable look at how a machine sees, which is not how you see. Not a worse eye. A
+different one.
 
 ## Local-first, and private
 
@@ -22,7 +23,7 @@ drawing is an optional model you download when you want it.
 ## How it works
 
 - **The eye** — a vision-language model looks at the photo and writes what it sees. Choose Apple
-  Intelligence (built in, zero download) or a downloadable model that sees more.
+  Intelligence (built in, zero download) or a downloadable model that sees differently.
 - **The hand** — a Stable Diffusion model draws a new image from the eye's words. It never sees your
   photo; it only reads the description. You pick how it develops the drawing (a full, detailed decoder
   or a fast, lighter one — and Thomas quietly falls back to the light one rather than ever failing).
@@ -38,6 +39,10 @@ drawing is an optional model you download when you want it.
 Thomas stands on open-source work, including Apple's [MLX](https://github.com/ml-explore/mlx) and
 [mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples), `stabilityai/sd-turbo`, and
 [TAESD](https://github.com/madebyollin/taesd) by Ollin Boer Bohan. Their licenses ship with the code.
+
+## License
+
+Thomas is released under the MIT License. See [LICENSE](LICENSE).
 
 ---
 
