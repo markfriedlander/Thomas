@@ -81,6 +81,9 @@
 //  TAESD.swift
 //   32  TAESD (A Tiny, Low-Memory Decoder For The Drawing)
 //
+//  About.swift
+//   33  About (Who Made This, And On Whose Shoulders)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

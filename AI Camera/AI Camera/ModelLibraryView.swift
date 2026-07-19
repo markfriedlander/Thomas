@@ -40,6 +40,10 @@ struct ModelLibraryView: View {
     @State private var settings = Settings.shared
     @ObservedObject private var downloader = MLXModelDownloader.shared
     @State private var confirmingDelete: CameraModel?
+    /// The model whose license sheet is open. Set when the user taps Download; the actual
+    /// download only starts once they accept — the studio's surface-the-license-before-you-
+    /// -take-it pattern, ported from Hal/Posey (`ModelLicenseSheet` below).
+    @State private var modelForLicense: CameraModel?
     /// Recomputed on download completion — `isInstalled` reads the disk, which SwiftUI
     /// cannot observe. See `.onReceive` below.
     @State private var refreshToken = 0
@@ -54,7 +58,7 @@ struct ModelLibraryView: View {
                             isActive: isActive(model),
                             downloader: downloader,
                             onUse:      { use(model) },
-                            onDownload: { download(model) },
+                            onDownload: { requestDownload(model) },
                             onCancel:   { downloader.cancelDownload(modelID: model.id) },
                             onDelete:   { confirmingDelete = model }
                         )
@@ -105,6 +109,15 @@ struct ModelLibraryView: View {
                 Text(deleteMessage(for: model))
             }
         }
+        // Surface the model's license before the download begins. Hangs off the stable List,
+        // not a row (rows come and go with `refreshToken`, which would tear the sheet down).
+        .sheet(item: $modelForLicense) { model in
+            ModelLicenseSheet(
+                model: model,
+                onAccept: { modelForLicense = nil; download(model) },
+                onCancel: { modelForLicense = nil }
+            )
+        }
     }
 
     // MARK: - What the buttons do
@@ -128,6 +141,17 @@ struct ModelLibraryView: View {
         case ModelCatalog.apple.id: settings.seer = .apple
         case ModelCatalog.qwen.id:  settings.seer = .qwen
         default: break
+        }
+    }
+
+    /// Tapping Download doesn't download — it opens the license first. A model with no
+    /// license string (only the built-in, which is never downloaded anyway) would go
+    /// straight through, but in practice every downloadable model names its terms.
+    private func requestDownload(_ model: CameraModel) {
+        if model.licence == nil {
+            download(model)
+        } else {
+            modelForLicense = model
         }
     }
 
@@ -294,13 +318,27 @@ private struct ModelLibraryRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
-                if model.job == .seeing && !isActive {
-                    Button(action: onUse) { Label("Use", systemImage: "checkmark.circle") }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                // The Select / Active control, in Hal's language and style so the studio
+                // reads the same everywhere (Mark, 2026-07-18 — "same language everywhere
+                // possible so people don't have to figure anything out"). Seeing models are
+                // chosen here; a drawing model shows "Active" when it's drawing the third
+                // frame (its on/off lives in the hand's Preferences, nothing to select).
+                if model.job == .seeing {
+                    Button(action: onUse) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                            Text(isActive ? "Active" : "Select")
+                        }
+                        .foregroundColor(isActive ? .secondary : .accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isActive)
                 } else if isActive {
-                    Label("Loaded", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(.green)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Active")
+                    }
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if !model.isBuiltIn {
@@ -395,6 +433,89 @@ struct ModelStatusDot: View {
                 .accessibilityLabel(isActive ? "Downloaded and active" : "Downloaded")
         }
         // No dot when not downloaded.
+    }
+}
+
+// MARK: - The license, before you take it
+
+/// Shown before a model download begins — the studio's model-license surface, ported from
+/// Hal's `ModelLicenseSheet` (via Posey's `AskPoseyModelLicenseSheet`). It names the license,
+/// states the download size, and links to the full terms on Hugging Face, then asks the user
+/// to accept before anything is fetched.
+///
+/// Simpler than Posey's here for one honest reason: Thomas's `CameraModel.licence` is already
+/// a display-ready string (Principle 2 — "Stability AI Community License — free under $1M
+/// revenue", not a code), so there's no code-to-name switch to maintain. The important terms
+/// live in the catalog, next to the model.
+struct ModelLicenseSheet: View {
+    let model: CameraModel
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+
+    /// The model card / full terms on Hugging Face. `model.id` is the repo id for both
+    /// downloadable models (`stabilityai/sd-turbo`, and Qwen's repo).
+    private var licenseURL: URL? {
+        guard !model.isBuiltIn else { return nil }
+        return URL(string: "https://huggingface.co/\(model.id)")
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(model.licence ?? "License Agreement")
+                            .font(.title3).fontWeight(.bold)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("By downloading \(model.displayName), you agree to its license terms.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+
+                    if let gb = model.sizeGB {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("Download: \(String(format: "%.1f", gb)) GB")
+                                    .fontWeight(.semibold)
+                            }
+                            Text("Requires \(String(format: "%.1f", gb)) GB of storage and bandwidth. Wi-Fi recommended.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let url = licenseURL {
+                        Link(destination: url) {
+                            HStack {
+                                Image(systemName: "link")
+                                Text("View full license on Hugging Face")
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                            }
+                            .font(.subheadline)
+                        }
+                        .padding()
+                        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    VStack(spacing: 12) {
+                        Button(action: onAccept) {
+                            Text("Accept & Download")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button(action: onCancel) {
+                            Text("Cancel").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(model.displayName)
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 

@@ -311,6 +311,7 @@ struct PreferencesView: View {
                 sizeSection
                 layoutSection
                 resetSection
+                aboutSection
             }
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
             //
@@ -560,6 +561,22 @@ struct PreferencesView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The eye's system prompt, the temperature, the layout, and the drawing settings all go back to how the camera shipped. Your photographs are untouched.")
+        }
+    }
+
+    // MARK: - About
+
+    /// The studio's shared About screen (`AboutView`, LEGO 33). Pushed like the Model
+    /// Library — a sibling destination, not a modal — so the back-swipe is consistent.
+    /// Carries Thomas's identity and version, our own MIT license, and the licenses of
+    /// every open-source component that ships inside the binary.
+    private var aboutSection: some View {
+        Section {
+            NavigationLink {
+                AboutView.thomas
+            } label: {
+                Label("About Thomas", systemImage: "info.circle")
+            }
         }
     }
 

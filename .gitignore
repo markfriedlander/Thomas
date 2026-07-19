@@ -48,11 +48,12 @@ coreai-export/
 # ════════════════════════════════════════════════════════════════════════════════════
 .thomas-docs-git/
 
-# Process docs + this standard
+# Process docs + these standards
 CLAUDE.md
 HISTORY.md
 NEXT.md
 STUDIO_REPO_HYGIENE.md
+STUDIO_ABOUT_AND_LICENSES.md
 
 # Mark's unpublished writing — drafts/notes not ready for public (now versioned privately)
 Thomas_Article_DRAFT.md
