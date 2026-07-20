@@ -135,8 +135,9 @@ struct ModelLibraryView: View {
 
     private func use(_ model: CameraModel) {
         guard model.job == .seeing else { return }
-        // Settings.seer's didSet unloads the outgoing model — see AI_CameraApp. Choosing a
-        // new eye is the one moment a 1.6 GB model can be dropped without the user asking.
+        // Just records which eye the next press uses — no load/unload. Under the model-ownership
+        // rule (see `Settings.seer`), the dark room queue's worker owns all model loading; the
+        // live setting is only a recording template.
         switch model.id {
         case ModelCatalog.apple.id: settings.seer = .apple
         case ModelCatalog.qwen.id:  settings.seer = .qwen

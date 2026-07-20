@@ -61,12 +61,14 @@ struct CameraView: View {
 
     @State private var lens = Lens()
     @State private var place = Place()
-    @State private var developing = 0
-    @State private var lastFrame: UIImage?
     @State private var pickerItem: PhotosPickerItem?
     @State private var showPicker = false
-    /// Bumped each time a developed shot lands in Photos — drives the Photos glyph's pulse.
-    @State private var arrivals = 0
+
+    /// The dark room queue's worker. The shutter no longer develops inline — it enqueues and
+    /// returns instantly, and this develops in the background, surviving crash/background/call.
+    /// Observed here only so the toast and the Photos-glyph pulse can read the queue's depth and
+    /// completions; the capture screen knows nothing else about how it works.
+    @State private var worker = DarkRoomWorker.shared
 
     /// What the camera is loaded with. Read at the moment of the press and not before —
     /// but chosen in Preferences, never here. The capture screen stays sacred.
@@ -185,14 +187,14 @@ struct CameraView: View {
 
     /// See what came OUT — opens the Photos app to the shots you've developed. A *stack* of
     /// photos, deliberately different from the single-photo input glyph. It pulses when a shot
-    /// lands (`arrivals`), so you learn there's something new to see.
+    /// lands (`worker.arrivals`), so you learn there's something new to see.
     private var photosButton: some View {
         Button { openPhotos() } label: {
             Image(systemName: "photo.stack")
                 .font(.title3)
                 .foregroundStyle(.white.opacity(0.65))
                 .frame(width: 44, height: 44)
-                .symbolEffect(.bounce, value: arrivals)
+                .symbolEffect(.bounce, value: worker.arrivals)
         }
     }
 
@@ -259,10 +261,10 @@ struct CameraView: View {
     /// Not a result, not a preview — just the fact that the camera is busy behind you.
     @ViewBuilder
     private var developingIndicator: some View {
-        if developing > 0 {
+        if worker.developingCount > 0 {
             HStack(spacing: 7) {
                 ProgressView().tint(.white).scaleEffect(0.7)
-                Text(developing == 1 ? "Developing" : "Developing \(developing)")
+                Text(worker.developingCount == 1 ? "Developing" : "Developing \(worker.developingCount)")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.white.opacity(0.8))
             }
@@ -290,63 +292,43 @@ struct CameraView: View {
         await develop(cg.uprighted(orientation))
     }
 
-    /// Reality -> perception -> re-imagining -> Photos.
+    /// The shutter's whole job now: **freeze this shot and hand it to the dark room queue.**
     ///
-    /// **All three frames, in one press.** This is the whole thesis of the app, and until
-    /// 2026-07-16 two thirds of it were a document.
+    /// Reality → perception → re-imagining → Photos still happens — but it happens in the
+    /// worker (`DarkRoomWorker`), not here. This function only captures the reality frame to
+    /// durable disk, along with a frozen copy of every setting that shapes the result, then
+    /// returns instantly. That is the whole point:
     ///
-    /// Deliberately NOT blocking the shutter: press it again while this runs and you get a
-    /// second frame in the bath. Serialization is `ModelLane`'s job, not the user's problem —
-    /// they should be shooting, not waiting — and it is what keeps two shots' models from
-    /// running at once and jetsamming the app.
+    /// ⭐ THE INVARIANT (Mark, 2026-07-19): *once the shutter fires, nothing you shot is lost
+    /// until it is safely in Photos.* The moment `enqueue` returns, the shot survives a crash, a
+    /// background, a phone call, a thermal backoff, a memory kill — because it is on disk, and
+    /// the worker re-develops anything it finds there. A shot's only exit is a successful save.
+    ///
+    /// The old inline pipeline (see → draw → composite → save, all through `ModelLane`) moved
+    /// wholesale into the worker; the serialization and never-two-heavy-ops-at-once guarantee it
+    /// gave are unchanged, because the worker runs through the very same lane.
     private func develop(_ photograph: CGImage) async {
-        developing += 1
-        defer { developing -= 1 }
+        let config = ShotConfig.capture()
 
-        // The whole heavy pipeline of one shot — frame 2 (see) then frame 3 (draw) — runs in
-        // the ModelLane: **one shot at a time across the entire app, each torn down and the
-        // phone let to settle before the next.**
-        //
-        // ⭐ Mark's rule, 2026-07-16: *"we should be drawing one at a time in sequence...
-        // one operation has its own world and all its resources from scratch."* The shutter
-        // is fire-and-forget by design (press again, keep shooting), which is exactly what
-        // crashed it: a second press ran a second 2.7 GB draw on top of the first and iOS
-        // jetsammed the app (measured, signal 9). Now a second press just queues another shot
-        // behind this one. The lane returns only Sendable values; the cheap work — the
-        // compositor and the save — stays out here on the main actor.
-        // Frame 2 (see) then frame 3 (draw) — the shared pipeline, so the antenna's /shoot
-        // measures exactly this. See `Shot`.
-        let seer = settings.seer
-        let drawThird = settings.drawsThirdFrame
-        let result: (perception: Perception, drawn: UIImage?, wordsForHand: String) =
-            await ModelLane.shared.run("shot") { @MainActor in
-                await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
-            }
+        // Encode the reality frame losslessly (PNG) and freeze the shot to disk together with its
+        // config and its capture context — the place and (via the record) the moment it was taken,
+        // so its footer testifies to reality even if it develops hours later.
+        guard let photoData = ShotPhoto.encode(photograph) else {
+            cameraLog("SHUTTER: could not encode the captured frame — shot dropped")
+            return
+        }
+        do {
+            _ = try await DarkRoomStore.shared.enqueue(photoData: photoData,
+                                                       config: config,
+                                                       place: place.name)
+        } catch {
+            cameraLog("SHUTTER: could not enqueue the shot — \(error.localizedDescription)")
+            return
+        }
 
-        // Which words go on frame 2: the eye's full perception, or the (possibly condensed)
-        // version the hand actually drew from. Default is the airtight chain. They're identical
-        // unless the description was long enough to condense. See `FrameTwoWords`.
-        let frameTwoWords = settings.frameTwoShows == .fullPerception
-            ? result.perception.wireText
-            : result.wordsForHand
-
-        // One date for the whole shot, so every frame's footer stamps the same moment.
-        let now = Date()
-
-        // A shot yields one frame — or two, for "Separate images", or three appended, or a
-        // single stitched triptych. The drawing goes INTO develop now; it decides (append the
-        // framed drawing, or stitch all three). See `Darkroom.develop`.
-        let frames = Darkroom.develop(photograph: photograph,
-                                      words: frameTwoWords,
-                                      drawing: result.drawn?.cgImage,
-                                      place: place.name,
-                                      layout: settings.layout,
-                                      date: now)
-
-        lastFrame = frames.last
-        await Shot.save(frames)
-        // A shot just landed in Photos — pulse the Photos glyph so the eye is drawn to it.
-        arrivals += 1
+        // Wake the worker. Idempotent: if it's already developing, this does nothing and the shot
+        // we just wrote is picked up in FIFO order.
+        worker.kick()
     }
 }
 
@@ -361,7 +343,7 @@ struct CameraView: View {
 /// is obedient but nearly blind and has a filter that stops images at the door; Qwen sees
 /// far more, has no filter at all, and largely ignores the system prompt. Preferences
 /// will let you load either. Neither is "better" — that's not ours to say (Principle 3).
-enum Seer: String, CaseIterable, Hashable, Sendable {
+nonisolated enum Seer: String, CaseIterable, Hashable, Sendable {
     case apple
     case qwen
 
@@ -385,17 +367,18 @@ enum Seer: String, CaseIterable, Hashable, Sendable {
     /// The prompt and temperature come from Settings, so both eyes are handed exactly the
     /// same instructions — the only variable is the machine.
     @MainActor
-    func look(at image: CGImage) async -> Perception {
+    func look(at image: CGImage, systemPrompt: String, temperature: Double) async -> Perception {
         switch self {
         case .apple:
             // Retry-on-block: the filter never saw the picture, so there's no perception
             // to respect — only a bouncer to get past. See `lookWithRetry`.
-            let eye = Settings.shared.eye
+            var eye = Eye.plain
+            eye.systemPrompt = systemPrompt
+            eye.temperature = temperature
             return await eye.lookWithRetry(at: image).best
         case .qwen:
             // No retry: there is no filter to get past.
-            let qwen = Settings.shared.qwen
-            return await qwen.look(at: image)
+            return await Qwen(systemPrompt: systemPrompt, temperature: temperature).look(at: image)
         }
     }
 
@@ -404,10 +387,15 @@ enum Seer: String, CaseIterable, Hashable, Sendable {
     /// who condenses"*). Its own compression instruction, so the user's Layer 2 doesn't apply
     /// here. Returns nil on failure; `Shot` then hands the full words on under the hard cap.
     @MainActor
-    func condense(_ text: String, toAtMostWords maxWords: Int) async -> String? {
+    func condense(_ text: String, toAtMostWords maxWords: Int, systemPrompt: String, temperature: Double) async -> String? {
         switch self {
-        case .apple: return await Settings.shared.eye.condense(text, toAtMostWords: maxWords)
-        case .qwen:  return await Settings.shared.qwen.condense(text, toAtMostWords: maxWords)
+        case .apple:
+            var eye = Eye.plain
+            eye.systemPrompt = systemPrompt
+            eye.temperature = temperature
+            return await eye.condense(text, toAtMostWords: maxWords)
+        case .qwen:
+            return await Qwen(systemPrompt: systemPrompt, temperature: temperature).condense(text, toAtMostWords: maxWords)
         }
     }
 }

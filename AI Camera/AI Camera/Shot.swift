@@ -34,16 +34,27 @@ enum Shot {
     ///
     /// Shared so the live shutter (`CameraView.develop`) and a remote press (`POST /press`)
     /// save the same way — a remote press is a real press and lands in Photos like one.
-    static func save(_ images: [UIImage]) async {
-        guard !images.isEmpty else { return }
+    ///
+    /// - Returns: `true` only if the assets actually landed in Photos. The dark room queue leans
+    ///   on this: a shot is deleted from the durable store ONLY when this returns `true`, so a
+    ///   denied permission or a failed write leaves the shot on disk to retry rather than lost.
+    @discardableResult
+    static func save(_ images: [UIImage]) async -> Bool {
+        guard !images.isEmpty else { return false }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { return }
-        try? await PHPhotoLibrary.shared().performChanges {
-            // One change block so the pair (photo + words, for "Separate images") lands
-            // together, in order.
-            for image in images {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
+        guard status == .authorized || status == .limited else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                // One change block so the pair (photo + words, for "Separate images") lands
+                // together, in order.
+                for image in images {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
             }
+            return true
+        } catch {
+            cameraLog("SAVE: Photos write failed — \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -71,19 +82,22 @@ enum Shot {
     ///   hand was drawn from. That equals the full perception unless it had to be condensed to
     ///   fit the drawer; the caller uses it to honor `Settings.frameTwoShows` (show the chain
     ///   the hand actually received, or the eye's full words).
+    /// Develops from a FROZEN `ShotConfig` — the settings captured at shutter-press — not from
+    /// live `Settings`. That is the dark room queue's rule: a shot develops as it was configured
+    /// when taken, however the user changes settings afterward.
     static func seeThenDraw(_ photograph: CGImage,
-                            seer: Seer,
-                            drawThird: Bool,
-                            sizeOverride: DrawingSize? = nil,
-                            methodOverride: UpscaleMethod? = nil) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
+                            config: ShotConfig) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
+        let seer = config.seer
         // ── Frame 2. The eye reads the world and says what it sees. ──
-        let perception = await seer.look(at: photograph)
+        let perception = await seer.look(at: photograph,
+                                         systemPrompt: config.systemPrompt,
+                                         temperature: config.temperature)
 
         // The full perception — always what frame 2 shows by default, and the fallback for
         // `wordsForHand` in every early return below.
         let fullWords = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard drawThird else { return (perception, nil, fullWords) }
+        guard config.drawsThirdFrame else { return (perception, nil, fullWords) }
 
         // The hand draws from words. If the machine produced none — a filter blocked the
         // image, or the model declined — there is nothing to draw FROM. That outcome is
@@ -101,7 +115,8 @@ enum Shot {
         // hard cap catch them — the belt stays buckled, we just try not to need it.
         var wordsForHand = fullWords
         if PromptBudget.exceedsDrawerBudget(fullWords),
-           let shorter = await seer.condense(fullWords, toAtMostWords: PromptBudget.condenseTargetWords) {
+           let shorter = await seer.condense(fullWords, toAtMostWords: PromptBudget.condenseTargetWords,
+                                             systemPrompt: config.systemPrompt, temperature: config.temperature) {
             cameraLog("CONDENSE: \(PromptBudget.wordCount(fullWords)) words → \(PromptBudget.wordCount(shorter)) for the hand")
             wordsForHand = shorter
         }
@@ -116,10 +131,10 @@ enum Shot {
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
 
-        // How big to save it, with which upscaler, and which developer. Read here on the main actor.
-        let size = sizeOverride ?? Settings.shared.drawingSize
-        let method = methodOverride ?? Settings.shared.upscaler
-        let decoderPreference = Settings.shared.decoderChoice
+        // How big to save it, with which upscaler, and which developer — from the frozen config.
+        let size = config.drawingSize
+        let method = config.upscaler
+        let decoderPreference = config.decoderChoice
 
         // ── Frame 3. The hand draws what the eye said. ──
         do {

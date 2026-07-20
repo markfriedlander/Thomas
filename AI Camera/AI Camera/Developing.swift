@@ -33,7 +33,7 @@ import UIKit
 /// Deliberately a **small, tested set** — not a freeform editor (CLAUDE.md, "The visual
 /// language"). Every option here is a property of the loaded film, chosen before the
 /// shutter, never per-shot.
-enum Layout: String, CaseIterable, Sendable {
+nonisolated enum Layout: String, CaseIterable, Sendable {
     /// The machine's words laid ON the world it's describing. Heavy sans over the image,
     /// no scrim, no box — the claim and the evidence in the same rectangle.
     case superimposed

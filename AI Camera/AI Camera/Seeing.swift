@@ -44,6 +44,25 @@ nonisolated enum Perception: Sendable {
     case broke(reason: String)
 }
 
+extension Perception {
+    /// The words this perception produced — whatever the machine actually said, whichever way it
+    /// said it. This is core app machinery, not a wire format: it is the text that goes onto frame
+    /// 2 and is handed to the drawer (`Shot.seeThenDraw`, `DarkRoomWorker`). It once lived in the
+    /// antenna file beside `wireName`; it moved here 2026-07-20 so the shipping app compiles.
+    ///
+    /// `nonisolated` — a pure switch over a nonisolated enum, read from off-main contexts (the
+    /// `ModelLane` closure). Per Principle 3, a refusal or a block is content: its explanation is
+    /// returned as the text, not swallowed as an error.
+    nonisolated var wireText: String {
+        switch self {
+        case .spoke(let text, _):          return text
+        case .refused(let explanation):    return explanation
+        case .blocked(let explanation, _): return explanation
+        case .broke(let reason):           return reason
+        }
+    }
+}
+
 /// One shutter press worth of seeing.
 ///
 /// Mark's design (2026-07-14): try the default guardrails first, and **only** if the

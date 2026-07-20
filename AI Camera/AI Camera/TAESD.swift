@@ -209,11 +209,11 @@ extension TAESDDecoder {
     /// The bundled weights' resource name. The 4.9 MB file rides inside the app (Resources/), MIT
     /// licensed, so the fast/fallback decoder is always available — no download, even offline, even
     /// when a device is too tight to afford the full-VAE decode.
-    static let bundledResourceName = "taesd_decoder"
+    nonisolated static let bundledResourceName = "taesd_decoder"
 
     /// Load a fresh TAESD decoder from the app-bundled weights. Cheap enough (4.9 MB) to load
     /// per-draw and drop after, honoring Mark's *"no overhead from one frame into the next."*
-    static func bundled() throws -> TAESDDecoder {
+    nonisolated static func bundled() throws -> TAESDDecoder {
         guard
             let url = Bundle.main.url(
                 forResource: bundledResourceName, withExtension: "safetensors")

@@ -78,27 +78,18 @@ nonisolated enum DecoderChoice: String, CaseIterable, Sendable {
 final class Settings {
     static let shared = Settings()
 
-    /// Which eye is loaded.
+    /// Which eye the NEXT shutter-press will record. Purely a recording template now.
     ///
-    /// Switching away from Qwen **unloads it**. Mark's instruction (2026-07-15): the model
-    /// should go "when the app is in the background or is about to switch to a different
-    /// model." Without this, choosing Apple in Preferences left 1.75 GB of Qwen resident
-    /// and unreachable for the rest of the session — paying the full memory price of a
-    /// model the camera had stopped using. The teardown is real (GPU drain, cache clear);
-    /// see `QwenLoader.unload()`.
+    /// ⭐ Model-ownership rule (Mark, 2026-07-19): the live settings do NOT load or unload any
+    /// model. **The dark room queue's worker is the sole owner of model loading** — it loads
+    /// whatever each shot's *frozen* config names, and tears it down between shots. Changing the
+    /// eye here only changes what the next press records; it must never yank a model the worker is
+    /// mid-use of. So this setter just stores the choice — no `unload()`.
     ///
-    /// Fire-and-forget because `unload()` is actor-isolated and a setter can't await. The
-    /// ordering is safe either way: a look already in flight holds its own container
-    /// reference, and the next look re-loads through `container()`, which is the same path
-    /// a cold start takes.
+    /// (This also kills a latent bug: switching your eye mid-session can no longer pull a 1.6 GB
+    /// model out from under a shot the worker is actively developing.)
     var seer: Seer {
-        didSet {
-            store(seer.rawValue, "seer")
-            if oldValue == .qwen && seer != .qwen {
-                cameraLog("MEMORY: seer \(oldValue.rawValue) → \(seer.rawValue) — unloading the eye we just left")
-                Task { await QwenLoader.shared.unload() }
-            }
-        }
+        didSet { store(seer.rawValue, "seer") }
     }
     var layout: Layout {
         didSet { store(layout.rawValue, "layout") }

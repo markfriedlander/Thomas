@@ -27,9 +27,11 @@
 //    7  PerceptionView (Showing What The Machine Did)
 //    8  The Orientation Trap
 //
+//  ModelLane.swift
+//    9  The Model Lane (Serialization + Settle)
+//
 //  Services/LocalAPI/LocalAPIServer.swift
-//    9  The Antenna (Class, Token, Address)
-//   10  The Model Lane (Serialization + Settle)
+//   10  The Antenna (Class, Token, Address)
 //   11  HTTP Plumbing (Parse, Respond)
 //   12  Routes (Dispatch)
 //
@@ -83,6 +85,12 @@
 //
 //  About.swift
 //   33  About (Who Made This, And On Whose Shoulders)
+//
+//  ThermalGovernor.swift
+//   34  ThermalGovernor (Backing Off When The Phone Runs Hot)
+//
+//  DarkRoomQueue.swift
+//   35  The Dark Room Queue (Durable Developing)
 //
 //  Created by Mark Friedlander on 7/14/26.
 //
@@ -155,14 +163,26 @@ struct AI_CameraApp: App {
             CameraView()
         }
         .onChange(of: scenePhase) { _, phase in
-            // `.background` only — NOT `.inactive`. Inactive fires for a pulled-down
-            // notification shade, a control-centre swipe, or an incoming call banner;
-            // unloading on those would tear down 1.75 GB because someone glanced at the
-            // time, then reload it a second later. Hal makes exactly this distinction and
-            // says so in its own lifecycle comment.
-            guard phase == .background else { return }
-            cameraLog("MEMORY: app entered background — unloading the eye to reduce jetsam pressure")
-            Task { await QwenLoader.shared.unload() }
+            switch phase {
+            case .active:
+                // ⭐ RESUME — the whole crash/background/call/thermal recovery story in one line.
+                // `.active` fires on cold launch AND on every return to the foreground, so any
+                // shot left undeveloped on disk (a crash mid-develop, a kill while backgrounded)
+                // is picked up the moment the app is alive again. `kick()` is idempotent: if the
+                // worker is already developing, this does nothing. App-level, so there is no view
+                // it can be orphaned from.
+                DarkRoomWorker.shared.kick()
+            case .background:
+                // `.background` only — NOT `.inactive`. Inactive fires for a pulled-down
+                // notification shade, a control-centre swipe, or an incoming call banner;
+                // unloading on those would tear down 1.75 GB because someone glanced at the
+                // time, then reload it a second later. Hal makes exactly this distinction and
+                // says so in its own lifecycle comment.
+                cameraLog("MEMORY: app entered background — unloading the eye to reduce jetsam pressure")
+                Task { await QwenLoader.shared.unload() }
+            default:
+                break
+            }
         }
     }
 }

@@ -43,7 +43,7 @@ import UIKit              // UIImage.cgImage — /shoot returns the drawn frame'
 // same way.
 #if DEBUG
 
-// ==== LEGO START: 9 The Antenna (Class, Token, Address) ====
+// ==== LEGO START: 10 The Antenna (Class, Token, Address) ====
 
 /// Local HTTP API server — lets Claude Code drive the camera directly over WiFi.
 /// Default OFF; toggled from the main screen.
@@ -171,100 +171,7 @@ final class LocalAPIServer {
     }
 }
 
-// ==== LEGO END: 9 The Antenna (Class, Token, Address) ====
-
-// ==== LEGO START: 10 The Model Lane (Serialization + Settle) ====
-
-/// The single lane every heavy model operation passes through, one at a time, with the
-/// phone let to settle between each.
-///
-/// ⚠️ This exists instead of a note telling you to pace your calls.
-///
-/// **Mark's rule, 2026-07-16, and it is the whole design of this file:** *"we should be
-/// drawing one at a time in sequence. We should also be building and tearing down the drawer
-/// each time. Give it time to settle between as well just the same way we move between frames
-/// or if you look at Hal between prompts. This is how we make sure that one operation has its
-/// own world and all its resources from scratch."*
-///
-/// It started life as `LookQueue`, serializing only AFM looks (the Foundation Models SDK has
-/// a `concurrentRequests` error — AFM rejects overlapping sessions outright). **That was not
-/// enough, and the gap crashed the app.** Measured 2026-07-16: two draws fired at once, or a
-/// draw started while the eye was still resident, jetsams the process (signal 9) — a
-/// 2.7 GB diffusion load has no room to run twice. Looks were serialized; **draws were not**,
-/// and neither the shutter's own looks nor either engine's draws shared a lane. So this is
-/// now the lane for *everything* heavy: every look and every draw, from the shutter and from
-/// the antenna alike.
-///
-/// Two guarantees:
-///   1. **One at a time.** FIFO. A second caller queues behind the first rather than racing
-///      it. The actor only protects `tail`; the serialization is the task chaining. (A bare
-///      `actor` would NOT do this — actors are re-entrant across `await` and would let a
-///      second op start mid-suspension, which is exactly the bug.)
-///   2. **Settle between.** After each op finishes, drain the GPU, clear MLX's cache, and
-///      **poll until iOS has actually reclaimed the memory** before the next op starts. Not
-///      a guessed sleep — the same measured wait Hal does between model swaps
-///      (`waitForMemoryHeadroom`). Every op therefore begins in a clean world: whatever ran
-///      before it is not merely released but *reclaimed*.
-actor ModelLane {
-    static let shared = ModelLane()
-
-    /// Completes when everything enqueued so far has finished (including its settle).
-    private var tail: Task<Void, Never> = Task {}
-
-    /// Run `work` once every previously-enqueued item has finished, then settle before the
-    /// lane is handed to the next caller. FIFO.
-    ///
-    /// - Parameter label: names the op in the log, so the sequence reads as a story —
-    ///   `look` … `settle` … `draw` … `settle` — rather than anonymous waits.
-    func run<T: Sendable>(_ label: String, _ work: @Sendable @escaping () async -> T) async -> T {
-        let previous = tail
-        let mine = Task<T, Never> {
-            await previous.value
-            let result = await work()
-            // The settle is part of the op, not a courtesy after it: the next caller must
-            // not begin until this one's world is not just dropped but reclaimed.
-            await Self.settle(after: label)
-            return result
-        }
-        // Update the tail synchronously, before any suspension, so a second caller entering
-        // `run` queues behind `mine` (and its settle) rather than racing it.
-        tail = Task { _ = await mine.value }
-        return await mine.value
-    }
-
-    /// Let the phone settle: drain GPU work, release MLX's cache, and wait for iOS to give
-    /// the memory back, so the next operation starts from scratch.
-    ///
-    /// iOS reclaims Mach VM lazily. Measured 2026-07-16, the reclaim is usually fast (a Qwen
-    /// teardown returned ~1.6 GB in 79 ms) — but *usually* is not *always*, and the whole
-    /// point of settling is that the next 2.7 GB load never races a reclaim that hasn't
-    /// finished. So this polls until availability plateaus (two reads within 50 MB) rather
-    /// than trusting a fixed delay. Bounded, because a settle that never ends is worse than a
-    /// settle that's a little early.
-    private static func settle(after label: String) async {
-        MLX.Stream.gpu.synchronize()
-        MLX.Memory.clearCache()
-        let start = Date()
-        let deadline = start.addingTimeInterval(2.0)
-        var last = processAvailableMemoryMB()
-        var plateaus = 0
-        while Date() < deadline {
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            let now = processAvailableMemoryMB()
-            // A plateau: the reclaim has stopped climbing. Two in a row = settled.
-            if abs(now - last) < 50 {
-                plateaus += 1
-                if plateaus >= 2 { break }
-            } else {
-                plateaus = 0
-            }
-            last = now
-        }
-        cameraLog("LANE: settled after \(label) — availableMB=\(formatMB(processAvailableMemoryMB())) in \(String(format: "%.2f", Date().timeIntervalSince(start)))s")
-    }
-}
-
-// ==== LEGO END: 10 The Model Lane (Serialization + Settle) ====
+// ==== LEGO END: 10 The Antenna (Class, Token, Address) ====
 
 // ==== LEGO START: 11 HTTP Plumbing (Parse, Respond) ====
 
@@ -394,7 +301,8 @@ extension LocalAPIServer {
         case ("GET",  "/models"): return handleModels()
         case ("GET",  "/rotation"): return handleRotation()
         case ("GET",  "/memory"): return await handleMemory()
-        case ("GET",  "/thermal"): return handleThermal()
+        case ("GET",  "/thermal"): return await handleThermal()
+        case ("POST", "/thermal"): return await handleSetThermal(req)
         case ("POST", "/unload"): return await handleUnload()
         case ("GET",  "/disk"):      return handleDisk()
         case ("GET",  "/repo"):      return await handleRepo(req)
@@ -404,6 +312,10 @@ extension LocalAPIServer {
         case ("POST", "/draw"):      return await handleDraw(req)
         case ("POST", "/shoot"):     return await handleShoot(req)
         case ("POST", "/press"):     return await handlePress(req)
+        // ── The dark room queue: enqueue a real shot, inspect it, drive it. ──
+        case ("POST", "/capture"):   return await handleCapture(req)
+        case ("GET",  "/darkroom"):  return await handleDarkroom()
+        case ("POST", "/darkroom"):  return await handleDarkroomAction(req)
         // ── Driving the app the way a human does: configuration + the two gestures. ──
         case ("GET",  "/settings"):        return await handleGetSettings()
         case ("POST", "/settings"):        return await handleSetSettings(req)
@@ -446,8 +358,13 @@ extension LocalAPIServer {
             return (200, json(["pressed": false, "error": "The lens returned no frame."]))
         }
 
-        let seer = await MainActor.run { Settings.shared.seer }
         let drawThird = (req.headers["x-draw"] ?? "true") != "false"
+        // A /press is a real press: freeze the live config, honoring the x-draw header override.
+        let config = await MainActor.run { () -> ShotConfig in
+            var c = ShotConfig.capture()
+            c.drawsThirdFrame = drawThird
+            return c
+        }
         // Optional layout override, so a session can exercise every layout without reaching
         // the app's UI — the raw case name, e.g. `X-Layout: separate`. Absent → whatever the
         // app is set to.
@@ -475,7 +392,7 @@ extension LocalAPIServer {
             let drawn: CGImage?
         }
         let raw = await ModelLane.shared.run("press") { () -> PressRaw in
-            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird)
+            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, config: config)
             return PressRaw(words: perception.wireText,
                             wordsToHand: wordsForHand,
                             outcome: perception.wireName,
@@ -506,7 +423,7 @@ extension LocalAPIServer {
         let payload: [String: Any] = [
             "pressed":           true,
             "savedToPhotos":     true,
-            "seer":              seer == .qwen ? "qwen" : "afm",
+            "seer":              config.seer == .qwen ? "qwen" : "afm",
             "layout":            layoutName,
             "drewThirdFrame":    raw.drawn != nil,
             // ⭐ The count that answers the "separate images" bug: how many assets landed.
@@ -526,6 +443,108 @@ extension LocalAPIServer {
             "log":               MemoryLog.shared.recent(60)
         ]
         return (200, json(payload))
+    }
+
+    // MARK: - The dark room queue (drive + inspect the real shutter path)
+
+    /// POST /capture — press the shutter **the way the app now does it**: freeze the config,
+    /// encode the live frame, enqueue it to the dark room queue, and return *instantly*. Unlike
+    /// `/press` (a synchronous measurement that develops inline and hands frames back), this is the
+    /// faithful shutter — it exercises the durable queue + worker, which is what `/press` no longer
+    /// does. Develops in the background; watch it with `GET /darkroom` and it lands in Photos.
+    ///
+    /// Headers: `X-Draw: false` (skip frame 3), `X-Layout: <case>` (override layout), and
+    /// `X-Hold: true` — enqueue WITHOUT kicking the worker, so the shot sits on disk. That is the
+    /// resume test: hold a few, kill+relaunch the app, and confirm `.active` resume develops them.
+    private func handleCapture(_ req: ParsedRequest) async -> (Int, String) {
+        let lens = await MainActor.run { Lens.current }
+        guard let lens else {
+            return (200, json(["captured": false,
+                               "error": "No live lens. Foreground the app with the camera on screen."]))
+        }
+        guard let photograph = await lens.capture() else {
+            return (200, json(["captured": false, "error": "The lens returned no frame."]))
+        }
+
+        let drawThird = (req.headers["x-draw"] ?? "true") != "false"
+        let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
+        let hold = (req.headers["x-hold"] ?? "false") == "true"
+
+        // Freeze the config exactly as the shutter does, honoring the overrides.
+        let config = await MainActor.run { () -> ShotConfig in
+            var c = ShotConfig.capture()
+            c.drawsThirdFrame = drawThird
+            if let layoutOverride { c.layout = layoutOverride }
+            return c
+        }
+        let place = await MainActor.run { Place.current?.name }
+
+        guard let photoData = ShotPhoto.encode(photograph) else {
+            return (200, json(["captured": false, "error": "Could not encode the captured frame."]))
+        }
+        let record: ShotRecord
+        do {
+            record = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place)
+        } catch {
+            return (200, json(["captured": false, "error": "Enqueue failed: \(error.localizedDescription)"]))
+        }
+
+        // Kick unless holding for a resume test.
+        if !hold { await MainActor.run { DarkRoomWorker.shared.kick() } }
+
+        let pending = await DarkRoomStore.shared.pending().count
+        return (200, json([
+            "captured":     true,
+            "held":         hold,
+            "id":           record.id.uuidString,
+            "seer":         config.seer == .qwen ? "qwen" : "afm",
+            "drawsThird":   config.drawsThirdFrame,
+            "layout":       config.layout.name,
+            "place":        place as Any,
+            "pendingCount": pending
+        ]))
+    }
+
+    /// GET /darkroom — inspect the queue: how many shots are in the bath, the worker's live count,
+    /// and each pending shot (id, status, when it was taken, and the parts of its frozen config).
+    private func handleDarkroom() async -> (Int, String) {
+        let pending = await DarkRoomStore.shared.pending()
+        let developing = await MainActor.run { DarkRoomWorker.shared.developingCount }
+        let iso = ISO8601DateFormatter()
+        let shots: [[String: Any]] = pending.map { r in
+            [
+                "id":         r.id.uuidString,
+                "status":     r.status.rawValue,
+                "capturedAt": iso.string(from: r.capturedAt),
+                "seer":       r.config.seer == .qwen ? "qwen" : "afm",
+                "drawsThird": r.config.drawsThirdFrame,
+                "layout":     r.config.layout.name,
+                "place":      r.place as Any
+            ]
+        }
+        return (200, json([
+            "pendingCount":    pending.count,
+            "developingCount": developing,
+            "shots":           shots
+        ]))
+    }
+
+    /// POST /darkroom — drive the queue for testing. `X-Action: kick` wakes the worker (resume a
+    /// held queue without a relaunch); `X-Action: purge` removes every pending shot (test hygiene —
+    /// clears the queue between runs; this is the eventual Phase-2 "purge", permanent deletion).
+    private func handleDarkroomAction(_ req: ParsedRequest) async -> (Int, String) {
+        let action = req.headers["x-action"] ?? ""
+        switch action {
+        case "kick":
+            await MainActor.run { DarkRoomWorker.shared.kick() }
+            return (200, json(["action": "kick", "ok": true]))
+        case "purge":
+            let pending = await DarkRoomStore.shared.pending()
+            for r in pending { await DarkRoomStore.shared.remove(r) }
+            return (200, json(["action": "purge", "ok": true, "removed": pending.count]))
+        default:
+            return (200, json(["ok": false, "error": "Unknown action. Use X-Action: kick | purge."]))
+        }
     }
 
     // MARK: - Driving the app the way a human does (config + the two gestures)
@@ -718,9 +737,18 @@ extension LocalAPIServer {
         // eye's words, clean. See Shot / Settings.)
         let sizeOverride = req.headers["x-size"].flatMap { DrawingSize(rawValue: $0) }
         let methodOverride = req.headers["x-upscaler"].flatMap { UpscaleMethod(rawValue: $0) }
+        // Freeze the config for this measurement, applying the test's header overrides.
+        let config = await MainActor.run { () -> ShotConfig in
+            var c = ShotConfig.capture()
+            c.seer = seer
+            c.drawsThirdFrame = drawThird
+            if let s = sizeOverride { c.drawingSize = s }
+            if let m = methodOverride { c.upscaler = m }
+            return c
+        }
         struct ShotOut: Sendable { let words: String; let wordsToHand: String; let outcome: String; let drawn: CGImage? }
         let out = await ModelLane.shared.run("shoot") { () -> ShotOut in
-            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, seer: seer, drawThird: drawThird, sizeOverride: sizeOverride, methodOverride: methodOverride)
+            let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, config: config)
             let fullWords = perception.wireText
             // Build the composited frames, so this holds the same memory a real shot holds
             // while everything is still warm — reality's receipt, the words over the world.
@@ -1278,10 +1306,35 @@ extension LocalAPIServer {
     /// /memory during a warm session and the two curves together say whether heat and jetsam
     /// compounded. Read-only for now — the thermal-aware draw governor (Posey's `ThermalGovernor`
     /// pattern) is the intended next step, and it will want a DEBUG setter here to force a state.
-    private func handleThermal() -> (Int, String) {
+    private func handleThermal() async -> (Int, String) {
+        let acting = await ThermalGovernor.shared.snapshot()
         return (200, json([
-            "thermal": thermalStateLabel(),
-            "scale":   "nominal | fair | serious | critical (iOS ProcessInfo.thermalState)"
+            "os":     thermalStateLabel(),           // the real OS reading
+            "acting": thermalStateLabel(acting),     // what the governor acts on (respects injection)
+            "scale":  "nominal | fair | serious | critical (iOS ProcessInfo.thermalState)"
+        ]))
+    }
+
+    /// POST /thermal — DEBUG: force the governor's thermal state so the backoff can be
+    /// verified without cooking the phone. `X-State: nominal|fair|serious|critical|clear`.
+    /// The guard reads the injected state on the next shot, so a forced `critical` makes the
+    /// lane hold, and `clear` (or `nominal`) releases it — all drivable without a cable.
+    private func handleSetThermal(_ req: ParsedRequest) async -> (Int, String) {
+        let raw = (req.headers["x-state"] ?? "clear").lowercased()
+        let injected: ProcessInfo.ThermalState?
+        switch raw {
+        case "nominal":  injected = .nominal
+        case "fair":     injected = .fair
+        case "serious":  injected = .serious
+        case "critical": injected = .critical
+        case "clear":    injected = nil
+        default:
+            return (400, #"{"error":"X-State must be nominal|fair|serious|critical|clear"}"#)
+        }
+        await ThermalGovernor.shared.setDebugThermalState(injected)
+        return (200, json([
+            "set":    raw,
+            "acting": thermalStateLabel(await ThermalGovernor.shared.snapshot())
         ]))
     }
 
@@ -1526,23 +1579,16 @@ extension LocalAPIServer {
 // a harness can count them as findings rather than throw them away as failures.
 
 extension Perception {
-    // `nonisolated` (both) — pure switches over a nonisolated enum, read from off-main
-    // contexts like the ModelLane closure in /shoot. Without it the project's default
-    // MainActor isolation makes them main-only and every off-main read warns.
+    // `nonisolated` — a pure switch over a nonisolated enum, read from off-main contexts. This is
+    // a genuine wire-contract string (a harness parses "spoke"/"refused"/…), so it stays here in
+    // the doorway. Its sibling `wireText` — the actual words a perception produced — was core app
+    // machinery, not a wire format, and moved onto `Perception` in Seeing.swift (2026-07-20).
     nonisolated var wireName: String {
         switch self {
         case .spoke:   return "spoke"
         case .refused: return "refused"
         case .blocked: return "blocked"
         case .broke:   return "broke"
-        }
-    }
-    nonisolated var wireText: String {
-        switch self {
-        case .spoke(let text, _):          return text
-        case .refused(let explanation):    return explanation
-        case .blocked(let explanation, _): return explanation
-        case .broke(let reason):           return reason
         }
     }
 }
