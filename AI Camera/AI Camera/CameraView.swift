@@ -257,20 +257,26 @@ struct CameraView: View {
         }
     }
 
-    /// The only feedback the capture screen gives: how many frames are still in the bath.
-    /// Not a result, not a preview — just the fact that the camera is busy behind you.
+    /// The only feedback the capture screen gives: how many frames are still in the bath — and,
+    /// when the queue is paused to let the phone cool, that it's paused (not stuck). Not a result,
+    /// not a preview — just what the camera is doing behind you.
     @ViewBuilder
     private var developingIndicator: some View {
         if worker.developingCount > 0 {
             HStack(spacing: 7) {
                 ProgressView().tint(.white).scaleEffect(0.7)
-                Text(worker.developingCount == 1 ? "Developing" : "Developing \(worker.developingCount)")
+                Text(toastLabel)
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.white.opacity(0.8))
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(.black.opacity(0.35), in: Capsule())
         }
+    }
+
+    private var toastLabel: String {
+        if worker.isCoolingDown { return "Cooling down…" }
+        return worker.developingCount == 1 ? "Developing" : "Developing \(worker.developingCount)"
     }
 
     // MARK: - Pressing it

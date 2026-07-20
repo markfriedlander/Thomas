@@ -239,6 +239,11 @@ final class DarkRoomWorker {
     /// Photos glyph. A counter, not a bool, because the pulse triggers on the *change*.
     private(set) var arrivals: Int = 0
 
+    /// True while the worker is holding a shot because the phone is too hot to develop — so the
+    /// toast can say "Cooling down…" instead of "Developing," and the user understands the pause
+    /// (nothing is lost; it resumes when the phone cools). Distinct from `developingCount`.
+    private(set) var isCoolingDown: Bool = false
+
     private var running = false
     /// Set by every `kick()`, cleared at the top of each drain pass. It closes a wakeup race:
     /// a shot enqueued during the loop's final (empty) `pending()` read would otherwise find
@@ -253,9 +258,19 @@ final class DarkRoomWorker {
     /// over-call (after every enqueue, on every foreground activation).
     func kick() {
         dirty = true
+        refreshCount()
         guard !running else { return }
         running = true
         Task { await loop() }
+    }
+
+    /// Immediately reflect the true queue depth in `developingCount`. The loop only refreshes the
+    /// count between shots (at its top), so a shot enqueued *while the worker is mid-develop or
+    /// holding to cool* wouldn't show until the current shot finished — the count would under-report
+    /// (measured: 3 queued read as "developing 1"). Called on every enqueue, this keeps the toast
+    /// honest. The store is the single source of truth.
+    private func refreshCount() {
+        Task { developingCount = await DarkRoomStore.shared.pending().filter { $0.status == .pending }.count }
     }
 
     /// Drain the queue: pull pending shots FIFO and develop them until empty, then — because a
@@ -263,7 +278,7 @@ final class DarkRoomWorker {
     /// (leaving the shot on disk for the next kick) only if a save fails, so we never spin re-
     /// developing an unsaveable shot.
     private func loop() async {
-        defer { running = false; developingCount = 0 }
+        defer { running = false; developingCount = 0; isCoolingDown = false }
         while dirty {
             dirty = false
             while true {
@@ -291,6 +306,22 @@ final class DarkRoomWorker {
         }
 
         let config = shot.config
+
+        // Observable cool-gate: hold here while the phone is too hot, so the toast can say "Cooling
+        // down…" and the user knows the pause is deliberate (their shots are safe on disk). The
+        // threshold is `ThermalGovernor`'s — one definition of "hot." `ModelLane.pace()` below is the
+        // hard backstop; by the time this returns, the phone is cool and pace() is a no-op.
+        var announcedHold = false
+        while await ThermalGovernor.shared.isHotNow() {
+            if !announcedHold {
+                cameraLog("DARKROOM: holding shot \(shot.id) — phone too hot, cooling down")
+                announcedHold = true
+            }
+            isCoolingDown = true
+            try? await Task.sleep(nanoseconds: 2_000_000_000)   // re-check every 2 s
+        }
+        if announcedHold { cameraLog("DARKROOM: phone cooled — resuming develop") }
+        isCoolingDown = false
 
         // The heavy pipeline — see, tear the eye down, draw — through the ONE lane shared with the
         // antenna. Only Sendable values cross back; the cheap compositor + save stay out here.

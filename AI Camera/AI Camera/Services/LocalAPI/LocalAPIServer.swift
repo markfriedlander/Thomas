@@ -510,6 +510,7 @@ extension LocalAPIServer {
     private func handleDarkroom() async -> (Int, String) {
         let pending = await DarkRoomStore.shared.pending()
         let developing = await MainActor.run { DarkRoomWorker.shared.developingCount }
+        let cooling = await MainActor.run { DarkRoomWorker.shared.isCoolingDown }
         let iso = ISO8601DateFormatter()
         let shots: [[String: Any]] = pending.map { r in
             [
@@ -525,6 +526,7 @@ extension LocalAPIServer {
         return (200, json([
             "pendingCount":    pending.count,
             "developingCount": developing,
+            "coolingDown":     cooling,
             "shots":           shots
         ]))
     }

@@ -70,6 +70,11 @@ actor ThermalGovernor {
         s == .nominal || s == .fair
     }
 
+    /// Whether the phone is too hot to develop right now — the *same* threshold `pace()` holds on,
+    /// so there is one definition of "hot." The dark room worker polls this to show a "cooling
+    /// down" state in the toast while it waits, without duplicating the policy.
+    func isHotNow() -> Bool { !isCool(currentState()) }
+
     /// Pace one shot at the `ModelLane` boundary, before the heavy op begins. Returns
     /// immediately when the phone is cool or the Task is cancelled; when hot, holds (and logs,
     /// so the wait is visible in `GET /memory`) until it cools to fair or nominal.
