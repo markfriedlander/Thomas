@@ -159,7 +159,7 @@ nonisolated enum ModelCatalog {
         // An LLM repo: one model, so every MLX file in it IS the model.
         delivery: .wholeRepo,
         sizeGB: 1.63,
-        blurb: "No filter of any kind. Sees differently from Apple's model, and largely ignores instructions about how to speak. First look after launch takes about 9 seconds while it loads; after that about 3.",
+        blurb: "Sees differently from Apple's model, and largely ignores instructions about how to speak. First look after launch takes about 9 seconds while it loads; after that about 3.",
         licence: "Apache 2.0"
     )
 
