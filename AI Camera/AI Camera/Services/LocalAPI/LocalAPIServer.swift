@@ -407,8 +407,9 @@ extension LocalAPIServer {
             // hand drew from. See `FrameTwoWords`.
             let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? raw.words : raw.wordsToHand
             // The real place, from the live `Place` (`Place.current`) — a remote press stamps the
-            // GPS the way a human press does. nil only if there's no fix yet or it's denied.
-            let place = Place.current?.name
+            // GPS the way a human press does, honoring the raw-coordinate setting via `placeStamp`.
+            // nil only if there's no fix yet or it's denied.
+            let place = Place.current?.placeStamp
             let f = Darkroom.develop(photograph: photograph,
                                      words: frameTwo,
                                      drawing: raw.drawn,
@@ -478,7 +479,7 @@ extension LocalAPIServer {
             if let layoutOverride { c.layout = layoutOverride }
             return c
         }
-        let place = await MainActor.run { Place.current?.name }
+        let place = await MainActor.run { Place.current?.placeStamp }
 
         guard let photoData = ShotPhoto.encode(photograph) else {
             return (200, json(["captured": false, "error": "Could not encode the captured frame."]))
@@ -587,6 +588,7 @@ extension LocalAPIServer {
             if let v = obj["drawingSize"] as? String, let x = DrawingSize(rawValue: v) { s.drawingSize = x; changed.append("drawingSize=\(v)") }
             if let v = obj["upscaler"] as? String, let x = UpscaleMethod(rawValue: v) { s.upscaler = x; changed.append("upscaler=\(v)") }
             if let v = obj["decoderChoice"] as? String, let x = DecoderChoice(rawValue: v) { s.decoderChoice = x; changed.append("decoderChoice=\(v)") }
+            if let v = obj["stampRawCoordinates"] as? Bool { s.stampRawCoordinates = v; changed.append("stampRawCoordinates=\(v)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
                 else if v == "prompt" { s.resetPromptToDefault(); changed.append("reset=prompt") }
@@ -604,9 +606,11 @@ extension LocalAPIServer {
     private struct SettingsSnapshot: Sendable {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let drawsThirdFrame: Bool
+        let stampRawCoordinates: Bool
         let temperature: Double
         var dict: [String: Any] {
             ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
+             "stampRawCoordinates": stampRawCoordinates,
              "temperature": temperature, "frameTwoShows": frameTwoShows,
              "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
              "systemPrompt": systemPrompt]
@@ -621,7 +625,9 @@ extension LocalAPIServer {
             frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
             upscaler: s.upscaler.rawValue, decoderChoice: s.decoderChoice.rawValue,
             systemPrompt: s.systemPrompt,
-            drawsThirdFrame: s.drawsThirdFrame, temperature: s.temperature)
+            drawsThirdFrame: s.drawsThirdFrame,
+            stampRawCoordinates: s.stampRawCoordinates,
+            temperature: s.temperature)
     }
 
     /// POST /zoom — drive the zoom the way a pinch does (a pinch just calls `lens.zoom`). Reports

@@ -279,7 +279,7 @@ struct CameraView: View {
         // worker — all through the one shared intake (`DarkRoomWorker.enqueue`), which the Dark
         // Room's "load a picture" uses too, so both doors develop a shot identically. The place is
         // stamped now so the footer testifies to where it was taken even if it develops hours later.
-        await worker.enqueue(photograph, place: place.name)
+        await worker.enqueue(photograph, place: place.placeStamp)
     }
 }
 

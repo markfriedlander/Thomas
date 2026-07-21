@@ -386,6 +386,10 @@ final class Place: NSObject {
     /// e.g. "Tulsa, Oklahoma" — nil until a fix arrives, and nil forever if denied.
     private(set) var name: String?
 
+    /// The latest raw GPS fix, kept always (even in raw-coordinate mode, where we never geocode).
+    /// Feeds `rawStamp`, the footer's forensic alternative to a place name.
+    private(set) var coordinate: CLLocationCoordinate2D?
+
     #if DEBUG
     /// The live place, so the antenna can stamp the real location on a remote press — the
     /// same app-level handle `Lens.current` gives it for the sensor. DEBUG-only, because the
@@ -421,6 +425,25 @@ final class Place: NSObject {
 
     func stop() { manager.stopUpdatingLocation() }
 
+    /// What the footer stamps for place, honoring the raw-coordinate privacy setting. Read at
+    /// capture time (and by the antenna), so a shot freezes whichever form was chosen when taken.
+    /// In raw mode this is `rawStamp` and NO geocode is ever performed (see `resolve`); otherwise
+    /// it is the reverse-geocoded `name`.
+    var placeStamp: String? {
+        Settings.shared.stampRawCoordinates ? rawStamp : name
+    }
+
+    /// The raw fix as a footer string, e.g. "34.0522° N, 118.2437° W". Nil until a fix arrives.
+    /// Unmediated: just the numbers the device measured, with no third-party lookup deciding what
+    /// they "mean" — arguably the more honest stamp for a camera about the gap between a thing and
+    /// an account of it (NEXT.md).
+    var rawStamp: String? {
+        guard let c = coordinate else { return nil }
+        let lat = String(format: "%.4f", abs(c.latitude))
+        let lon = String(format: "%.4f", abs(c.longitude))
+        return "\(lat)° \(c.latitude >= 0 ? "N" : "S"), \(lon)° \(c.longitude >= 0 ? "E" : "W")"
+    }
+
     /// The date and time, in the book's voice: "June 21, 2020 · 3:42 PM". Time was added
     /// 2026-07-16 (Mark) so two shots the same day no longer stamp identically — the footer's
     /// whole job is to testify *when*, and time sharpens it. One source, so every layout's
@@ -432,6 +455,9 @@ final class Place: NSObject {
     }
 
     private func resolve(_ location: CLLocation) {
+        // Raw-coordinate privacy mode: never geocode, so no coordinate is ever sent anywhere and
+        // the shot path can be genuinely, provably local. The footer uses `rawStamp` instead.
+        if Settings.shared.stampRawCoordinates { return }
         // Don't re-geocode for small moves; the place name doesn't change block to block.
         if let last = lastGeocoded, location.distance(from: last) < 500 { return }
         lastGeocoded = location
@@ -460,6 +486,7 @@ extension Place: @preconcurrency CLLocationManagerDelegate {
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
+        coordinate = loc.coordinate   // always keep the raw fix, for the coordinate stamp
         resolve(loc)
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

@@ -150,6 +150,15 @@ final class Settings {
     var decoderChoice: DecoderChoice {
         didSet { store(decoderChoice.rawValue, "decoderChoice") }
     }
+    /// Stamp the footer with raw latitude/longitude instead of a reverse-geocoded place name.
+    /// **A privacy choice (Mark, 2026-07-21).** Turning a coordinate into "Los Angeles, CA" sends
+    /// that coordinate to Apple's mapping service (reverse geocoding). Raw coordinates skip that
+    /// lookup entirely, so with a local eye and hand there is genuinely NO network call in the shot
+    /// path — provably local, which is what CLAUDE.md Principle 5 was always meant to cash out to.
+    /// Off by default (the place name reads more naturally); on, the footer is forensic.
+    var stampRawCoordinates: Bool {
+        didSet { store(stampRawCoordinates, "stampRawCoordinates") }
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -163,6 +172,7 @@ final class Settings {
         drawingSize = DrawingSize(rawValue: d.string(forKey: "drawingSize") ?? "") ?? .native
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
         decoderChoice = DecoderChoice(rawValue: d.string(forKey: "decoderChoice") ?? "") ?? .detailed
+        stampRawCoordinates = d.bool(forKey: "stampRawCoordinates")   // default false
     }
 
     private func store(_ value: Any, _ key: String) {
@@ -204,6 +214,7 @@ final class Settings {
         drawingSize = .native
         upscaler = .metalFX
         decoderChoice = .detailed
+        stampRawCoordinates = false
     }
 }
 
@@ -302,6 +313,7 @@ struct PreferencesView: View {
                 decoderSection
                 sizeSection
                 layoutSection
+                locationSection
                 darkRoomSection
                 resetSection
                 aboutSection
@@ -346,6 +358,21 @@ struct PreferencesView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Location (how the footer stamps place)
+
+    /// A privacy switch (Mark, 2026-07-21): stamp raw latitude/longitude instead of a place name,
+    /// which skips the reverse-geocode lookup and its network call entirely. With a local eye and
+    /// hand, raw coordinates make the whole shot path provably local.
+    private var locationSection: some View {
+        Section {
+            Toggle("Stamp raw coordinates", isOn: $settings.stampRawCoordinates)
+        } header: {
+            Text("Location")
+        } footer: {
+            Text("The footer stamps where a shot was taken. Normally that's a place name (\"Los Angeles, CA\"), looked up by sending the coordinate to Apple's mapping service. Turn this on to stamp raw latitude and longitude instead — no lookup, no network call — so with a downloaded local eye and hand, nothing about the shot leaves your phone.")
         }
     }
 
