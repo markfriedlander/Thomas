@@ -85,10 +85,15 @@ enum Shot {
     /// Develops from a FROZEN `ShotConfig` — the settings captured at shutter-press — not from
     /// live `Settings`. That is the dark room queue's rule: a shot develops as it was configured
     /// when taken, however the user changes settings afterward.
+    /// - Parameter onStage: an optional progress hook the dark room queue passes so a shot's row can
+    ///   show "seeing" then "drawing" as the pipeline crosses from frame 2 to frame 3. Called on the
+    ///   main actor. The live shutter and `POST /shoot` pass nil.
     static func seeThenDraw(_ photograph: CGImage,
-                            config: ShotConfig) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
+                            config: ShotConfig,
+                            onStage: ((DevelopStage) -> Void)? = nil) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
         let seer = config.seer
         // ── Frame 2. The eye reads the world and says what it sees. ──
+        onStage?(.seeing)
         let perception = await seer.look(at: photograph,
                                          systemPrompt: config.systemPrompt,
                                          temperature: config.temperature)
@@ -130,6 +135,7 @@ enum Shot {
 
         // Frame 2 is over. Let the eye go before the hand arrives.
         await QwenLoader.shared.unload()
+        onStage?(.drawing)
 
         // How big to save it, with which upscaler, and which developer — from the frozen config.
         let size = config.drawingSize

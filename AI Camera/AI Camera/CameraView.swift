@@ -74,6 +74,9 @@ struct CameraView: View {
     /// but chosen in Preferences, never here. The capture screen stays sacred.
     @State private var settings = Settings.shared
     @State private var showingPreferences = false
+    /// Presented from the privacy popover's "Model Library" action, so a user who sees the open
+    /// lock can jump straight to picking a downloaded local model (matching Hal's popover).
+    @State private var showingModelLibrary = false
     /// The zoom at the instant the pinch began. A gesture reports magnification relative
     /// to its own start, so without an anchor each update would compound the last.
     @State private var zoomAnchor: CGFloat?
@@ -104,21 +107,25 @@ struct CameraView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
 
-            // One glyph in each corner (Mark, 2026-07-16), the shutter alone at bottom-centre.
-            // Top: Preferences (left), flip (right), the developing toast between them. Bottom:
-            // upload a picture to feed IN (left), view what came OUT in Photos (right).
+            // The corners (Mark, 2026-07-20), the shutter alone at bottom-centre. Top: the status
+            // panel (the annunciator) upper-LEFT, where the eye lands first; Preferences
+            // upper-RIGHT (Mark's habit across his apps). Bottom: flip the lens lower-LEFT
+            // (thumb-reachable from the shutter), view what came OUT in Photos lower-RIGHT.
+            //
+            // The "feed a picture IN" door is gone from here on purpose: it belongs on the coming
+            // Dark Room screen, not the capture screen (its machinery stays intact below, just
+            // unhooked from the UI). The developing/cooling toast is gone too: it moved into the
+            // status panel as the "developing" and "thermal" messages.
             VStack {
                 HStack(alignment: .top) {
+                    StatusFeedView(onOpenModelLibrary: { showingModelLibrary = true })
+                    Spacer()
                     preferencesButton
-                    Spacer()
-                    developingIndicator
-                    Spacer()
-                    flipButton
                 }
                 Spacer()
                 zoomReadout
                 HStack(alignment: .bottom) {
-                    uploadButton
+                    flipButton
                     Spacer()
                     shutterButton
                     Spacer()
@@ -139,6 +146,9 @@ struct CameraView: View {
         }
         .statusBarHidden()
         .sheet(isPresented: $showingPreferences) { PreferencesView() }
+        .sheet(isPresented: $showingModelLibrary) {
+            NavigationStack { ModelLibraryView() }
+        }
     }
 
     // MARK: - The shutter
@@ -179,6 +189,12 @@ struct CameraView: View {
 
     /// Feed a picture IN — the library as an input door. A single photo-on-rectangle, distinct
     /// from the output glyph opposite it.
+    ///
+    /// ⚠️ DORMANT (Mark, 2026-07-20): this button is no longer placed on the capture screen. The
+    /// "feed a picture in" door belongs on the coming Dark Room screen, not here. The button and its
+    /// whole machinery (`pickerItem`, the `.onChange` above, `shootFromLibrary`) are kept intact and
+    /// wired to each other so it can be plugged straight back in there; only the entry point moved.
+    /// Do not delete — the capability is unchanged, just relocated.
     private var uploadButton: some View {
         PhotosPicker(selection: $pickerItem, matching: .images) {
             cornerGlyph("photo.on.rectangle")
@@ -257,28 +273,6 @@ struct CameraView: View {
         }
     }
 
-    /// The only feedback the capture screen gives: how many frames are still in the bath — and,
-    /// when the queue is paused to let the phone cool, that it's paused (not stuck). Not a result,
-    /// not a preview — just what the camera is doing behind you.
-    @ViewBuilder
-    private var developingIndicator: some View {
-        if worker.developingCount > 0 {
-            HStack(spacing: 7) {
-                ProgressView().tint(.white).scaleEffect(0.7)
-                Text(toastLabel)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.8))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(.black.opacity(0.35), in: Capsule())
-        }
-    }
-
-    private var toastLabel: String {
-        if worker.isCoolingDown { return "Cooling down…" }
-        return worker.developingCount == 1 ? "Developing" : "Developing \(worker.developingCount)"
-    }
-
     // MARK: - Pressing it
 
     private func shoot() async {
@@ -314,27 +308,11 @@ struct CameraView: View {
     /// wholesale into the worker; the serialization and never-two-heavy-ops-at-once guarantee it
     /// gave are unchanged, because the worker runs through the very same lane.
     private func develop(_ photograph: CGImage) async {
-        let config = ShotConfig.capture()
-
-        // Encode the reality frame losslessly (PNG) and freeze the shot to disk together with its
-        // config and its capture context — the place and (via the record) the moment it was taken,
-        // so its footer testifies to reality even if it develops hours later.
-        guard let photoData = ShotPhoto.encode(photograph) else {
-            cameraLog("SHUTTER: could not encode the captured frame — shot dropped")
-            return
-        }
-        do {
-            _ = try await DarkRoomStore.shared.enqueue(photoData: photoData,
-                                                       config: config,
-                                                       place: place.name)
-        } catch {
-            cameraLog("SHUTTER: could not enqueue the shot — \(error.localizedDescription)")
-            return
-        }
-
-        // Wake the worker. Idempotent: if it's already developing, this does nothing and the shot
-        // we just wrote is picked up in FIFO order.
-        worker.kick()
+        // Freeze this shot's settings and its capture place, write it to durable disk, and wake the
+        // worker — all through the one shared intake (`DarkRoomWorker.enqueue`), which the Dark
+        // Room's "load a picture" uses too, so both doors develop a shot identically. The place is
+        // stamped now so the footer testifies to where it was taken even if it develops hours later.
+        await worker.enqueue(photograph, place: place.name)
     }
 }
 

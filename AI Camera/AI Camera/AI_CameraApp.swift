@@ -92,6 +92,15 @@
 //  DarkRoomQueue.swift
 //   35  The Dark Room Queue (Durable Developing)
 //
+//  StatusFeed.swift
+//   36  StatusFeed (The Annunciator)
+//
+//  PrivacyMonitor.swift
+//   37  PrivacyMonitor (Could This Look Leave The Device?)
+//
+//  DarkRoomView.swift
+//   38  The Dark Room Screen (The Developing Queue)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 
@@ -178,8 +187,25 @@ struct AI_CameraApp: App {
                 // unloading on those would tear down 1.75 GB because someone glanced at the
                 // time, then reload it a second later. Hal makes exactly this distinction and
                 // says so in its own lifecycle comment.
-                cameraLog("MEMORY: app entered background — unloading the eye to reduce jetsam pressure")
-                Task { await QwenLoader.shared.unload() }
+                //
+                // ⭐ BACKGROUND-SAFETY (Mark, 2026-07-21): stop the queue safely BEFORE unloading,
+                // so a heavy GPU op is never torn out from under a develop (the suspected
+                // backgrounded-mid-develop crash). A background-task assertion buys iOS's grace
+                // window; `suspendForBackground()` waits for the op in flight to finish and abandon
+                // WITHOUT saving anything partial, and only then do we unload. Our ops are a few
+                // seconds and the window is tens, so it completes cleanly; if iOS ever ends the
+                // assertion early, the shot's durable record redoes it whole on foreground, so there
+                // is no data loss either way. (No expiration handler: we always end it ourselves
+                // well inside the window, and an overrun that iOS ends is already covered by
+                // durability.)
+                cameraLog("MEMORY: app entered background — stopping the queue, then unloading the eye")
+                Task { @MainActor in
+                    let app = UIApplication.shared
+                    let bgTask = app.beginBackgroundTask(withName: "DarkRoomBackgroundStop")
+                    await DarkRoomWorker.shared.suspendForBackground()
+                    await QwenLoader.shared.unload()
+                    if bgTask != .invalid { app.endBackgroundTask(bgTask) }
+                }
             default:
                 break
             }

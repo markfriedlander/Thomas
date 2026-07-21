@@ -47,6 +47,10 @@ struct ModelLibraryView: View {
     /// Recomputed on download completion — `isInstalled` reads the disk, which SwiftUI
     /// cannot observe. See `.onReceive` below.
     @State private var refreshToken = 0
+    /// How many queued shots still need each model (by model id), so the delete confirmation can
+    /// warn that deleting will pause them. Loaded from the dark room store on appear and refreshed
+    /// when a model lands.
+    @State private var queuedUsage: [String: Int] = [:]
 
     var body: some View {
         List {
@@ -88,11 +92,19 @@ struct ModelLibraryView: View {
         }
         .navigationTitle("Model Library")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadQueuedUsage() }
+        // Leaving the library is a natural moment to let the queue re-check: a model the user just
+        // downloaded can unblock the shots that were waiting for it.
+        .onDisappear { DarkRoomWorker.shared.kick() }
         // The row's "installed" state is a question about the filesystem, and SwiftUI has no
         // way to know the answer changed. The downloader posts when a model lands; that's
         // the cue to look again.
         .onReceive(NotificationCenter.default.publisher(for: .mlxModelDidDownload)) { _ in
             refreshToken += 1
+            // A model just landed — let the queue develop anything that was blocked waiting for it,
+            // and refresh the "shots still use this" counts behind the delete warning.
+            DarkRoomWorker.shared.kick()
+            Task { await loadQueuedUsage() }
         }
         .confirmationDialog(
             confirmingDelete.map { "Delete \($0.displayName)?" } ?? "",
@@ -200,12 +212,34 @@ struct ModelLibraryView: View {
     }
 
     private func deleteMessage(for model: CameraModel) -> String {
+        var message: String
         let others = model.claimants.filter { $0 != SharedModelStore.thisAppID }
-        guard !others.isEmpty else {
-            return "The files will be removed from the phone, freeing \(formatted(model.bytesOnDisk)). You can download it again."
+        if others.isEmpty {
+            message = "The files will be removed from the phone, freeing \(formatted(model.bytesOnDisk)). You can download it again."
+        } else {
+            let names = others.map { SharedModelStore.displayName(forAppID: $0) }
+            message = "\(model.displayName) is also used by \(names.joined(separator: " and ")). This camera gives up its claim, but the files stay on the phone and no space is freed."
         }
-        let names = others.map { SharedModelStore.displayName(forAppID: $0) }
-        return "\(model.displayName) is also used by \(names.joined(separator: " and ")). This camera gives up its claim, but the files stay on the phone and no space is freed."
+        // Warn if shots in the dark room still need this model — they aren't lost, they pause.
+        if let n = queuedUsage[model.id], n > 0 {
+            message += "\n\n\(n) shot\(n == 1 ? "" : "s") still waiting to develop use this. "
+                + "\(n == 1 ? "It" : "They") will pause — shown as \u{201C}Needs \(model.displayName)\u{201D} in the Dark Room — until you download it again."
+        }
+        return message
+    }
+
+    /// Count, per model id, how many queued shots still need it. A shot needs its eye always, and
+    /// the drawer too when it draws the third frame.
+    private func loadQueuedUsage() async {
+        let records = await DarkRoomStore.shared.pending()
+        var counts: [String: Int] = [:]
+        for r in records {
+            counts[ModelCatalog.model(for: r.config.seer).id, default: 0] += 1
+            if r.config.drawsThirdFrame {
+                counts[ModelCatalog.sdTurbo.id, default: 0] += 1
+            }
+        }
+        queuedUsage = counts
     }
 
     private func formatted(_ bytes: Int64) -> String {

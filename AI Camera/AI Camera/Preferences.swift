@@ -290,6 +290,7 @@ struct PreferencesView: View {
     @State private var showingPresets = false
     @State private var confirmingReset = false
     @State private var showingLayerOneInfo = false
+    @State private var showingDarkRoom = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -301,9 +302,11 @@ struct PreferencesView: View {
                 decoderSection
                 sizeSection
                 layoutSection
+                darkRoomSection
                 resetSection
                 aboutSection
             }
+            .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
             //
             // It used to hang off the Section, and that is why it "hid itself as soon as you
@@ -343,6 +346,23 @@ struct PreferencesView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - The dark room (a second door into the developing queue)
+
+    /// A way into the Dark Room from Preferences (Mark, 2026-07-21), alongside the "Developing N"
+    /// status on the capture screen. Reachable even when nothing is developing — which is the only
+    /// door to shots that are *blocked* waiting for a model to be re-downloaded.
+    private var darkRoomSection: some View {
+        Section {
+            Button {
+                showingDarkRoom = true
+            } label: {
+                Label("Enter the Dark Room", systemImage: "tray.full")
+            }
+        } footer: {
+            Text("Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load a picture to develop.")
         }
     }
 

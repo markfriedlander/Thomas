@@ -300,6 +300,7 @@ extension LocalAPIServer {
         case ("GET",  "/state"):  return handleState()
         case ("GET",  "/models"): return handleModels()
         case ("GET",  "/rotation"): return handleRotation()
+        case ("GET",  "/screenshot"): return handleScreenshot()   // sync: drawHierarchy snapshot
         case ("GET",  "/memory"): return await handleMemory()
         case ("GET",  "/thermal"): return await handleThermal()
         case ("POST", "/thermal"): return await handleSetThermal(req)
@@ -1282,6 +1283,42 @@ extension LocalAPIServer {
     /// next loads) is survivable, and it is the number that will decide frame 3.
     ///
     /// Serves the log ring too, so a sweep can capture the poll lines without a cable.
+    /// GET /screenshot — capture the current screen as a base64 PNG, over WiFi.
+    ///
+    /// Same method Hal and Posey's antennas use: render the key window's view hierarchy. Returned as
+    /// base64 (Thomas's convention for /press, /shoot, /draw) so it comes straight back over the
+    /// network with no file pull. Not deprecated, no USB, no external tooling.
+    ///
+    /// ⚠️ Known limit of this method (iOS): a `drawHierarchy` snapshot renders the view tree, which
+    /// does NOT include the live camera preview (an `AVCaptureVideoPreviewLayer` on its own Metal
+    /// surface) — the viewfinder area comes back black. Everything WE draw over it comes through:
+    /// the status panel, the corner glyphs, the shutter, any popover or sheet. For verifying the UI
+    /// (which is what this is for), that is exactly what's needed. The sensor image itself is what
+    /// /press already returns. (Capturing the live camera into the shot too would need iOS 27's
+    /// ScreenCaptureKit, which no studio app uses yet — a separate call, not to be invented here.)
+    private func handleScreenshot() -> (Int, String) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let window = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow })
+                ?? scenes.first?.windows.first else {
+            return (500, #"{"error":"no key window to capture"}"#)
+        }
+        let bounds = window.bounds
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = window.screen.scale
+        let renderer = UIGraphicsImageRenderer(bounds: bounds, format: format)
+        let image = renderer.image { _ in
+            window.drawHierarchy(in: bounds, afterScreenUpdates: true)
+        }
+        guard let png = image.pngData() else {
+            return (500, #"{"error":"failed to encode screenshot"}"#)
+        }
+        return (200, json([
+            "width":     Int(bounds.width * format.scale),
+            "height":    Int(bounds.height * format.scale),
+            "pngBase64": png.base64EncodedString()
+        ]))
+    }
+
     private func handleMemory() async -> (Int, String) {
         let snapshot = MLX.Memory.snapshot()
         let resident = await QwenLoader.shared.isLoaded
