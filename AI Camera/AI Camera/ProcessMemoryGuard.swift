@@ -39,9 +39,10 @@
 //
 //  ⚠️ The 0.75 ratio is calibrated for **4-bit quantized safetensors loaded via mmap**
 //  (Hal's note). Qwen3.5-2B-MLX-4bit is exactly that, so it transfers unchanged. A
-//  diffusion model for frame 3 is a different shape — fp16/fp32 weights, a different
-//  residency pattern — and **this ratio should be re-measured before it is trusted there.**
-//  Do not assume it carries. Measure it, the way Hal measured this one.
+//  diffusion model for frame 3 is a different shape — fp16 weights fault in essentially whole —
+//  so it uses a SEPARATE ratio, `fp16DirtyMemoryRatio` (1.0), calibrated from the 2026-07-16
+//  on-device measurement (0.75 under-estimated the diffusion load by ~28%). Still one device;
+//  re-verify across the lineup, but it is no longer the wrong 0.75.
 //
 
 import Foundation
@@ -163,9 +164,19 @@ nonisolated func thermalStateLabel(_ state: ProcessInfo.ThermalState = ProcessIn
 
 // MARK: - Required-memory estimate
 
-/// Effective dirty-memory ratio for 4-bit quantized safetensors loaded via mmap. Hal's
-/// figure, hard-won. Covers tokenizer/vocab residency and the first prefill's scratch.
-nonisolated private let dirtyMemoryRatio: Double = 0.75
+/// Effective dirty-memory ratio for 4-bit quantized safetensors loaded via mmap (the eyes, e.g.
+/// Qwen). Hal's figure, hard-won. Covers tokenizer/vocab residency and the first prefill's scratch.
+/// This is the DEFAULT; fp16 diffusion weights use `fp16DirtyMemoryRatio` below.
+nonisolated let dirtyMemoryRatio: Double = 0.75
+
+/// Effective dirty-memory ratio for fp16 diffusion weights (the drawer). fp16 weights fault in
+/// essentially whole, so their residency runs far higher than 4-bit-quantized-via-mmap. Calibrated
+/// from the one on-device measurement (2026-07-16): a 2.40 GB model predicted 2,097 MB at the 0.75
+/// ratio but actually cost 2,684 MB to load — an effective ratio of ~0.99, rounded to **1.0**
+/// (slightly conservative, the safe direction). This fixes the standing bug where the draw
+/// pre-flight used 0.75 and under-estimated the load by ~28%. ⚠️ Still one measurement on one
+/// device — re-verify across the supported lineup — but no longer the plainly-wrong 0.75.
+nonisolated let fp16DirtyMemoryRatio: Double = 1.0
 
 /// Safety margin in MB above the process baseline and iOS's dirty-memory cliff. Hal's.
 nonisolated private let safetyMarginMB: Double = 250.0
@@ -175,13 +186,15 @@ nonisolated private let assumedSizeGB: Double = 2.5
 
 /// Estimated MB the process needs available to load a model of `sizeGB`.
 ///
-///     sizeGB * 1024 * 0.75 + 250
+///     sizeGB * 1024 * dirtyRatio + 250
 ///
-/// Pass `nil` only when the size is truly unknowable; the 2.5 GB assumption is a guess and
-/// is labelled as one in the log.
-nonisolated func requiredMemoryMBForLoad(sizeGB: Double?) -> Double {
+/// `dirtyRatio` defaults to the 4-bit-quantized-mmap figure (`dirtyMemoryRatio`, 0.75); the drawer
+/// passes `fp16DirtyMemoryRatio` (1.0) because fp16 weights are far more resident. Pass `nil` for
+/// `sizeGB` only when the size is truly unknowable; the 2.5 GB assumption is a guess and is labelled
+/// as one in the log.
+nonisolated func requiredMemoryMBForLoad(sizeGB: Double?, dirtyRatio: Double = dirtyMemoryRatio) -> Double {
     let gb = sizeGB ?? assumedSizeGB
-    return gb * 1024.0 * dirtyMemoryRatio + safetyMarginMB
+    return gb * 1024.0 * dirtyRatio + safetyMarginMB
 }
 
 /// The same estimate, computed from a repo's **actual bytes on disk** rather than a
@@ -189,12 +202,12 @@ nonisolated func requiredMemoryMBForLoad(sizeGB: Double?) -> Double {
 /// shared store — it is measured, not declared.
 ///
 /// Returns the `nil`-size estimate if the repo isn't present (nothing to measure).
-nonisolated func requiredMemoryMBForLoad(repo: String) -> Double {
+nonisolated func requiredMemoryMBForLoad(repo: String, dirtyRatio: Double = dirtyMemoryRatio) -> Double {
     let bytes = SharedModelStore.sizeOnDisk(repo)
-    guard bytes > 0 else { return requiredMemoryMBForLoad(sizeGB: nil) }
+    guard bytes > 0 else { return requiredMemoryMBForLoad(sizeGB: nil, dirtyRatio: dirtyRatio) }
     // GiB, matching how iOS accounts for pages — sizeOnDisk returns real bytes.
     let gb = Double(bytes) / (1024.0 * 1024.0 * 1024.0)
-    return requiredMemoryMBForLoad(sizeGB: gb)
+    return requiredMemoryMBForLoad(sizeGB: gb, dirtyRatio: dirtyRatio)
 }
 
 // MARK: - Headroom polling

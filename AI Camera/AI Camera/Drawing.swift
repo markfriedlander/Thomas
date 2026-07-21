@@ -209,12 +209,13 @@ actor DrawerLoader {
             // weights and faults them in, and if there isn't room iOS kills the process
             // with no error and no message.
             //
-            // ⚠️ The requirement is computed with Hal's 4-bit-mmap ratio against fp16
-            // diffusion weights. **That number is a guess here and is labelled one.** It is
-            // the first thing to re-measure once this runs — watch GET /memory.
-            let requiredMB = requiredMemoryMBForLoad(repo: Drawing.repo)
+            // The requirement uses the fp16 diffusion ratio (`fp16DirtyMemoryRatio`, 1.0), NOT
+            // the eyes' 0.75 — fp16 weights fault in essentially whole. Calibrated from the
+            // 2026-07-16 measurement (0.75 under-estimated this load by ~28%); still one device,
+            // so watch GET /memory to re-verify across the lineup.
+            let requiredMB = requiredMemoryMBForLoad(repo: Drawing.repo, dirtyRatio: fp16DirtyMemoryRatio)
             var availableMB = processAvailableMemoryMB()
-            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (⚠️ ratio unverified for diffusion) availableMB=\(formatMB(availableMB)) thermal=\(thermalStateLabel())")
+            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (fp16 ratio, one-device calibration) availableMB=\(formatMB(availableMB)) thermal=\(thermalStateLabel())")
 
             if availableMB < requiredMB {
                 cameraLog("DRAW: short on headroom — waiting for iOS to reclaim")

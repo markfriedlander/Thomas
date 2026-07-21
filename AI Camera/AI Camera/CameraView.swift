@@ -19,9 +19,7 @@
 //
 
 import AVFoundation
-import ImageIO
 import Photos
-import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -61,8 +59,6 @@ struct CameraView: View {
 
     @State private var lens = Lens()
     @State private var place = Place()
-    @State private var pickerItem: PhotosPickerItem?
-    @State private var showPicker = false
 
     /// The dark room queue's worker. The shutter no longer develops inline — it enqueues and
     /// returns instantly, and this develops in the background, surviving crash/background/call.
@@ -141,9 +137,6 @@ struct CameraView: View {
             place.start()
         }
         .onDisappear { lens.stop(); place.stop() }
-        .onChange(of: pickerItem) { _, item in
-            Task { await shootFromLibrary(item) }
-        }
         .statusBarHidden()
         .sheet(isPresented: $showingPreferences) { PreferencesView() }
         .sheet(isPresented: $showingModelLibrary) {
@@ -185,20 +178,6 @@ struct CameraView: View {
     /// question (see `Lens.flip`).
     private var flipButton: some View {
         Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
-    }
-
-    /// Feed a picture IN — the library as an input door. A single photo-on-rectangle, distinct
-    /// from the output glyph opposite it.
-    ///
-    /// ⚠️ DORMANT (Mark, 2026-07-20): this button is no longer placed on the capture screen. The
-    /// "feed a picture in" door belongs on the coming Dark Room screen, not here. The button and its
-    /// whole machinery (`pickerItem`, the `.onChange` above, `shootFromLibrary`) are kept intact and
-    /// wired to each other so it can be plugged straight back in there; only the entry point moved.
-    /// Do not delete — the capability is unchanged, just relocated.
-    private var uploadButton: some View {
-        PhotosPicker(selection: $pickerItem, matching: .images) {
-            cornerGlyph("photo.on.rectangle")
-        }
     }
 
     /// See what came OUT — opens the Photos app to the shots you've developed. A *stack* of
@@ -278,18 +257,6 @@ struct CameraView: View {
     private func shoot() async {
         guard let photograph = await lens.capture() else { return }
         await develop(photograph)
-    }
-
-    private func shootFromLibrary(_ item: PhotosPickerItem?) async {
-        guard let item,
-              let data = try? await item.loadTransferable(type: Data.self),
-              let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return }
-        // The library's other door — same rule: upright before it goes anywhere.
-        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-        let raw = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
-        let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-        await develop(cg.uprighted(orientation))
     }
 
     /// The shutter's whole job now: **freeze this shot and hand it to the dark room queue.**
