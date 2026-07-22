@@ -53,7 +53,12 @@ import MLX
 // ==== LEGO START: 29 The Hand (Frame 3 — Drawing From Words) ====
 
 nonisolated struct Drawing: Sendable {
-    static let repo = ModelCatalog.sdTurbo.id
+    /// Which drawer this is — the shared-store repo id. Every render-affecting knob below is a
+    /// property of this specific drawer; a different drawer is a different `Drawing` (see
+    /// `spec(for:)`). Generalized 2026-07-21 from a single hardcoded sd-turbo recipe: the vendored
+    /// pipeline was always model-agnostic — only this recipe and the loader named one model.
+    /// sd-turbo is the only drawer implemented today; its numbers below are unchanged.
+    let repoID: String
 
     /// How many denoising steps. sd-turbo is *distilled* to need very few — it was trained
     /// for single-step generation and stays coherent to about 4.
@@ -64,19 +69,24 @@ nonisolated struct Drawing: Sendable {
     /// warns that inheriting that behaviour with a non-turbo model gives you noise and the
     /// conclusion "MLX can't draw." We're on a turbo model, so the trap doesn't bite, but the
     /// number here is chosen, not inherited.
-    var steps: Int = 4
+    var steps: Int
 
-    /// Classifier-free guidance. **Zero, and that is not a placeholder.** Turbo models are
-    /// distilled without CFG; giving them a guidance weight doesn't sharpen the image, it
-    /// doubles the work (CFG evaluates the UNet twice per step) and degrades the result.
-    /// The library's own SDXL-Turbo preset uses `cfgWeight: 0` for the same reason.
-    var cfgWeight: Float = 0
+    /// Classifier-free guidance. **Zero for sd-turbo, and that is not a placeholder.** Turbo
+    /// models are distilled without CFG; giving them a guidance weight doesn't sharpen the image,
+    /// it doubles the work (CFG evaluates the UNet twice per step) and degrades the result. The
+    /// library's own SDXL-Turbo preset uses `cfgWeight: 0` for the same reason. A non-turbo drawer
+    /// would set this above zero.
+    var cfgWeight: Float
 
     /// 64 latent units → a 512×512 image. sd-turbo's native resolution; asking for more
     /// doesn't add detail, it adds artefacts and memory.
-    var latentSize: [Int] = [64, 64]
+    var latentSize: [Int]
 
     var seed: UInt64?
+
+    /// Whether to 8-bit-quantize the weights on load. Off for sd-turbo (its fp16 weights fit); a
+    /// bigger drawer like SSD-1B would set this true. Threaded into `LoadConfiguration`.
+    var quantize: Bool
 
     /// Tiled VAE-decode geometry — see `Autoencoder.decodeTiled`. The monolithic decode of a
     /// 64×64 latent to 512×512 peaked ~4.5 GB and jetsammed the process every time (measured
@@ -86,7 +96,9 @@ nonisolated struct Drawing: Sendable {
     /// knob: drop the tile size for a 3×3 grid if a device still cannot afford 2×2.
     ///
     /// **Fidelity-preserving:** this is sd-turbo's own VAE, just run in pieces — the re-imagining
-    /// is exactly what the full decode would have produced, only under a memory ceiling.
+    /// is exactly what the full decode would have produced, only under a memory ceiling. (These
+    /// are sd-turbo's 512² geometry; a drawer with a different native resolution would need its
+    /// own, so this becomes per-drawer when a second drawer with a different size lands.)
     static let decodeTileLatent = 40
     static let decodeOverlapLatent = 16
 
@@ -99,6 +111,27 @@ nonisolated struct Drawing: Sendable {
     /// Headroom kept free above that estimate, so Detailed commits to the full VAE only with margin
     /// to spare — and drops to TAESD (a few hundred MB, effectively always affordable) otherwise.
     static let decodeHeadroomMarginMB: Double = 500
+
+    /// The reference drawer: sd-turbo. Also the drawer a shot frozen before drawers were selectable
+    /// falls back to — its config named no drawer because sd-turbo was the only one there was.
+    static let sdTurbo = Drawing(
+        repoID: ModelCatalog.sdTurbo.id,
+        steps: 4,
+        cfgWeight: 0,
+        latentSize: [64, 64],
+        seed: nil,
+        quantize: false
+    )
+
+    /// Resolve a drawer repo id to its recipe. `nil` for an id with no spec — the loader refuses
+    /// rather than guess a pipeline for a drawer it doesn't know. A new drawer adds a case here and
+    /// one in `pipelineConfiguration(for:)`; the loader itself never changes.
+    static func spec(for repoID: String) -> Drawing? {
+        switch repoID {
+        case ModelCatalog.sdTurbo.id: return sdTurbo
+        default: return nil
+        }
+    }
 
     /// The words the eye produced, handed to the hand unedited.
     ///
@@ -121,7 +154,8 @@ nonisolated struct Drawing: Sendable {
         )
     }
 
-    /// sd-turbo, named file by file.
+    /// The pipeline configuration (files + factory) for a drawer, by repo id. `nil` for an unknown
+    /// drawer — paired with `spec(for:)` at the loader, which refuses rather than guess.
     ///
     /// This configuration is the entire reason the library is vendored rather than added as a
     /// package. `StableDiffusionConfiguration`'s `files` and `factory` are `internal`, and a
@@ -134,29 +168,34 @@ nonisolated struct Drawing: Sendable {
     ///      after loading — paying the heavy download to use the light weights while the fp16
     ///      files sit unused in the same repo. Measured: 4.81 GB as the preset asks vs
     ///      **2.40 GB** for these. Same weights.
-    static var configuration: StableDiffusionConfiguration {
-        StableDiffusionConfiguration(
-            id: repo,
-            files: [
-                .unetConfig: "unet/config.json",
-                .unetWeights: "unet/diffusion_pytorch_model.fp16.safetensors",
-                .textEncoderConfig: "text_encoder/config.json",
-                .textEncoderWeights: "text_encoder/model.fp16.safetensors",
-                .vaeConfig: "vae/config.json",
-                .vaeWeights: "vae/diffusion_pytorch_model.fp16.safetensors",
-                .diffusionConfig: "scheduler/scheduler_config.json",
-                .tokenizerVocabulary: "tokenizer/vocab.json",
-                .tokenizerMerges: "tokenizer/merges.txt",
-            ],
-            defaultParameters: { EvaluateParameters(cfgWeight: 0, steps: 4) },
-            factory: { hub, sdConfiguration, loadConfiguration in
-                // StableDiffusionBase — the SD 2.1 path, one text encoder. sd-turbo IS 2.1's
-                // architecture; that is why it was chosen over SD 1.5, whose text encoder is
-                // a different shape.
-                try StableDiffusionBase(
-                    hub: hub, configuration: sdConfiguration, dType: loadConfiguration.dType)
-            }
-        )
+    static func pipelineConfiguration(for repoID: String) -> StableDiffusionConfiguration? {
+        switch repoID {
+        case ModelCatalog.sdTurbo.id:
+            return StableDiffusionConfiguration(
+                id: repoID,
+                files: [
+                    .unetConfig: "unet/config.json",
+                    .unetWeights: "unet/diffusion_pytorch_model.fp16.safetensors",
+                    .textEncoderConfig: "text_encoder/config.json",
+                    .textEncoderWeights: "text_encoder/model.fp16.safetensors",
+                    .vaeConfig: "vae/config.json",
+                    .vaeWeights: "vae/diffusion_pytorch_model.fp16.safetensors",
+                    .diffusionConfig: "scheduler/scheduler_config.json",
+                    .tokenizerVocabulary: "tokenizer/vocab.json",
+                    .tokenizerMerges: "tokenizer/merges.txt",
+                ],
+                defaultParameters: { EvaluateParameters(cfgWeight: 0, steps: 4) },
+                factory: { hub, sdConfiguration, loadConfiguration in
+                    // StableDiffusionBase — the SD 2.1 path, one text encoder. sd-turbo IS 2.1's
+                    // architecture; that is why it was chosen over SD 1.5, whose text encoder is
+                    // a different shape. (SSD-1B would use StableDiffusionXL here.)
+                    try StableDiffusionBase(
+                        hub: hub, configuration: sdConfiguration, dType: loadConfiguration.dType)
+                }
+            )
+        default:
+            return nil
+        }
     }
 
     /// Point the library at the family's shared store instead of its own cache.
@@ -165,7 +204,7 @@ nonisolated struct Drawing: Sendable {
     /// `downloadBase/models/<repo-id>`, and `SharedModelStore.mlxModelDir` is
     /// `huggingface/models/<repo-id>`. So handing it `huggingFaceRoot` makes it find exactly
     /// what `MLXModelDownloader` put there — no download, no second copy, and Hal or Posey
-    /// would find the same bytes.
+    /// would find the same bytes. The same for every drawer, so it stays a single static.
     static var hub: HubApi {
         HubApi(downloadBase: SharedModelStore.huggingFaceRoot)
     }
@@ -182,40 +221,58 @@ nonisolated struct Drawing: Sendable {
 actor DrawerLoader {
     static let shared = DrawerLoader()
 
+    private var loadedID: String?
     private var loaded: TextToImageGenerator?
-    private var loading: Task<TextToImageGenerator, Error>?
+    private var loading: (id: String, task: Task<TextToImageGenerator, Error>)?
 
-    /// Whether the weights are on disk right now.
-    nonisolated static var isAvailable: Bool {
-        SharedModelStore.isRepoDownloaded(Drawing.repo)
+    /// Whether a given drawer's weights are on disk right now.
+    nonisolated static func isAvailable(_ repoID: String) -> Bool {
+        SharedModelStore.isRepoDownloaded(repoID)
     }
 
     var isLoaded: Bool { loaded != nil }
+    /// True when the resident drawer is exactly this one.
+    func isLoadedRepo(_ repoID: String) -> Bool { loaded != nil && loadedID == repoID }
 
-    func generator() async throws -> TextToImageGenerator {
-        if let loaded { return loaded }
-        if let loading { return try await loading.value }
+    func generator(for repoID: String) async throws -> TextToImageGenerator {
+        // Already resident: hand it back.
+        if let loaded, loadedID == repoID { return loaded }
+        // The same drawer is mid-load: wait for that load rather than start a second one.
+        if let loading, loading.id == repoID { return try await loading.task.value }
+        // A *different* drawer is resident or mid-load. One drawer at a time (the memory bar is
+        // "does the biggest single model fit alone"), so let any in-flight load settle, then
+        // unload whatever's resident before loading the new one.
+        if let loading { _ = try? await loading.task.value }
+        if loaded != nil { await unload() }
+
+        // Refuse a drawer we have no pipeline for, rather than guess its files or architecture.
+        // (Paired lookups: the recipe and the file/factory config, both keyed by the same id.)
+        guard let spec = Drawing.spec(for: repoID),
+              let configuration = Drawing.pipelineConfiguration(for: repoID) else {
+            throw DrawingError.unknownDrawer(repoID)
+        }
 
         let task = Task<TextToImageGenerator, Error> {
             // Hal's line, and not optional on a phone: cap MLX's buffer cache or it grows
             // until iOS jetsams the app.
             MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
-            guard SharedModelStore.isRepoDownloaded(Drawing.repo) else {
-                throw DrawingError.notInstalled(Drawing.repo)
+            guard SharedModelStore.isRepoDownloaded(repoID) else {
+                throw DrawingError.notInstalled(repoID)
             }
 
-            // PRE-FLIGHT. Same reasoning as Qwen's: everything past this line maps the
+            // PRE-FLIGHT. Same reasoning as the eye's: everything past this line maps the
             // weights and faults them in, and if there isn't room iOS kills the process
             // with no error and no message.
             //
             // The requirement uses the fp16 diffusion ratio (`fp16DirtyMemoryRatio`, 1.0), NOT
             // the eyes' 0.75 — fp16 weights fault in essentially whole. Calibrated from the
             // 2026-07-16 measurement (0.75 under-estimated this load by ~28%); still one device,
-            // so watch GET /memory to re-verify across the lineup.
-            let requiredMB = requiredMemoryMBForLoad(repo: Drawing.repo, dirtyRatio: fp16DirtyMemoryRatio)
+            // so watch GET /memory to re-verify across the lineup. (A bigger drawer may want its
+            // own ratio; the spec is where that would go.)
+            let requiredMB = requiredMemoryMBForLoad(repo: repoID, dirtyRatio: fp16DirtyMemoryRatio)
             var availableMB = processAvailableMemoryMB()
-            cameraLog("DRAW: pre-flight for \(Drawing.repo) requiredMB=\(formatMB(requiredMB)) (fp16 ratio, one-device calibration) availableMB=\(formatMB(availableMB)) thermal=\(thermalStateLabel())")
+            cameraLog("DRAW: pre-flight for \(repoID) requiredMB=\(formatMB(requiredMB)) (fp16 ratio, one-device calibration) availableMB=\(formatMB(availableMB)) thermal=\(thermalStateLabel())")
 
             if availableMB < requiredMB {
                 cameraLog("DRAW: short on headroom — waiting for iOS to reclaim")
@@ -225,26 +282,28 @@ actor DrawerLoader {
             }
 
             guard availableMB >= requiredMB else {
-                let message = memoryRefusalMessage(modelName: ModelCatalog.sdTurbo.displayName,
+                let name = ModelCatalog.model(id: repoID)?.displayName ?? repoID
+                let message = memoryRefusalMessage(modelName: name,
                                                    availableMB: availableMB,
                                                    requiredMB: requiredMB)
                 cameraLog("DRAW: REFUSED load — \(message)")
                 throw DrawingError.notEnoughMemory(message: message)
             }
 
-            // Adopt it, so a sibling's delete can't pull the weights out from under a shot
-            // in progress. Same claim the downloader records; harmless to repeat, and this
-            // covers a model adopted rather than downloaded.
-            SharedModelStore.claim(modelID: Drawing.repo, repo: Drawing.repo,
-                                   sizeBytes: SharedModelStore.sizeOnDisk(Drawing.repo))
-            SharedModelStore.excludeFromBackup(Drawing.repo)
+            // ⭐ CLAIM-ON-ADOPT (the shared-store contract's one rule). Record our claim BEFORE
+            // relying on any release, INCLUDING for a drawer we didn't download — an
+            // unclaimed-but-present model looks safe to delete to Hal's or Posey's refcount, so
+            // claiming is what stops a sibling app deleting the weights out from under a shot in
+            // progress. Uniform with the eye loader. See SharedModelStore.
+            SharedModelStore.claim(modelID: repoID, repo: repoID,
+                                   sizeBytes: SharedModelStore.sizeOnDisk(repoID))
+            SharedModelStore.excludeFromBackup(repoID)
 
             let before = processAvailableMemoryMB()
             let started = Date()
-            let configuration = Drawing.configuration
             guard let generator = try configuration.textToImageGenerator(
                 hub: Drawing.hub,
-                configuration: LoadConfiguration(float16: true, quantize: false)
+                configuration: LoadConfiguration(float16: true, quantize: spec.quantize)
             ) else {
                 throw DrawingError.wrongKind
             }
@@ -255,13 +314,14 @@ actor DrawerLoader {
 
             let after = processAvailableMemoryMB()
             let snapshot = MLX.Memory.snapshot()
-            cameraLog("DRAW: loaded in \(String(format: "%.2f", Date().timeIntervalSince(started)))s | iosAvailMB \(formatMB(before)) → \(formatMB(after)) (Δ\(formatMB(before - after))) | mlxActive=\(String(format: "%.1f", Double(snapshot.activeMemory) / 1_048_576)) MB peak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB")
+            cameraLog("DRAW: loaded \(repoID) in \(String(format: "%.2f", Date().timeIntervalSince(started)))s | iosAvailMB \(formatMB(before)) → \(formatMB(after)) (Δ\(formatMB(before - after))) | mlxActive=\(String(format: "%.1f", Double(snapshot.activeMemory) / 1_048_576)) MB peak=\(String(format: "%.1f", Double(snapshot.peakMemory) / 1_048_576)) MB")
             return generator
         }
-        loading = task
+        loading = (id: repoID, task: task)
         defer { loading = nil }
         let generator = try await task.value
         loaded = generator
+        loadedID = repoID
         return generator
     }
 
@@ -278,6 +338,7 @@ actor DrawerLoader {
         // uncaught C++ exception → SIGABRT. Hal has a crash log for exactly this.
         MLX.Stream.gpu.synchronize()
         loaded = nil
+        loadedID = nil
         MLX.Memory.clearCache()
 
         let after = processAvailableMemoryMB()
@@ -320,6 +381,7 @@ actor DrawerLoader {
         defer {
             MLX.Stream.gpu.synchronize()
             loaded = nil
+            loadedID = nil
             MLX.Memory.clearCache()
         }
 
@@ -332,7 +394,7 @@ actor DrawerLoader {
         // the actor's reference does nothing while a local `let` in this very function still
         // holds the model. ARC frees on the *last* reference, not the first. So every handle
         // on the UNet has to be nilled, by hand, in order.
-        var generator: TextToImageGenerator? = try await self.generator()
+        var generator: TextToImageGenerator? = try await self.generator(for: drawing.repoID)
         let parameters = drawing.parameters(prompt: prompt)
 
         let started = Date()
@@ -374,6 +436,7 @@ actor DrawerLoader {
         iterator = nil
         generator = nil
         loaded = nil
+        loadedID = nil
         MLX.Memory.clearCache()
         let afterRelease = processAvailableMemoryMB()
         // ⭐ Peak AT RELEASE, so the decode's contribution is isolatable. If mlxPeak here is
@@ -443,6 +506,10 @@ actor DrawerLoader {
 enum DrawingError: LocalizedError {
     case notInstalled(String)
     case notEnoughMemory(message: String)
+    /// The frozen config named a drawer with no pipeline spec in this build — the loader refuses
+    /// rather than guess. Shouldn't happen while sd-turbo is the only drawer; a guard for when
+    /// a shot's drawer id outlives the code that knew how to load it.
+    case unknownDrawer(String)
     case wrongKind
     case producedNothing
     /// A failure captured across the ModelLane boundary, where the original error type
@@ -455,8 +522,10 @@ enum DrawingError: LocalizedError {
             return "\(repo) isn't downloaded yet. Get it in Preferences → Models → Browse Model Library."
         case .notEnoughMemory(let message):
             return message
+        case .unknownDrawer(let repo):
+            return "\(repo) isn't a drawer this app knows how to load."
         case .wrongKind:
-            return "\(Drawing.repo) loaded, but not as something that can draw from text."
+            return "The drawer loaded, but not as something that can draw from text."
         case .producedNothing:
             return "The drawing finished with no image. That shouldn't happen — check the step count."
         case .drawFailed(let message):

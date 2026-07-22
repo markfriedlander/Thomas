@@ -833,7 +833,7 @@ extension LocalAPIServer {
             return (400, #"{"error":"POST the prompt as the body"}"#)
         }
 
-        var built = Drawing()
+        var built = Drawing.sdTurbo   // the measurement route draws with sd-turbo; headers tune it
         if let s = req.headers["x-steps"], let v = Int(s) { built.steps = v }
         if let c = req.headers["x-cfg"], let v = Float(c) { built.cfgWeight = v }
         if let s = req.headers["x-seed"], let v = UInt64(s) { built.seed = v }

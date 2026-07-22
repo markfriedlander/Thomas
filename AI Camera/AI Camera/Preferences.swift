@@ -110,6 +110,13 @@ final class Settings {
     var drawsThirdFrame: Bool {
         didSet { store(drawsThirdFrame, "drawsThirdFrame") }
     }
+    /// Which hand draws the third frame — the drawer's shared-store repo id. The counterpart to
+    /// `seer` for the eye: `drawsThirdFrame` is the on/off, this is the which. Only sd-turbo
+    /// exists today, so it is effectively constant until a second drawer (and a picker) arrive;
+    /// it is stored now so each shot can freeze the drawer it was taken with (see `ShotConfig`).
+    var selectedDrawer: String {
+        didSet { store(selectedDrawer, "selectedDrawer") }
+    }
     var systemPrompt: String {
         didSet { store(systemPrompt, "systemPrompt") }
     }
@@ -168,6 +175,7 @@ final class Settings {
         seer = Seer(token: d.string(forKey: "seer") ?? "")
         layout = Layout(rawValue: d.string(forKey: "layout") ?? "") ?? .superimposed
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
+        selectedDrawer = d.string(forKey: "selectedDrawer") ?? ModelCatalog.sdTurbo.id
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -206,6 +214,7 @@ final class Settings {
         seer = .apple
         layout = .superimposed
         drawsThirdFrame = false
+        selectedDrawer = ModelCatalog.sdTurbo.id
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -417,7 +426,7 @@ struct PreferencesView: View {
             if settings.drawsThirdFrame {
                 loadedRow(role: "Hand",
                           name: ModelCatalog.sdTurbo.displayName,
-                          downloaded: DrawerLoader.isAvailable)
+                          downloaded: DrawerLoader.isAvailable(settings.selectedDrawer))
             }
             // Kept from the old section — the one thing the library can't say, because it's
             // about the eye you're *currently* shooting with. Three distinct reasons need
@@ -536,9 +545,9 @@ struct PreferencesView: View {
     private var handSection: some View {
         Section {
             Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
-                .disabled(!DrawerLoader.isAvailable)
+                .disabled(!DrawerLoader.isAvailable(settings.selectedDrawer))
 
-            if !DrawerLoader.isAvailable {
+            if !DrawerLoader.isAvailable(settings.selectedDrawer) {
                 Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -557,7 +566,7 @@ struct PreferencesView: View {
             // Deactivated 2026-07-16 — see the `handSection` note and Settings. The hand draws
             // the eye's words, clean. Kept commented so reviving it is trivial:
             //
-            // if DrawerLoader.isAvailable {
+            // if DrawerLoader.isAvailable(settings.selectedDrawer) {
             //     TextEditor(text: $settings.handPrompt)
             //         .font(.system(.footnote, design: .monospaced))
             //         .frame(minHeight: 90)
@@ -627,7 +636,7 @@ struct PreferencesView: View {
     /// toward safety and will not let a shot crash.
     @ViewBuilder
     private var decoderSection: some View {
-        if DrawerLoader.isAvailable {
+        if DrawerLoader.isAvailable(settings.selectedDrawer) {
             Section {
                 Picker("Developer", selection: $settings.decoderChoice) {
                     ForEach(DecoderChoice.allCases, id: \.self) { c in
@@ -653,7 +662,7 @@ struct PreferencesView: View {
     /// when a larger size is chosen, so it's tucked below and its choice explained.
     @ViewBuilder
     private var sizeSection: some View {
-        if DrawerLoader.isAvailable {
+        if DrawerLoader.isAvailable(settings.selectedDrawer) {
             Section {
                 Picker("Size", selection: $settings.drawingSize) {
                     ForEach(DrawingSize.allCases, id: \.self) { size in
@@ -710,7 +719,7 @@ struct PreferencesView: View {
     /// switch is off, and live when drawing is on. Every non-triptych layout is always live.
     private func layoutVisibility(_ layout: Layout) -> LayoutVisibility {
         guard layout.isTriptych else { return .live }
-        if !DrawerLoader.isAvailable { return .hidden }
+        if !DrawerLoader.isAvailable(settings.selectedDrawer) { return .hidden }
         return settings.drawsThirdFrame ? .live : .greyed
     }
 

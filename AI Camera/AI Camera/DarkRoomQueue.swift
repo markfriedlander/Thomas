@@ -43,22 +43,33 @@ extension DecoderChoice: Codable {}
 /// appear here. If you add a render setting, add it to BOTH. Cross-checked 2026-07-19: the nine
 /// below are exactly what `resetEverything()` sets.
 ///
-/// The eye is captured explicitly (`seer`). The drawer is implicit today — sd-turbo whenever
-/// `drawsThirdFrame` is on — because there is only one drawer. When #6 adds a drawer choice, a
-/// drawer id joins this struct (and `version` bumps).
+/// The eye is captured explicitly (`seer`), and now the drawer too (`drawerRepoID`). A record
+/// written before drawers were selectable has no `drawerRepoID` key; decoding fills it with `nil`,
+/// which `effectiveDrawerID` reads as sd-turbo — the only drawer there was when it was frozen.
+/// That is why the field is Optional: the same no-migration trick as `queueOrder`/`blockedModel`.
 nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     /// On-disk schema version, so a future change can migrate old records instead of failing.
-    var version: Int = 1
+    /// Bumped to 2 when the drawer id joined (2026-07-21). Old v1 records still decode: the new
+    /// field is Optional, so a missing key is `nil`, not a failure.
+    var version: Int = 2
 
     var seer: Seer                  // the eye
     var layout: Layout
-    var drawsThirdFrame: Bool       // whether the drawer (sd-turbo) runs
+    var drawsThirdFrame: Bool       // whether the drawer runs at all
+    /// Which hand drew it — frozen so a queued shot redevelops with the drawer it was taken with,
+    /// exactly as `seer` freezes the eye. Optional for back-compat (see the type doc); read it
+    /// through `effectiveDrawerID`, never raw.
+    var drawerRepoID: String?
     var systemPrompt: String
     var temperature: Double
     var frameTwoShows: FrameTwoWords
     var drawingSize: DrawingSize
     var upscaler: UpscaleMethod
     var decoderChoice: DecoderChoice
+
+    /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
+    /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
+    var effectiveDrawerID: String { drawerRepoID ?? ModelCatalog.sdTurbo.id }
 }
 
 extension ShotConfig {
@@ -71,6 +82,7 @@ extension ShotConfig {
             seer: s.seer,
             layout: s.layout,
             drawsThirdFrame: s.drawsThirdFrame,
+            drawerRepoID: s.selectedDrawer,
             systemPrompt: s.systemPrompt,
             temperature: s.temperature,
             frameTwoShows: s.frameTwoShows,
@@ -506,7 +518,12 @@ final class DarkRoomWorker {
     nonisolated static func missingModel(for config: ShotConfig) -> String? {
         let eye = ModelCatalog.model(for: config.seer)
         if !eye.isInstalled { return eye.displayName }
-        if config.drawsThirdFrame, !ModelCatalog.sdTurbo.isInstalled { return ModelCatalog.sdTurbo.displayName }
+        if config.drawsThirdFrame {
+            // The frozen drawer, not a hardcoded sd-turbo — a shot taken with a different hand
+            // blocks on that hand. An id with no catalog entry counts as missing too (name = id).
+            let drawer = ModelCatalog.model(id: config.effectiveDrawerID)
+            if !(drawer?.isInstalled ?? false) { return drawer?.displayName ?? config.effectiveDrawerID }
+        }
         return nil
     }
 

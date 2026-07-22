@@ -144,8 +144,12 @@ enum Shot {
 
         // ── Frame 3. The hand draws what the eye said. ──
         do {
+            // The drawer this shot froze at capture (sd-turbo for a pre-drawer-choice record).
+            // A shot whose drawer isn't installed is caught upstream as blocked, so by here the
+            // spec resolves; `.sdTurbo` is a defensive floor, not an expected path.
+            let drawing = Drawing.spec(for: config.effectiveDrawerID) ?? .sdTurbo
             let drawn = try await DrawerLoader.shared.draw(
-                Drawing(), prompt: prompt, decoderPreference: decoderPreference)
+                drawing, prompt: prompt, decoderPreference: decoderPreference)
             // Frame 3's model is over. Tear it down BEFORE upscaling, so the upscale (which
             // uses the GPU too) runs with the drawer's memory already returned. (The drawer
             // also tears itself down in `draw`'s `defer` — this is belt to that braces.)
