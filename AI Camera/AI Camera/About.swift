@@ -489,7 +489,7 @@ private func thomasActiveModels() -> [ModelCredit] {
     let settings = Settings.shared
     let active = ModelCatalog.all.filter { model in
         switch model.job {
-        case .seeing:  return ModelCatalog.model(for: settings.seer).id == model.id
+        case .seeing:  return settings.seer.modelID == model.id
         case .drawing: return settings.drawsThirdFrame && model.isInstalled
         }
     }

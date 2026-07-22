@@ -45,7 +45,7 @@
 //   17  Shared Model Store (Cross-App Download Lock)
 //
 //  Qwen.swift
-//   18  Qwen (The Unguarded Eye)
+//   18  The MLX Eye (Load Any VLM)
 //
 //  Developing.swift
 //   19  The Darkroom (Compositor)
@@ -203,7 +203,7 @@ struct AI_CameraApp: App {
                     let app = UIApplication.shared
                     let bgTask = app.beginBackgroundTask(withName: "DarkRoomBackgroundStop")
                     await DarkRoomWorker.shared.suspendForBackground()
-                    await QwenLoader.shared.unload()
+                    await MLXEyeLoader.shared.unload()
                     if bgTask != .invalid { app.endBackgroundTask(bgTask) }
                 }
             default:

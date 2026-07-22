@@ -140,7 +140,7 @@ struct ModelLibraryView: View {
     /// next shot, exactly as the eye is. So SD-Turbo goes green the moment you turn drawing on.
     private func isActive(_ model: CameraModel) -> Bool {
         switch model.job {
-        case .seeing:  return ModelCatalog.model(for: settings.seer).id == model.id
+        case .seeing:  return settings.seer.modelID == model.id
         case .drawing: return settings.drawsThirdFrame
         }
     }
@@ -150,10 +150,14 @@ struct ModelLibraryView: View {
         // Just records which eye the next press uses — no load/unload. Under the model-ownership
         // rule (see `Settings.seer`), the dark room queue's worker owns all model loading; the
         // live setting is only a recording template.
-        switch model.id {
-        case ModelCatalog.apple.id: settings.seer = .apple
-        case ModelCatalog.qwen.id:  settings.seer = .qwen
-        default: break
+        //
+        // The built-in is the one special case; every other seeing model is an MLX eye named by
+        // its repo id, so selecting one is generic — no per-model branch, which is the whole
+        // point of the generalization.
+        if model.id == ModelCatalog.apple.id {
+            settings.seer = .apple
+        } else {
+            settings.seer = .mlx(repoID: model.id)
         }
     }
 
@@ -200,10 +204,15 @@ struct ModelLibraryView: View {
         confirmingDelete = nil
         guard !model.isBuiltIn else { return }
         Task {
-            if model.id == Qwen.repo, await QwenLoader.shared.isLoaded {
-                await QwenLoader.shared.unload()
+            // If we're deleting the eye that's resident right now, drop it from memory first;
+            // and if the deleted model was the selected eye, fall back to the built-in so the
+            // seer never points at weights that are gone. Generic across every MLX eye.
+            if model.job == .seeing {
+                if await MLXEyeLoader.shared.isLoadedRepo(model.id) {
+                    await MLXEyeLoader.shared.unload()
+                }
                 await MainActor.run {
-                    if settings.seer == .qwen { settings.seer = .apple }
+                    if settings.seer.modelID == model.id { settings.seer = .apple }
                 }
             }
             await downloader.deleteModel(modelID: model.id)

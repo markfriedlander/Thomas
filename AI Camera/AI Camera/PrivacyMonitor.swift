@@ -90,7 +90,7 @@ final class PrivacyMonitor {
         guard networkAvailable else { return true }
 
         switch seer {
-        case .qwen:  return true    // a local MLX eye, entirely on-device
+        case .mlx:   return true    // any local MLX eye, entirely on-device
         case .apple: return false   // Apple Intelligence + network, can't guarantee on-device
         }
     }

@@ -134,7 +134,7 @@ enum Shot {
         let prompt = wordsForHand
 
         // Frame 2 is over. Let the eye go before the hand arrives.
-        await QwenLoader.shared.unload()
+        await MLXEyeLoader.shared.unload()
         onStage?(.drawing)
 
         // How big to save it, with which upscaler, and which developer — from the frozen config.
@@ -163,7 +163,7 @@ enum Shot {
 }
 
 /// Whether the eye's words will overrun the hand's prompt budget — the trigger for
-/// condensation (`Eye.condense` / `Qwen.condense`).
+/// condensation (`Eye.condense` / `MLXVLMEye.condense`).
 ///
 /// **Word count, not exact CLIP tokens.** Mark's call for round one (2026-07-16); wiring the
 /// drawer's real CLIP tokenizer in here is a parked upgrade (see NEXT) that would let us

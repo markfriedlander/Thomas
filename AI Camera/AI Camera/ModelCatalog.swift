@@ -135,7 +135,7 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
 }
 
 /// `nonisolated` because the catalog is plain data and its readers are not on the main
-/// actor — `DrawerLoader` and `QwenLoader` are actors that load weights off-main by design,
+/// actor — `DrawerLoader` and `MLXEyeLoader` are actors that load weights off-main by design,
 /// and the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` would otherwise strand a
 /// list of constants on the main thread.
 nonisolated enum ModelCatalog {
@@ -214,11 +214,13 @@ nonisolated enum ModelCatalog {
     }
 
     /// The model backing a given eye, so Preferences and the library agree about what is
-    /// loaded rather than each keeping its own idea.
+    /// loaded rather than each keeping its own idea. An `.mlx` eye whose repo isn't in the
+    /// catalog falls back to the built-in for display — it can't be selected without a
+    /// catalog entry anyway.
     static func model(for seer: Seer) -> CameraModel {
         switch seer {
-        case .apple: return apple
-        case .qwen:  return qwen
+        case .apple:       return apple
+        case .mlx(let id): return model(id: id) ?? apple
         }
     }
 }

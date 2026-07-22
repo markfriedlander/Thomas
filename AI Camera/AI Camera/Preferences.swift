@@ -89,7 +89,10 @@ final class Settings {
     /// (This also kills a latent bug: switching your eye mid-session can no longer pull a 1.6 GB
     /// model out from under a shot the worker is actively developing.)
     var seer: Seer {
-        didSet { store(seer.rawValue, "seer") }
+        // Persisted by its canonical `token` (see Seer): "apple", or the MLX repo id. An old
+        // install that saved the pre-generalization "qwen"/"afm" rawValue still reads back
+        // correctly through `Seer(token:)`.
+        didSet { store(seer.token, "seer") }
     }
     var layout: Layout {
         didSet { store(layout.rawValue, "layout") }
@@ -162,7 +165,7 @@ final class Settings {
 
     private init() {
         let d = UserDefaults.standard
-        seer = Seer(rawValue: d.string(forKey: "seer") ?? "") ?? .apple
+        seer = Seer(token: d.string(forKey: "seer") ?? "")
         layout = Layout(rawValue: d.string(forKey: "layout") ?? "") ?? .superimposed
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
@@ -187,10 +190,6 @@ final class Settings {
         e.systemPrompt = systemPrompt
         e.temperature = temperature
         return e
-    }
-
-    var qwen: Qwen {
-        Qwen(systemPrompt: systemPrompt, temperature: temperature)
     }
 
     /// Back to the system prompt and temperature the camera shipped with.
@@ -461,7 +460,7 @@ struct PreferencesView: View {
         // Was: "Download it in Hal or Posey and it appears here." That stopped being true
         // the moment the library existed, and it was the app admitting it was a parasite on
         // two apps that aren't released.
-        case .qwen:  return "Not downloaded yet — get it in the Model Library."
+        case .mlx:   return "Not downloaded yet — get it in the Model Library."
         }
     }
 

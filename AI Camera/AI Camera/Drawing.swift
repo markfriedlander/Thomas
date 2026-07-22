@@ -173,9 +173,9 @@ nonisolated struct Drawing: Sendable {
 
 /// Holds the drawing model, and lets go of it.
 ///
-/// Deliberately the same shape as `QwenLoader` — one resident model, a coalesced in-flight
+/// Deliberately the same shape as `MLXEyeLoader` — one resident model, a coalesced in-flight
 /// load, a pre-flight refusal, and an `unload()` that drains the GPU before releasing. Not
-/// symmetry for its own sake: `Qwen.unload()` shipped as `loaded = nil`, which was a latent
+/// symmetry for its own sake: the eye loader's `unload()` shipped as `loaded = nil`, which was a latent
 /// SIGABRT (releasing the container while Metal command buffers are still in flight fires
 /// their completion handlers against freed memory). The only reason it never crashed is that
 /// nothing ever called it. That lesson costs nothing to apply here and everything to relearn.

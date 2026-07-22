@@ -26,8 +26,8 @@ import UIKit   // the worker composites [UIImage] and saves to Photos
 // The queue persists shots to disk, so the render settings must be Codable. These enums are
 // already `String`-backed (the app stores them by rawValue in UserDefaults), so Codable is
 // synthesized from that same stable rawValue — the on-disk format matches what the app already
-// treats as each setting's identity.
-extension Seer: Codable {}
+// treats as each setting's identity. (`Seer` is the exception: it carries an associated repo
+// id, so it has its own hand-written `Codable` next to the type — see CameraView block 22.)
 extension Layout: Codable {}
 extension FrameTwoWords: Codable {}
 extension DrawingSize: Codable {}

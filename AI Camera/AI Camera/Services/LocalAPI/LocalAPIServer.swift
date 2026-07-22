@@ -425,7 +425,7 @@ extension LocalAPIServer {
         let payload: [String: Any] = [
             "pressed":           true,
             "savedToPhotos":     true,
-            "seer":              config.seer == .qwen ? "qwen" : "afm",
+            "seer":              seerWire(config.seer),
             "layout":            layoutName,
             "drewThirdFrame":    raw.drawn != nil,
             // ⭐ The count that answers the "separate images" bug: how many assets landed.
@@ -499,7 +499,7 @@ extension LocalAPIServer {
             "captured":     true,
             "held":         hold,
             "id":           record.id.uuidString,
-            "seer":         config.seer == .qwen ? "qwen" : "afm",
+            "seer":         seerWire(config.seer),
             "drawsThird":   config.drawsThirdFrame,
             "layout":       config.layout.name,
             "place":        place as Any,
@@ -519,7 +519,7 @@ extension LocalAPIServer {
                 "id":         r.id.uuidString,
                 "status":     r.status.rawValue,
                 "capturedAt": iso.string(from: r.capturedAt),
-                "seer":       r.config.seer == .qwen ? "qwen" : "afm",
+                "seer":       seerWire(r.config.seer),
                 "drawsThird": r.config.drawsThirdFrame,
                 "layout":     r.config.layout.name,
                 "place":      r.place as Any
@@ -579,7 +579,7 @@ extension LocalAPIServer {
         let applied = await MainActor.run { () -> [String] in
             let s = Settings.shared
             var changed: [String] = []
-            if let v = obj["seer"] as? String, let x = Seer(rawValue: v) { s.seer = x; changed.append("seer=\(v)") }
+            if let v = obj["seer"] as? String, !v.isEmpty { s.seer = Seer(token: v); changed.append("seer=\(v)") }
             if let v = obj["layout"] as? String, let x = Layout(rawValue: v) { s.layout = x; changed.append("layout=\(v)") }
             if let v = obj["drawsThirdFrame"] as? Bool { s.drawsThirdFrame = v; changed.append("drawsThirdFrame=\(v)") }
             if let v = obj["systemPrompt"] as? String { s.systemPrompt = v; changed.append("systemPrompt") }
@@ -621,7 +621,7 @@ extension LocalAPIServer {
     private static func readSettings() -> SettingsSnapshot {
         let s = Settings.shared
         return SettingsSnapshot(
-            seer: s.seer.rawValue, layout: s.layout.rawValue,
+            seer: s.seer.token, layout: s.layout.rawValue,
             frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
             upscaler: s.upscaler.rawValue, decoderChoice: s.decoderChoice.rawValue,
             systemPrompt: s.systemPrompt,
@@ -727,12 +727,15 @@ extension LocalAPIServer {
         }()
         let photograph = raw.uprighted(orientation)
 
-        // Which eye, and whether to draw. Default to the loaded seer, drawing on.
+        // Which eye, and whether to draw. Default to the loaded seer, drawing on. An X-Model of
+        // "qwen"/"afm"/"apple" maps to the known eyes; any other non-empty value is taken as an
+        // MLX repo id (the generalization — you can drive any downloaded eye); absent falls back
+        // to the current setting.
         let seer: Seer
-        switch req.headers["x-model"] {
-        case "qwen":         seer = .qwen
-        case "afm", "apple": seer = .apple
-        default:             seer = await MainActor.run { Settings.shared.seer }
+        if let m = req.headers["x-model"], !m.isEmpty {
+            seer = Seer(token: m)
+        } else {
+            seer = await MainActor.run { Settings.shared.seer }
         }
         let drawThird = (req.headers["x-draw"] ?? "true") != "false"
 
@@ -780,7 +783,7 @@ extension LocalAPIServer {
         let snapshot = MLX.Memory.snapshot()
         var payload: [String: Any] = [
             "shot":              true,
-            "seer":              seer == .qwen ? "qwen" : "afm",
+            "seer":              seerWire(seer),
             "drewThirdFrame":    out.drawn != nil,
             "outcome":           out.outcome,
             "words":             out.words,
@@ -1241,8 +1244,8 @@ extension LocalAPIServer {
         }
 
         // If we're about to delete the model, make sure we aren't holding it open.
-        if repoID == Qwen.repo, await QwenLoader.shared.isLoaded {
-            await QwenLoader.shared.unload()
+        if await MLXEyeLoader.shared.isLoadedRepo(repoID) {
+            await MLXEyeLoader.shared.unload()
             cameraLog("RELEASE: unloaded \(repoID) before releasing its claim")
         }
 
@@ -1325,9 +1328,21 @@ extension LocalAPIServer {
         ]))
     }
 
+    /// The antenna's wire spelling for an eye — back-compatible with the pre-generalization
+    /// tooling: the two known eyes still serialize as "afm"/"qwen", so `camera_test.py` and any
+    /// existing harness keep reading the same values; any other MLX eye serializes as its repo
+    /// id. Parsing (`Seer.init(token:)`) accepts all of these plus "apple".
+    private func seerWire(_ s: Seer) -> String {
+        switch s {
+        case .apple: return "afm"
+        case .mlx(let id) where id == Qwen.repo: return "qwen"
+        case .mlx(let id): return id
+        }
+    }
+
     private func handleMemory() async -> (Int, String) {
         let snapshot = MLX.Memory.snapshot()
-        let resident = await QwenLoader.shared.isLoaded
+        let resident = await MLXEyeLoader.shared.isLoaded
         return (200, json([
             // iOS's view — the one that decides whether we get killed.
             "availableMB":  processAvailableMemoryMB().isInfinite
@@ -1391,7 +1406,7 @@ extension LocalAPIServer {
     /// reclamation curve repeatedly instead of once.
     private func handleUnload() async -> (Int, String) {
         let before = processAvailableMemoryMB()
-        await QwenLoader.shared.unload()
+        await MLXEyeLoader.shared.unload()
         let after = processAvailableMemoryMB()
         return (200, json([
             "unloaded":       true,
@@ -1531,7 +1546,7 @@ extension LocalAPIServer {
         // filter to get past.
         let modelName = req.headers["x-model"] ?? "afm"
         if modelName == "qwen" {
-            let qwen = Qwen(systemPrompt: eye.systemPrompt, temperature: eye.temperature)
+            let qwen = MLXVLMEye(repoID: Qwen.repo, systemPrompt: eye.systemPrompt, temperature: eye.temperature)
             let started = Date()
             let perception = await ModelLane.shared.run("look:qwen") {
                 await qwen.look(at: cgImage)
@@ -1551,7 +1566,7 @@ extension LocalAPIServer {
                 "lookSeconds":  round(now.timeIntervalSince(started) * 1000) / 1000,
                 "totalSeconds": round(now.timeIntervalSince(started) * 1000) / 1000
             ]
-            payload["modelLoaded"] = await QwenLoader.shared.isLoaded
+            payload["modelLoaded"] = await MLXEyeLoader.shared.isLoaded
             return (200, json(payload))
         }
 

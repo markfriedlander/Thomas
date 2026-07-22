@@ -290,32 +290,60 @@ struct CameraView: View {
 /// Which machine is doing the seeing.
 ///
 /// A camera has one film in it at a time. This is that — chosen before you raise the
-/// camera, then out of your hands. The two eyes are genuinely different animals: Apple's
-/// is obedient but nearly blind and has a filter that stops images at the door; Qwen sees
-/// far more, has no filter at all, and largely ignores the system prompt. Preferences
-/// will let you load either. Neither is "better" — that's not ours to say (Principle 3).
-nonisolated enum Seer: String, CaseIterable, Hashable, Sendable {
+/// camera, then out of your hands. There are two *kinds* of eye and they are genuinely
+/// different animals: Apple's built-in model is obedient but nearly blind and has a filter
+/// that stops images at the door; the MLX eyes (Qwen, and any other VLM you load) see far
+/// more, have no filter at all, and largely ignore the system prompt. Preferences lets you
+/// load any of them. None is "better" — that's not ours to say (Principle 3).
+///
+/// `.apple` is the one built-in special case; `.mlx(repoID:)` is any downloadable VLM,
+/// named by its shared-store repo id — so the id rides *inside* the value and a shot frozen
+/// with a given eye re-develops with that same eye, even if the live eye later changes.
+nonisolated enum Seer: Hashable, Sendable {
     case apple
-    case qwen
+    case mlx(repoID: String)
+
+    /// The canonical string spelling — one form used for persistence (`UserDefaults`), for
+    /// the frozen `ShotConfig` (`Codable`), and for the antenna. `init(token:)` stays
+    /// back-compatible: an install that saved the old `"qwen"`/`"afm"` raw values still
+    /// decodes to the right eye.
+    var token: String {
+        switch self {
+        case .apple:       return "apple"
+        case .mlx(let id): return id
+        }
+    }
+
+    init(token: String) {
+        switch token {
+        case "apple", "afm", "":  self = .apple
+        case "qwen":              self = .mlx(repoID: Qwen.repo)   // legacy alias for the old rawValue
+        default:                  self = .mlx(repoID: token)
+        }
+    }
+
+    /// The catalog id this eye corresponds to — `"apple"`, or the MLX repo id. Used to line
+    /// the selected eye up against a `CameraModel` in the library and the About screen.
+    var modelID: String { token }
 
     var name: String {
         switch self {
-        case .apple: return "Apple Intelligence"
-        case .qwen:  return "Qwen3.5-2B"
+        case .apple:       return "Apple Intelligence"
+        case .mlx(let id): return ModelCatalog.model(id: id)?.displayName ?? id
         }
     }
 
     /// Whether this eye can be loaded right now.
     var isAvailable: Bool {
         switch self {
-        case .apple: return Readiness.current.isReady
-        case .qwen:  return QwenLoader.isAvailable
+        case .apple:       return Readiness.current.isReady
+        case .mlx(let id): return MLXEyeLoader.isAvailable(id)
         }
     }
 
     /// The image is already upright — see `uprighted`. No orientation to pass.
     ///
-    /// The prompt and temperature come from Settings, so both eyes are handed exactly the
+    /// The prompt and temperature come from Settings, so every eye is handed exactly the
     /// same instructions — the only variable is the machine.
     @MainActor
     func look(at image: CGImage, systemPrompt: String, temperature: Double) async -> Perception {
@@ -327,9 +355,9 @@ nonisolated enum Seer: String, CaseIterable, Hashable, Sendable {
             eye.systemPrompt = systemPrompt
             eye.temperature = temperature
             return await eye.lookWithRetry(at: image).best
-        case .qwen:
+        case .mlx(let id):
             // No retry: there is no filter to get past.
-            return await Qwen(systemPrompt: systemPrompt, temperature: temperature).look(at: image)
+            return await MLXVLMEye(repoID: id, systemPrompt: systemPrompt, temperature: temperature).look(at: image)
         }
     }
 
@@ -345,9 +373,24 @@ nonisolated enum Seer: String, CaseIterable, Hashable, Sendable {
             eye.systemPrompt = systemPrompt
             eye.temperature = temperature
             return await eye.condense(text, toAtMostWords: maxWords)
-        case .qwen:
-            return await Qwen(systemPrompt: systemPrompt, temperature: temperature).condense(text, toAtMostWords: maxWords)
+        case .mlx(let id):
+            return await MLXVLMEye(repoID: id, systemPrompt: systemPrompt, temperature: temperature).condense(text, toAtMostWords: maxWords)
         }
+    }
+}
+
+/// Persisted as a single string (`token`) rather than by synthesized case-keys, so the
+/// on-disk form is the stable, human-legible spelling shared with `UserDefaults` and the
+/// antenna — and so an old `"qwen"` value survives the upgrade. Custom because `.mlx` carries
+/// an associated value, so there is no free `String` raw value to lean on.
+extension Seer: Codable {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        self = Seer(token: try c.decode(String.self))
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(token)
     }
 }
 
