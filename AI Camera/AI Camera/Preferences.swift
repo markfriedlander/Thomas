@@ -27,7 +27,7 @@
 
 import SwiftUI
 
-// ==== LEGO START: 23 Settings (What The Camera Is Loaded With) ====
+// ==== LEGO START: 20 Settings (What The Camera Is Loaded With) ====
 
 /// What frame 2 prints — the eye's words, in one of two honesties.
 ///
@@ -299,9 +299,9 @@ struct Preset: Identifiable {
     ]
 }
 
-// ==== LEGO END: 23 Settings (What The Camera Is Loaded With) ====
+// ==== LEGO END: 20 Settings (What The Camera Is Loaded With) ====
 
-// ==== LEGO START: 24 PreferencesView (The Film Drawer) ====
+// ==== LEGO START: 21 PreferencesView (The Film Drawer) ====
 
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
@@ -787,4 +787,4 @@ private struct PresetPicker: View {
     }
 }
 
-// ==== LEGO END: 24 PreferencesView (The Film Drawer) ====
+// ==== LEGO END: 21 PreferencesView (The Film Drawer) ====

@@ -42,8 +42,9 @@
 //
 
 import Foundation
+import SharedModelStoreKit
 
-// ==== LEGO START: 27 Model Catalog (What The Camera Can Load) ====
+// ==== LEGO START: 24 Model Catalog (What The Camera Can Load) ====
 
 /// Which frame a model serves.
 ///
@@ -225,4 +226,4 @@ nonisolated enum ModelCatalog {
     }
 }
 
-// ==== LEGO END: 27 Model Catalog (What The Camera Can Load) ====
+// ==== LEGO END: 24 Model Catalog (What The Camera Can Load) ====

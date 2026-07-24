@@ -66,9 +66,10 @@ import Foundation
 import SwiftUI
 import Combine
 import UIKit
+import SharedModelStoreKit
 
 
-// ==== LEGO START: 26 The Downloader (Fetching Weights) ====
+// ==== LEGO START: 23 The Downloader (Fetching Weights) ====
 
 // MARK: - Background Download Coordinator
 //
@@ -2143,4 +2144,4 @@ extension Notification.Name {
     static let mlxModelDidDownload = Notification.Name("mlxModelDidDownload")
 }
 
-// ==== LEGO END: 26 The Downloader (Fetching Weights) ====
+// ==== LEGO END: 23 The Downloader (Fetching Weights) ====

@@ -24,7 +24,7 @@ import Foundation
 import Metal
 import MetalFX
 
-// ==== LEGO START: 31 The Upscaler (Making The Drawing Bigger) ====
+// ==== LEGO START: 28 The Upscaler (Making The Drawing Bigger) ====
 
 /// How large the drawing is saved. The long edge, in pixels.
 ///
@@ -211,4 +211,4 @@ nonisolated enum Upscaler {
     }
 }
 
-// ==== LEGO END: 31 The Upscaler (Making The Drawing Bigger) ====
+// ==== LEGO END: 28 The Upscaler (Making The Drawing Bigger) ====

@@ -13,13 +13,14 @@
 //  `ShotConfig`, the frozen render snapshot.
 //
 
-// ==== LEGO START: 35 The Dark Room Queue (Durable Developing) ====
+// ==== LEGO START: 32 The Dark Room Queue (Durable Developing) ====
 
 import Foundation
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import UIKit   // the worker composites [UIImage] and saves to Photos
+import SharedModelStoreKit
 
 // MARK: - Frozen render config
 
@@ -616,4 +617,4 @@ final class DarkRoomWorker {
     }
 }
 
-// ==== LEGO END: 35 The Dark Room Queue (Durable Developing) ====
+// ==== LEGO END: 32 The Dark Room Queue (Durable Developing) ====

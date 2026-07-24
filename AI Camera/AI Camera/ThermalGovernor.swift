@@ -8,7 +8,7 @@
 //  several-second MLX draw — at a time.
 //
 
-// ==== LEGO START: 34 ThermalGovernor (Backing Off When The Phone Runs Hot) ====
+// ==== LEGO START: 31 ThermalGovernor (Backing Off When The Phone Runs Hot) ====
 
 import Foundation
 
@@ -96,4 +96,4 @@ actor ThermalGovernor {
     }
 }
 
-// ==== LEGO END: 34 ThermalGovernor (Backing Off When The Phone Runs Hot) ====
+// ==== LEGO END: 31 ThermalGovernor (Backing Off When The Phone Runs Hot) ====

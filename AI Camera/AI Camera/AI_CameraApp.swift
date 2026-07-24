@@ -39,73 +39,69 @@
 //   13  Lens (Capture)
 //   14  Place (Reality's Receipt)
 //
-//  SharedModelStore.swift
-//   15  Shared Model Store (App-Group Paths)
-//   16  Shared Model Store (Refcount Manifest)
-//   17  Shared Model Store (Cross-App Download Lock)
-//
 //  Qwen.swift
-//   18  The MLX Eye (Load Any VLM)
+//   15  The MLX Eye (Load Any VLM)
 //
 //  Developing.swift
-//   19  The Darkroom (Compositor)
+//   16  The Darkroom (Compositor)
 //
 //  CameraView.swift
-//   20  Viewfinder
-//   21  CameraView (The Sacred Screen)
-//   22  Seer (Which Eye Is Loaded)
+//   17  Viewfinder
+//   18  CameraView (The Sacred Screen)
+//   19  Seer (Which Eye Is Loaded)
 //
 //  Preferences.swift
-//   23  Settings (What The Camera Is Loaded With)
-//   24  PreferencesView (The Film Drawer)
+//   20  Settings (What The Camera Is Loaded With)
+//   21  PreferencesView (The Film Drawer)
 //
 //  ProcessMemoryGuard.swift
-//   25  ProcessMemoryGuard (Load-Time Memory Headroom)
+//   22  ProcessMemoryGuard (Load-Time Memory Headroom)
 //
 //  MLXModelDownloader.swift
-//   26  The Downloader (Fetching Weights)
+//   23  The Downloader (Fetching Weights)
 //
 //  ModelCatalog.swift
-//   27  Model Catalog (What The Camera Can Load)
+//   24  Model Catalog (What The Camera Can Load)
 //
 //  ModelLibraryView.swift
-//   28  ModelLibraryView (The Model Library)
+//   25  ModelLibraryView (The Model Library)
 //
 //  Drawing.swift
-//   29  The Hand (Frame 3 — Drawing From Words)
+//   26  The Hand (Frame 3 — Drawing From Words)
 //
 //  Shot.swift
-//   30  The Shot (One Press, All Three Frames)
+//   27  The Shot (One Press, All Three Frames)
 //
 //  Upscaler.swift
-//   31  The Upscaler (Making The Drawing Bigger)
+//   28  The Upscaler (Making The Drawing Bigger)
 //
 //  TAESD.swift
-//   32  TAESD (A Tiny, Low-Memory Decoder For The Drawing)
+//   29  TAESD (A Tiny, Low-Memory Decoder For The Drawing)
 //
 //  About.swift
-//   33  About (Who Made This, And On Whose Shoulders)
+//   30  About (Who Made This, And On Whose Shoulders)
 //
 //  ThermalGovernor.swift
-//   34  ThermalGovernor (Backing Off When The Phone Runs Hot)
+//   31  ThermalGovernor (Backing Off When The Phone Runs Hot)
 //
 //  DarkRoomQueue.swift
-//   35  The Dark Room Queue (Durable Developing)
+//   32  The Dark Room Queue (Durable Developing)
 //
 //  StatusFeed.swift
-//   36  StatusFeed (The Annunciator)
+//   33  StatusFeed (The Annunciator)
 //
 //  PrivacyMonitor.swift
-//   37  PrivacyMonitor (Could This Look Leave The Device?)
+//   34  PrivacyMonitor (Could This Look Leave The Device?)
 //
 //  DarkRoomView.swift
-//   38  The Dark Room Screen (The Developing Queue)
+//   35  The Dark Room Screen (The Developing Queue)
 //
 //  Created by Mark Friedlander on 7/14/26.
 //
 
 import SwiftUI
 import UIKit
+import SharedModelStoreKit
 
 /// Bridges the one UIKit lifecycle method SwiftUI doesn't expose.
 ///
@@ -153,16 +149,22 @@ struct AI_CameraApp: App {
     /// this can be orphaned from.
     @Environment(\.scenePhase) private var scenePhase
 
-    #if DEBUG
-    /// The antenna starts with the APP, not with a view.
+    /// Runs before anything can touch the shared model store, which is why `configure` lives
+    /// here and must be the FIRST line. It points `SharedModelStore` at the family App Group;
+    /// without it the store silently falls back to per-app Caches and cross-app sharing (adopting
+    /// Hal's and Posey's already-downloaded models) stops working, with no error in Release. The
+    /// package logs a one-time warning if this is ever missed, but the fix is to not miss it.
+    /// Ships in every build.
     ///
-    /// It used to auto-start in `ContentView.onAppear` — and then CameraView became the
-    /// root, ContentView stopped being shown, and the antenna silently never started.
-    /// CC spent the next stretch guessing at a rotation bug with no instrument, because
-    /// the instrument was wired to a screen nobody looks at any more. App-level: there is
-    /// no view it can be orphaned from. Still compiled out of Release entirely.
-    init() { LocalAPIServer.shared.start() }
-    #endif
+    /// The antenna start stays DEBUG-only inside. It used to auto-start in `ContentView.onAppear`,
+    /// then CameraView became the root and it silently never started, so it lives at app level now
+    /// (no view to orphan it from). Compiled out of Release entirely.
+    init() {
+        SharedModelStore.configure(appGroupID: "group.com.MarkFriedlander.aifamily")
+        #if DEBUG
+        LocalAPIServer.shared.start()
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -174,6 +176,11 @@ struct AI_CameraApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                // Keep our shared-model claims alive. The store's 30-day lease reaps an app's
+                // claims if it hasn't been seen in that long, so we stamp a heartbeat on every
+                // foreground (cold launch + return). Off-main on purpose: it's a coordinated file
+                // write three apps may contend on, which has no business on the main thread.
+                Task.detached { SharedModelStore.touchHeartbeat() }
                 // ⭐ RESUME — the whole crash/background/call/thermal recovery story in one line.
                 // `.active` fires on cold launch AND on every return to the foreground, so any
                 // shot left undeveloped on disk (a crash mid-develop, a kill while backgrounded)

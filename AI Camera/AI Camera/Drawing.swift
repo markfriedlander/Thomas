@@ -49,8 +49,9 @@ import CoreGraphics
 import Foundation
 import Hub
 import MLX
+import SharedModelStoreKit
 
-// ==== LEGO START: 29 The Hand (Frame 3 — Drawing From Words) ====
+// ==== LEGO START: 26 The Hand (Frame 3 — Drawing From Words) ====
 
 nonisolated struct Drawing: Sendable {
     /// Which drawer this is — the shared-store repo id. Every render-affecting knob below is a
@@ -534,4 +535,4 @@ enum DrawingError: LocalizedError {
     }
 }
 
-// ==== LEGO END: 29 The Hand (Frame 3 — Drawing From Words) ====
+// ==== LEGO END: 26 The Hand (Frame 3 — Drawing From Words) ====

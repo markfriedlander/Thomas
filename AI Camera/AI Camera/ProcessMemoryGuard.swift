@@ -48,9 +48,10 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
+import SharedModelStoreKit
 #endif
 
-// ==== LEGO START: 25 ProcessMemoryGuard (Load-Time Memory Headroom) ====
+// ==== LEGO START: 22 ProcessMemoryGuard (Load-Time Memory Headroom) ====
 
 // MARK: - Logging
 //
@@ -289,4 +290,4 @@ nonisolated func memoryRefusalMessage(
     return "Not enough memory to load \(modelName) right now. It needs roughly \(requiredStr) but only \(availableStr) is available. Try closing other apps, or give iOS a moment — it reclaims memory lazily after a model is released."
 }
 
-// ==== LEGO END: 25 ProcessMemoryGuard (Load-Time Memory Headroom) ====
+// ==== LEGO END: 22 ProcessMemoryGuard (Load-Time Memory Headroom) ====

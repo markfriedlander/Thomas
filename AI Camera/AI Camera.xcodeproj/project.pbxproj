@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		851C6E8D3013F6B100362DA9 /* SharedModelStoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */; };
 		85F3B66D300740F300DA91ED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B66C300740F300DA91ED /* MLXLMCommon */; };
 		85F3B66F300740F300DA91ED /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B66E300740F300DA91ED /* MLXVLM */; };
 		85F3B6723007434600DA91ED /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B6713007434600DA91ED /* MLXHuggingFace */; };
@@ -32,6 +33,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				85F3B6793007442500DA91ED /* Transformers in Frameworks */,
+				851C6E8D3013F6B100362DA9 /* SharedModelStoreKit in Frameworks */,
 				85F3B66F300740F300DA91ED /* MLXVLM in Frameworks */,
 				85F3B66D300740F300DA91ED /* MLXLMCommon in Frameworks */,
 				85F3B6753007442500DA91ED /* Hub in Frameworks */,
@@ -90,6 +92,7 @@
 				85F3B6743007442500DA91ED /* Hub */,
 				85F3B6763007442500DA91ED /* Tokenizers */,
 				85F3B6783007442500DA91ED /* Transformers */,
+				851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */,
 			);
 			productName = "AI Camera";
 			productReference = 85F3B6373007128400DA91ED /* AI Camera.app */;
@@ -122,6 +125,7 @@
 			packageReferences = (
 				85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				85F3B6733007442500DA91ED /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				851C6E8B3013F6B100362DA9 /* XCRemoteSwiftPackageReference "SharedModelStoreKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85F3B6383007128400DA91ED /* Products */;
@@ -365,6 +369,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		851C6E8B3013F6B100362DA9 /* XCRemoteSwiftPackageReference "SharedModelStoreKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/markfriedlander/SharedModelStoreKit";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
 		85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
@@ -384,6 +396,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 851C6E8B3013F6B100362DA9 /* XCRemoteSwiftPackageReference "SharedModelStoreKit" */;
+			productName = SharedModelStoreKit;
+		};
 		85F3B66C300740F300DA91ED /* MLXLMCommon */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;

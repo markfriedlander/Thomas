@@ -25,7 +25,7 @@ import CoreGraphics
 import Photos
 import UIKit
 
-// ==== LEGO START: 30 The Shot (One Press, All Three Frames) ====
+// ==== LEGO START: 27 The Shot (One Press, All Three Frames) ====
 
 @MainActor
 enum Shot {
@@ -192,4 +192,4 @@ enum PromptBudget {
     }
 }
 
-// ==== LEGO END: 30 The Shot (One Press, All Three Frames) ====
+// ==== LEGO END: 27 The Shot (One Press, All Three Frames) ====

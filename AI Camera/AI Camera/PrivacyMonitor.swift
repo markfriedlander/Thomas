@@ -33,7 +33,7 @@
 import SwiftUI
 import Network
 
-// ==== LEGO START: 37 PrivacyMonitor (Could This Look Leave The Device?) ====
+// ==== LEGO START: 34 PrivacyMonitor (Could This Look Leave The Device?) ====
 
 /// Watches the device's network reachability for the privacy lock. A single shared instance,
 /// started once when the capture screen's status panel appears.
@@ -147,4 +147,4 @@ struct PrivacyPopover: View {
     }
 }
 
-// ==== LEGO END: 37 PrivacyMonitor (Could This Look Leave The Device?) ====
+// ==== LEGO END: 34 PrivacyMonitor (Could This Look Leave The Device?) ====

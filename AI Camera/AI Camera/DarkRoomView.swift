@@ -21,7 +21,7 @@ import PhotosUI
 import ImageIO
 import UIKit
 
-// ==== LEGO START: 38 The Dark Room Screen (The Developing Queue) ====
+// ==== LEGO START: 35 The Dark Room Screen (The Developing Queue) ====
 
 struct DarkRoomView: View {
     @Environment(\.dismiss) private var dismiss
@@ -253,4 +253,4 @@ private struct DarkRoomRow: View {
     }
 }
 
-// ==== LEGO END: 38 The Dark Room Screen (The Developing Queue) ====
+// ==== LEGO END: 35 The Dark Room Screen (The Developing Queue) ====

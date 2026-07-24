@@ -33,8 +33,9 @@
 //
 
 import SwiftUI
+import SharedModelStoreKit
 
-// ==== LEGO START: 28 ModelLibraryView (The Model Library) ====
+// ==== LEGO START: 25 ModelLibraryView (The Model Library) ====
 
 struct ModelLibraryView: View {
     @State private var settings = Settings.shared
@@ -563,4 +564,4 @@ struct ModelLicenseSheet: View {
     }
 }
 
-// ==== LEGO END: 28 ModelLibraryView (The Model Library) ====
+// ==== LEGO END: 25 ModelLibraryView (The Model Library) ====

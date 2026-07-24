@@ -32,8 +32,9 @@ import MLXLMCommon
 import MLXVLM
 import MLXHuggingFace
 import Tokenizers
+import SharedModelStoreKit
 
-// ==== LEGO START: 18 The MLX Eye (Load Any VLM) ====
+// ==== LEGO START: 15 The MLX Eye (Load Any VLM) ====
 
 /// A downloadable vision-language model, loaded from the family's shared store and run
 /// through MLX. This is the **generic** eye: `repoID` names which model, so one type serves
@@ -370,4 +371,4 @@ enum MLXEyeError: LocalizedError {
     }
 }
 
-// ==== LEGO END: 18 The MLX Eye (Load Any VLM) ====
+// ==== LEGO END: 15 The MLX Eye (Load Any VLM) ====

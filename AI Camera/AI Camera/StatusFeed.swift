@@ -27,7 +27,7 @@
 
 import SwiftUI
 
-// ==== LEGO START: 36 StatusFeed (The Annunciator) ====
+// ==== LEGO START: 33 StatusFeed (The Annunciator) ====
 
 /// One status light on the panel, a small value, deliberately free of behavior so the logic that
 /// decides *whether* to show it can be reasoned about (and tested) apart from how it looks.
@@ -239,4 +239,4 @@ struct StatusFeedView: View {
     }
 }
 
-// ==== LEGO END: 36 StatusFeed (The Annunciator) ====
+// ==== LEGO END: 33 StatusFeed (The Annunciator) ====

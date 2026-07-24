@@ -36,6 +36,7 @@ import Security
 import CoreGraphics
 import ImageIO
 import UIKit              // UIImage.cgImage — /shoot returns the drawn frame's CGImage
+import SharedModelStoreKit
 
 // Posey Task 13 #1 (2026-05-03), adopted here: the entire server compiles only in DEBUG
 // builds. Release binaries ship no HTTP runtime, no bearer-token Keychain handling, and

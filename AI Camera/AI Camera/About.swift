@@ -25,7 +25,7 @@
 //  (see `ModelLicenseSheet` in ModelLibraryView).
 //
 
-// ==== LEGO START: 33 About (Who Made This, And On Whose Shoulders) ====
+// ==== LEGO START: 30 About (Who Made This, And On Whose Shoulders) ====
 
 import SwiftUI
 
@@ -600,4 +600,4 @@ private let thomasAcknowledgements: [Acknowledgement] = [
                     url: "https://github.com/swiftlang/swift-syntax"),
 ]
 
-// ==== LEGO END: 33 About (Who Made This, And On Whose Shoulders) ====
+// ==== LEGO END: 30 About (Who Made This, And On Whose Shoulders) ====

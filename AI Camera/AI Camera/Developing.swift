@@ -26,7 +26,7 @@ import CoreImage
 import ImageIO
 import UIKit
 
-// ==== LEGO START: 19 The Darkroom (Compositor) ====
+// ==== LEGO START: 16 The Darkroom (Compositor) ====
 
 /// How the words meet the photograph.
 ///
@@ -454,4 +454,4 @@ enum Darkroom {
     }
 }
 
-// ==== LEGO END: 19 The Darkroom (Compositor) ====
+// ==== LEGO END: 16 The Darkroom (Compositor) ====

@@ -44,7 +44,7 @@ import Foundation
 import MLX
 import MLXNN
 
-// ==== LEGO START: 32 TAESD (A Tiny, Low-Memory Decoder For The Drawing) ====
+// ==== LEGO START: 29 TAESD (A Tiny, Low-Memory Decoder For The Drawing) ====
 
 /// One TAESD residual block: `conv → relu → conv → relu → conv`, added to a skip, fused by a relu.
 ///
@@ -224,4 +224,4 @@ extension TAESDDecoder {
     }
 }
 
-// ==== LEGO END: 32 TAESD (A Tiny, Low-Memory Decoder For The Drawing) ====
+// ==== LEGO END: 29 TAESD (A Tiny, Low-Memory Decoder For The Drawing) ====
