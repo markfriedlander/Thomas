@@ -145,6 +145,47 @@ nonisolated func sharedStoreKey(forRepoID repoID: String) -> String {
     SharedModelStore.requiredIdentity(forRepoID: repoID)
 }
 
+/// Launch-time sweep of superseded PLAIN copies (version-safety, no-orphans).
+///
+/// Before model identity carried a version, a curated model lived in its plain `repo`
+/// folder. Now each curated (pinned, non-`plainFolderRepos`) model lives under its
+/// version-stamped identity `repo@<sha>`, and the plain copy is never trusted. The
+/// per-download / per-adopt reap removes a plain copy the moment its stamped replacement
+/// lands — but a model the user never re-triggers would keep its stale plain copy forever.
+/// This closes that gap: for every pinned non-plain repo with a plain copy still on disk,
+/// drop THIS app's claim on the bare id and, once no app in the family still claims it,
+/// delete the folder.
+///
+/// Why this must run in EVERY app, not just Hal: the store deletes a shared copy only when
+/// the LAST claimant releases it. On a device with more than one of the family apps
+/// installed, an old shared plain copy survives until each app that still claims it has
+/// swept — so the no-orphans guarantee is only real when all three sweep. Idempotent (a
+/// swept model leaves nothing to find next launch); a true no-op on a device that never had
+/// a pre-version copy. `plainFolderRepos` (sd-turbo, the embedders) are skipped: their
+/// required identity IS the bare id, so their plain folder is the real copy.
+nonisolated func sweepSupersededPlainCopies() {
+    let fm = FileManager.default
+    for repoID in SharedModelStore.pinnedRevisions.keys {
+        // Only stamped repos have a superseded plain form; this guard skips plainFolderRepos.
+        guard SharedModelStore.requiredIdentity(forRepoID: repoID) != repoID else { continue }
+        guard SharedModelStore.isRepoDownloaded(repoID) else { continue }
+        // Drop our claim on the bare id; the store deletes files only when no app in the
+        // family still claims it. Re-check presence before removing (a concurrent reap on
+        // the same launch may have taken it already).
+        let safeToDelete = SharedModelStore.releaseClaim(modelID: repoID)
+        guard safeToDelete, SharedModelStore.isRepoDownloaded(repoID) else {
+            cameraLog("HALDEBUG-SWEEP: kept plain copy of \(repoID) — another app still claims it")
+            continue
+        }
+        do {
+            try fm.removeItem(at: SharedModelStore.mlxModelDir(repoID))
+            cameraLog("HALDEBUG-SWEEP: reaped superseded plain copy of \(repoID) (now version-stamped)")
+        } catch {
+            cameraLog("HALDEBUG-SWEEP: failed to reap plain \(repoID): \(error.localizedDescription)")
+        }
+    }
+}
+
 /// `nonisolated` because the catalog is plain data and its readers are not on the main
 /// actor — `DrawerLoader` and `MLXEyeLoader` are actors that load weights off-main by design,
 /// and the project's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` would otherwise strand a

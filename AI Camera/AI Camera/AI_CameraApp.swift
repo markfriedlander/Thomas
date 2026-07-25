@@ -161,6 +161,12 @@ struct AI_CameraApp: App {
     /// (no view to orphan it from). Compiled out of Release entirely.
     init() {
         SharedModelStore.configure(appGroupID: "group.com.MarkFriedlander.aifamily")
+        // Version-safety, no-orphans: once per launch, reap any superseded plain
+        // (pre-version) model copies this app still claims. Off-main — it's file
+        // I/O on a coordinated store, no business on the launch thread — and after
+        // configure(), which the store requires before any access. See
+        // sweepSupersededPlainCopies (ModelCatalog.swift) for why all three apps run it.
+        Task.detached { sweepSupersededPlainCopies() }
         #if DEBUG
         LocalAPIServer.shared.start()
         #endif
