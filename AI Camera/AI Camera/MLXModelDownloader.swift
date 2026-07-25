@@ -525,6 +525,16 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         // a background relaunch, when that Task is gone, still clears the lock. A
         // waiting sibling sees "no lock + a claim" and adopts.
         SharedModelStore.releaseDownloadLock(modelID: key)
+        // Reap the superseded plain-name copy (from before versions were part of identity):
+        // drop our claim on the OLD bare id and, only if no app still claims it, delete the
+        // stale folder. Runs for a stamped repo only (key != bare id); a no-op otherwise. This
+        // is what stops a migrated model from leaving its old copy behind as an orphan.
+        if key != modelID,
+           SharedModelStore.releaseClaim(modelID: modelID),
+           SharedModelStore.isRepoDownloaded(modelID) {
+            try? FileManager.default.removeItem(at: SharedModelStore.mlxModelDir(modelID))
+            cameraLog("HALDEBUG-BGDL: reaped superseded plain copy of \(modelID) after locking to its pinned commit")
+        }
         NotificationCenter.default.post(name: .mlxModelDidDownload, object: nil, userInfo: ["modelID": modelID])
     }
 
@@ -1755,6 +1765,14 @@ class MLXModelDownloader: ObservableObject {
         SharedModelStore.claim(modelID: key, repo: modelID)
         SharedModelStore.excludeFromBackup(key)
         SharedModelStore.markRepoComplete(key)
+        // Reap our superseded plain-name copy now that we hold (adopted) the versioned one, so
+        // adopting a sibling's locked copy doesn't leave our old copy stranded. Stamped repo only.
+        if key != modelID,
+           SharedModelStore.releaseClaim(modelID: modelID),
+           SharedModelStore.isRepoDownloaded(modelID) {
+            try? FileManager.default.removeItem(at: SharedModelStore.mlxModelDir(modelID))
+            cameraLog("HALDEBUG-DOWNLOAD: reaped superseded plain copy of \(modelID) after adopting the locked copy")
+        }
         cameraLog("HALDEBUG-DOWNLOAD: ✅ Adopted shared model \(modelID) (fetched by another app; zero re-download)")
         markModelAsDownloadedFromBackground(modelID: modelID)
         NotificationCenter.default.post(name: .mlxModelDidDownload, object: nil, userInfo: ["modelID": modelID])
