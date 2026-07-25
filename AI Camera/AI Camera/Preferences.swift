@@ -26,6 +26,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit   // UIPasteboard — the antenna panel's copy buttons (DEBUG only)
+#endif
 
 // ==== LEGO START: 20 Settings (What The Camera Is Loaded With) ====
 
@@ -311,6 +314,11 @@ struct PreferencesView: View {
     @State private var showingLayerOneInfo = false
     @State private var showingDarkRoom = false
     @FocusState private var promptFocused: Bool
+    #if DEBUG
+    /// Which antenna field last flashed "copied" (nil = none). Drives the copy-button
+    /// checkmark; cleared after a beat. See antennaSection.
+    @State private var copiedAntennaField: String?
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -325,6 +333,9 @@ struct PreferencesView: View {
                 darkRoomSection
                 resetSection
                 aboutSection
+                #if DEBUG
+                antennaSection
+                #endif
             }
             .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
@@ -625,6 +636,74 @@ struct PreferencesView: View {
             }
         }
     }
+
+    #if DEBUG
+    // MARK: - Antenna (DEBUG-only local API address + token)
+    //
+    // Surfaces the local HTTP API's base URL and bearer token, each with a copy button,
+    // so reaching the antenna from a host (Claude Code's harness) is two taps instead of
+    // grepping a redacted console log or digging into the throwaway ContentView
+    // scaffolding, which is where the only other on-screen copy lived. DEBUG-only in
+    // every sense: LocalAPIServer itself doesn't compile in Release, so neither does this
+    // section. (Mark, 2026-07-25 — "ridiculous we struggle every time.")
+
+    /// The antenna's base URL, recomputed each read so a changed Wi-Fi address shows live.
+    private var antennaBaseURL: String {
+        "http://\(LocalAPIServer.localIPAddress()):\(LocalAPIServer.port)"
+    }
+
+    /// Copy `value` to the clipboard and flash the checkmark on `field` for a beat.
+    private func copyAntennaField(_ value: String, field: String) {
+        UIPasteboard.general.string = value
+        copiedAntennaField = field
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if copiedAntennaField == field { copiedAntennaField = nil }
+        }
+    }
+
+    private func antennaRow(label: String, value: String, field: String) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.footnote.monospaced())
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button {
+                copyAntennaField(value, field: field)
+            } label: {
+                Image(systemName: copiedAntennaField == field ? "checkmark.circle.fill" : "doc.on.doc")
+                    .imageScale(.large)
+                    .foregroundStyle(copiedAntennaField == field ? Color.green : Color.accentColor)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Copy \(label)")
+        }
+    }
+
+    private var antennaSection: some View {
+        Section {
+            if LocalAPIServer.shared.isRunning {
+                antennaRow(label: "Base URL", value: antennaBaseURL, field: "url")
+                antennaRow(label: "Token", value: LocalAPIServer.apiToken, field: "token")
+            } else {
+                Text("Antenna is off. Turn it on with the antenna button on the camera screen, then reopen this to see its address.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Antenna (Debug)")
+        } footer: {
+            Text("The local HTTP API for host-side testing over Wi-Fi. DEBUG builds only, Release ships no server. Tap the icon to copy a value.")
+        }
+    }
+    #endif
 
     // MARK: - How the words meet the picture
 
