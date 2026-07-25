@@ -1081,12 +1081,13 @@ extension LocalAPIServer {
             return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
         }
 
-        if SharedModelStore.isRepoDownloaded(repoID) {
+        let key = sharedStoreKey(forRepoID: repoID)
+        if SharedModelStore.isRepoDownloaded(key) {
             return (200, json([
                 "repo":     repoID,
                 "started":  false,
                 "message":  "Already in the shared store.",
-                "sizeBytes": SharedModelStore.sizeOnDisk(repoID)
+                "sizeBytes": SharedModelStore.sizeOnDisk(key)
             ]))
         }
 
@@ -1160,7 +1161,10 @@ extension LocalAPIServer {
     /// diffusion repo carries the same weights at several precisions, so the repo total and
     /// the download are different numbers and only one of them is ours.
     private static func measureRepoBytes(_ repoID: String) async -> Int64? {
-        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/main?recursive=1")
+        // Measure the pinned commit's files (what the downloader will actually fetch), not a
+        // moving "main": a curated repo lists its locked commit, else "main".
+        let revision = SharedModelStore.revision(forRepoID: repoID)
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/\(revision)?recursive=1")
         else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = 25
@@ -1190,8 +1194,8 @@ extension LocalAPIServer {
             ]
             if let err = s.error { e["error"] = err }
             if let p = s.localPath { e["localPath"] = p.path }
-            e["onDisk"] = SharedModelStore.isRepoDownloaded(id)
-            e["sizeBytes"] = SharedModelStore.sizeOnDisk(id)
+            e["onDisk"] = SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: id))
+            e["sizeBytes"] = SharedModelStore.sizeOnDisk(sharedStoreKey(forRepoID: id))
             return e
         }
         let anyActive = states.values.contains { $0.isDownloading }
@@ -1231,15 +1235,19 @@ extension LocalAPIServer {
             return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
         }
 
+        // The store key (identity for a shared model, plain for a single-app one) is what the
+        // ledger records, so the ownership check and every store call below key on it, never the
+        // bare repo the header carried.
+        let key = sharedStoreKey(forRepoID: repoID)
         // The ledger, not the disk. See the note above — this guard IS the bug fix.
         let ours = SharedModelStore.modelsClaimedByThisApp()
-        guard ours.contains(repoID) else {
+        guard ours.contains(key) else {
             return (200, json([
                 "repo":     repoID,
                 "released": false,
                 "deleted":  false,
                 "claimedByThisApp": false,
-                "claimants": SharedModelStore.claimants(modelID: repoID),
+                "claimants": SharedModelStore.claimants(modelID: key),
                 "message":  "AI Camera has no claim on \(repoID). Refusing — a model this app never adopted is not this app's to delete."
             ]))
         }
@@ -1250,13 +1258,13 @@ extension LocalAPIServer {
             cameraLog("RELEASE: unloaded \(repoID) before releasing its claim")
         }
 
-        let sizeBefore = SharedModelStore.sizeOnDisk(repoID)
-        let wasLast = SharedModelStore.releaseClaim(modelID: repoID)
+        let sizeBefore = SharedModelStore.sizeOnDisk(key)
+        let wasLast = SharedModelStore.releaseClaim(modelID: key)
         var deleted = false
         var deleteError: String?
 
         if wasLast {
-            let dir = SharedModelStore.mlxModelDir(repoID)
+            let dir = SharedModelStore.mlxModelDir(key)
             do {
                 if FileManager.default.fileExists(atPath: dir.path) {
                     try FileManager.default.removeItem(at: dir)
@@ -1278,7 +1286,7 @@ extension LocalAPIServer {
             "wasLastClaimant":  wasLast,
             "deleted":          deleted,
             "freedBytes":       deleted ? sizeBefore : 0,
-            "remainingClaimants": SharedModelStore.claimants(modelID: repoID)
+            "remainingClaimants": SharedModelStore.claimants(modelID: key)
         ]
         if let deleteError { payload["error"] = deleteError }
         return (200, json(payload))

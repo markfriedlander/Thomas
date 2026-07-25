@@ -228,7 +228,7 @@ actor DrawerLoader {
 
     /// Whether a given drawer's weights are on disk right now.
     nonisolated static func isAvailable(_ repoID: String) -> Bool {
-        SharedModelStore.isRepoDownloaded(repoID)
+        SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: repoID))
     }
 
     var isLoaded: Bool { loaded != nil }
@@ -258,7 +258,11 @@ actor DrawerLoader {
             // until iOS jetsams the app.
             MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
-            guard SharedModelStore.isRepoDownloaded(repoID) else {
+            // Shared-store key. sd-turbo is single-app, so this resolves to its plain repo id
+            // (matching the plain folder the vendored SD loader reads); a shared drawer would key
+            // by identity. Either way the claim below matches the folder we load from.
+            let key = sharedStoreKey(forRepoID: repoID)
+            guard SharedModelStore.isRepoDownloaded(key) else {
                 throw DrawingError.notInstalled(repoID)
             }
 
@@ -296,9 +300,9 @@ actor DrawerLoader {
             // unclaimed-but-present model looks safe to delete to Hal's or Posey's refcount, so
             // claiming is what stops a sibling app deleting the weights out from under a shot in
             // progress. Uniform with the eye loader. See SharedModelStore.
-            SharedModelStore.claim(modelID: repoID, repo: repoID,
-                                   sizeBytes: SharedModelStore.sizeOnDisk(repoID))
-            SharedModelStore.excludeFromBackup(repoID)
+            SharedModelStore.claim(modelID: key, repo: repoID,
+                                   sizeBytes: SharedModelStore.sizeOnDisk(key))
+            SharedModelStore.excludeFromBackup(key)
 
             let before = processAvailableMemoryMB()
             let started = Date()

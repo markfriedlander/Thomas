@@ -204,7 +204,7 @@ nonisolated func requiredMemoryMBForLoad(sizeGB: Double?, dirtyRatio: Double = d
 ///
 /// Returns the `nil`-size estimate if the repo isn't present (nothing to measure).
 nonisolated func requiredMemoryMBForLoad(repo: String, dirtyRatio: Double = dirtyMemoryRatio) -> Double {
-    let bytes = SharedModelStore.sizeOnDisk(repo)
+    let bytes = SharedModelStore.sizeOnDisk(sharedStoreKey(forRepoID: repo))
     guard bytes > 0 else { return requiredMemoryMBForLoad(sizeGB: nil, dirtyRatio: dirtyRatio) }
     // GiB, matching how iOS accounts for pages — sizeOnDisk returns real bytes.
     let gb = Double(bytes) / (1024.0 * 1024.0 * 1024.0)

@@ -116,12 +116,12 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// question for the shared store, which is the only thing that actually knows.
     var isInstalled: Bool {
         if isBuiltIn { return true }
-        return SharedModelStore.isRepoDownloaded(id)
+        return SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: id))
     }
 
     /// Real bytes on disk, once it's here. 0 if it isn't.
     var bytesOnDisk: Int64 {
-        isBuiltIn ? 0 : SharedModelStore.sizeOnDisk(id)
+        isBuiltIn ? 0 : SharedModelStore.sizeOnDisk(sharedStoreKey(forRepoID: id))
     }
 
     /// Which apps in the family are holding this model.
@@ -131,8 +131,18 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// does not delete it from the repository. Deleting it from the last remaining app to
     /// have it in use deletes it from the repository."*
     var claimants: [String] {
-        isBuiltIn ? [] : SharedModelStore.claimants(modelID: id)
+        isBuiltIn ? [] : SharedModelStore.claimants(modelID: sharedStoreKey(forRepoID: id))
     }
+}
+
+/// The shared-store key for a model: the version-stamped identity (`repo@<sha>`) for a stamped
+/// model, or the plain repo id for a `plainFolderRepos` model (sd-turbo, the embedders) that a
+/// library loads by plain name. The stamped-vs-plain decision now lives in the PACKAGE
+/// (`SharedModelStore.plainFolderRepos`, honored by `requiredIdentity`), so this just forwards to
+/// it, keeping every shared-store call in the app routed through one consistent key with no local
+/// special-casing. See ADOPTION_SPEC.md.
+nonisolated func sharedStoreKey(forRepoID repoID: String) -> String {
+    SharedModelStore.requiredIdentity(forRepoID: repoID)
 }
 
 /// `nonisolated` because the catalog is plain data and its readers are not on the main

@@ -215,7 +215,7 @@ actor MLXEyeLoader {
     /// Whether a given model's weights are on disk right now (they are, if Hal or Posey
     /// fetched them, or the library downloaded them here).
     nonisolated static func isAvailable(_ repoID: String) -> Bool {
-        SharedModelStore.isRepoDownloaded(repoID)
+        SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: repoID))
     }
 
     /// True once *some* eye is resident in memory.
@@ -243,8 +243,11 @@ actor MLXEyeLoader {
             // until iOS jetsams the app. 20 MB is the documented iOS figure.
             MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
-            let directory = SharedModelStore.mlxModelDir(repoID)
-            guard SharedModelStore.isRepoDownloaded(repoID) else {
+            // The shared-store key (the version-stamped identity for this shared VLM) names the
+            // on-disk folder, so we load the exact pinned commit and claim it by that identity.
+            let key = sharedStoreKey(forRepoID: repoID)
+            let directory = SharedModelStore.mlxModelDir(key)
+            guard SharedModelStore.isRepoDownloaded(key) else {
                 throw MLXEyeError.notInstalled(repoID)
             }
 
@@ -285,9 +288,9 @@ actor MLXEyeLoader {
             // refcount — claiming here is what stops a sibling app deleting weights out from
             // under a shot in progress. Uniform across every eye, which is exactly what the
             // shared-store package needs. See SharedModelStore.
-            SharedModelStore.claim(modelID: repoID, repo: repoID,
-                                   sizeBytes: SharedModelStore.sizeOnDisk(repoID))
-            SharedModelStore.excludeFromBackup(repoID)
+            SharedModelStore.claim(modelID: key, repo: repoID,
+                                   sizeBytes: SharedModelStore.sizeOnDisk(key))
+            SharedModelStore.excludeFromBackup(key)
 
             // The directory overload, NOT Hal's `configuration:` + `#hubDownloader()`
             // form. Hal passes a downloader it never uses (its own comment says so) and

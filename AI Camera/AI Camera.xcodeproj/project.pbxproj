@@ -373,8 +373,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/markfriedlander/SharedModelStoreKit";
 			requirement = {
-				kind = exactVersion;
-				version = 1.0.0;
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.1;
 			};
 		};
 		85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
@@ -392,6 +392,8 @@
 				kind = exactVersion;
 				version = 1.3.3;
 			};
+			traits = (
+			);
 		};
 /* End XCRemoteSwiftPackageReference section */
 
