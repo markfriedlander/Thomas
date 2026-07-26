@@ -76,7 +76,9 @@ nonisolated struct MLXVLMEye: Sendable {
                 container,
                 // Layer 1 (locked brevity) + Layer 2 (the user's prompt). Same as the Apple
                 // eye — every eye gets the same brevity floor. See `PromptLayers`.
-                instructions: PromptLayers.compose(userPrompt: systemPrompt),
+                instructions: PromptLayers.compose(
+                    layerOne: PromptLayers.layerOne(forRepo: repoID),
+                    userPrompt: systemPrompt),
                 generateParameters: VisionRecipe.params(forRepo: repoID, temperature: temperature)
             )
             let text = try await session.respond(to: "Describe what you see.",

@@ -102,6 +102,14 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// entitled to know what they're being handed before they spend 2 GB on it.
     let licence: String?
 
+    /// The model's **Layer 1** — the locked, non-user-editable framing line prepended to the
+    /// user's Layer 2 (`Settings.systemPrompt`) every time this eye looks. Per-model so a
+    /// chatty model can be told to be brief without weakening a well-behaved one (Hal's
+    /// pattern; see `ModelConfiguration.layerOnePrompt`). It is never editable and can only be
+    /// prepended, so an eye can't talk its way out of it. `nil` for a drawing model, which
+    /// takes the eye's words and has no system prompt of its own. See `PromptLayers`.
+    let layerOnePrompt: String?
+
     var isBuiltIn: Bool { delivery == .builtIn }
 
     /// The exact file list to fetch, or `nil` to fall back to the pattern rule.
@@ -200,7 +208,9 @@ nonisolated enum ModelCatalog {
         delivery: .builtIn,
         sizeGB: nil,
         blurb: "On the phone already — nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
-        licence: nil
+        licence: nil,
+        // The shared gentle brevity line — the one it uses today. Behaves well within it.
+        layerOnePrompt: PromptLayers.brevity
     )
 
     /// The fast prime. Downloaded, richer, unguarded.
@@ -212,7 +222,41 @@ nonisolated enum ModelCatalog {
         delivery: .wholeRepo,
         sizeGB: 1.63,
         blurb: "Sees differently from Apple's model, and largely ignores instructions about how to speak. First look after launch takes about 9 seconds while it loads; after that about 3.",
-        licence: "Apache 2.0"
+        licence: "Apache 2.0",
+        // The same shared gentle line Apple uses — Qwen keeps to it well enough. Explicit here
+        // (not a hidden fallback) so every eye's record states its own Layer 1 plainly.
+        layerOnePrompt: PromptLayers.brevity
+    )
+
+    /// The small eye. A second downloadable eye, and the proof that the eye loader really is
+    /// generic: it was added as this one entry, nothing else (the `MLXEyeLoader`, the `Seer`
+    /// enum, the library, the download, the licence gate, and the privacy lock were already
+    /// model-agnostic after the 2026-07-21 generalization).
+    ///
+    /// Verified before it was added, in the source and at the exact pinned commit, not from
+    /// memory: `smolvlm` is in MLXVLM's registry (mlx-swift-lm 3.31.4:
+    /// `create(SmolVLM2Configuration.self, SmolVLM2.init)`); the repo below is the one the
+    /// shared package pins (`SmolVLM2-500M-Video-Instruct-mlx` @ `fa57db46…`); and its
+    /// `config.json` at that commit is `model_type: smolvlm`, so it loads on that path. It's an
+    /// LLM/VLM-shaped repo — one model — so every MLX file in it IS the model (`.wholeRepo`).
+    /// 1.02 GB measured from HuggingFace (the `.safetensors` + tokenizer), not estimated.
+    ///
+    /// No `VisionRecipe` case: it falls through to the conservative default (top_p/top_k
+    /// filtering ON) on purpose, until we've watched it on the device and learned its own.
+    static let smolVLM2 = CameraModel(
+        id: "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
+        displayName: "SmolVLM2-500M",
+        job: .seeing,
+        // A VLM repo: one model, so every MLX file in it IS the model.
+        delivery: .wholeRepo,
+        sizeGB: 1.02,
+        blurb: "The smallest eye, roughly 500 million parameters against Qwen's two billion. A different lineage of model, and like Qwen it has no content filter, so it says what it sees whatever you point it at. Being small, it takes up the least room and the least memory.",
+        licence: "Apache 2.0",
+        // Smol's OWN, stricter Layer 1 — it ignores the gentle line and writes essays (an
+        // "### Analysis" section, hundreds of words), which overran the frame. This forbids the
+        // exact behaviors it reached for. No bluff, no truncation threat, no assumption it knows
+        // it feeds a drawing — just a firm, honest instruction. Tuned on device 2026-07-26.
+        layerOnePrompt: "Describe what you see in no more than two or three sentences. Do not explain, analyze, list, or add commentary. Give only the description, then stop."
     )
 
     /// The hand — frame 3.
@@ -251,10 +295,12 @@ nonisolated enum ModelCatalog {
         ]),
         sizeGB: 2.40,
         blurb: "Draws the third frame — the machine's re-imagining, made from its own words. Never sees your photograph; it only reads what the eye said about it.",
-        licence: "Stability AI Community License — free under $1M revenue"
+        licence: "Stability AI Community License — free under $1M revenue",
+        // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
+        layerOnePrompt: nil
     )
 
-    static let all: [CameraModel] = [apple, qwen, sdTurbo]
+    static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo]
 
     static func models(for job: ModelJob) -> [CameraModel] {
         all.filter { $0.job == job }

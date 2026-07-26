@@ -494,13 +494,14 @@ struct PreferencesView: View {
         Section {
             // Layer 1 — locked, but SHOWN. Principle 2 done honestly: we don't hide the line
             // the app depends on, we display it and lock it. The ⓘ says why. Everything below
-            // is Layer 2, fully the user's. See `PromptLayers`.
+            // is Layer 2, fully the user's. It shows the CURRENT eye's Layer 1 (per-model now,
+            // 2026-07-26), so switching to Smol honestly shows its stricter line. See `PromptLayers`.
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "lock.fill")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 3)
-                Text(PromptLayers.brevity)
+                Text(PromptLayers.layerOne(forRepo: settings.seer.token))
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)

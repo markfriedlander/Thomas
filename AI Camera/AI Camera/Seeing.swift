@@ -167,12 +167,28 @@ nonisolated enum Readiness {
 /// should move up into Layer 1. That touches Principle 3, so it's decided on its own.)
 nonisolated enum PromptLayers {
     /// Layer 1: locked, visible, app-functional. Brevity only, for now.
+    ///
+    /// This is the **shared default** — the gentle line Apple and Qwen use (and behave within).
+    /// A model may carry its own stricter Layer 1 on its catalog record (`CameraModel.
+    /// layerOnePrompt`); Smol does. This constant is what an eye the catalog doesn't name falls
+    /// back to, so there is always a brevity floor.
     static let brevity = "Describe what you see in no more than two or three sentences."
 
-    /// Layer 1 prepended to the user's Layer 2. An empty Layer 2 leaves just Layer 1.
-    static func compose(userPrompt layerTwo: String) -> String {
+    /// The locked Layer 1 for a given eye: its own line if the catalog names one, else the
+    /// shared default above. This is what makes brevity **per-model** — Smol runs a stricter
+    /// line while Apple and Qwen keep the gentle one — and no eye can weaken it: Layer 1 is
+    /// prepended, never editable. `repoID` is the eye's id (`"apple"` for the built-in).
+    static func layerOne(forRepo repoID: String) -> String {
+        ModelCatalog.model(id: repoID)?.layerOnePrompt ?? brevity
+    }
+
+    /// Layer 1 (locked) prepended to the user's Layer 2. An empty Layer 2 leaves just Layer 1;
+    /// an empty Layer 1 leaves just Layer 2.
+    static func compose(layerOne: String, userPrompt layerTwo: String) -> String {
+        let l1 = layerOne.trimmingCharacters(in: .whitespacesAndNewlines)
         let l2 = layerTwo.trimmingCharacters(in: .whitespacesAndNewlines)
-        return l2.isEmpty ? brevity : brevity + "\n\n" + l2
+        if l1.isEmpty { return l2 }
+        return l2.isEmpty ? l1 : l1 + "\n\n" + l2
     }
 }
 
@@ -228,7 +244,9 @@ nonisolated struct Eye: Sendable {
         // Layer 1 (locked brevity) + Layer 2 (the user's `systemPrompt`). See `PromptLayers`.
         let session = LanguageModelSession(
             model: model,
-            instructions: Instructions(PromptLayers.compose(userPrompt: systemPrompt))
+            instructions: Instructions(PromptLayers.compose(
+                layerOne: PromptLayers.layerOne(forRepo: ModelCatalog.apple.id),
+                userPrompt: systemPrompt))
         )
 
         do {
