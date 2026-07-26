@@ -568,7 +568,7 @@ extension LocalAPIServer {
     /// whatever state it happened to be left in. Now a session can configure the app and then
     /// press. Body is a JSON object; every field is optional:
     ///
-    ///   {"seer":"apple"|"qwen", "layout":"<rawValue>", "drawsThirdFrame":true,
+    ///   {"seer":"apple"|<repo id>, "layout":"<rawValue>", "drawsThirdFrame":true,   // "qwen" is a legacy alias
     ///    "systemPrompt":"…", "temperature":0.8, "frameTwoShows":"sentToHand"|"fullPerception",
     ///    "drawingSize":"native"|"instagram"|"large", "upscaler":"metalFX"|"coreImage",
     ///    "reset":"prompt"|"everything"}
@@ -702,7 +702,7 @@ extension LocalAPIServer {
     /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.
     ///
     ///   Body:      the photograph bytes (as /look). Required.
-    ///   X-Model:   afm|qwen   (optional; default = the loaded seer)
+    ///   X-Model:   afm|<repo id>   (optional; default = the loaded seer; "qwen" is a legacy alias)
     ///   X-Draw:    true|false (optional; default true — this route exists to exercise frame 3)
     ///   X-Orientation, X-System-Prompt, X-Temperature — as /look.
     ///
@@ -1504,10 +1504,10 @@ extension LocalAPIServer {
     /// The body is the image and nothing but the image (same shape as Posey's /import),
     /// so configuration rides in headers:
     ///
-    ///   X-Model:         afm|qwen         (optional; default afm)
+    ///   X-Model:         afm|<repo id>    (optional; default afm — "qwen" is a legacy alias)
     ///   X-System-Prompt: <base64 UTF-8>   (optional; base64 because prompts have newlines)
     ///   X-Temperature:   0.9              (optional)
-    ///   X-Guardrails:    default|permissive   (optional; AFM only — Qwen has no filter)
+    ///   X-Guardrails:    default|permissive   (optional; AFM only — MLX eyes have no filter)
     ///   X-Orientation:   1...8            (optional; otherwise read from the file's EXIF)
     ///
     /// Every look goes through ModelLane, so a caller may fire as fast as it likes — the
@@ -1550,20 +1550,27 @@ extension LocalAPIServer {
             eye.guardrails = .permissiveContentTransformations
         }
 
-        // The second eye. Same prompt, same temperature, different machine — so the only
-        // variable is the model itself. Guardrails and retry don't apply: Qwen has no
-        // filter to get past.
+        // Any MLX eye, not just Qwen. Same prompt, same temperature, different machine — so
+        // the only variable is the model itself. `Seer(token:)` resolves X-Model exactly the
+        // way the app and /shoot do: "afm"/"apple"/"" → Apple; "qwen" → Qwen (a legacy alias);
+        // any other value → that repo id. Guardrails and retry don't apply to an MLX eye —
+        // there's no filter to get past.
+        //
+        // ⚠️ Before this was generalized, /look ran Qwen only for the exact string "qwen" and
+        // silently fell through to AFM for EVERY other value — so naming a real second eye (say
+        // SmolVLM2) measured the wrong machine and reported success. An instrument that answers
+        // for the wrong model is worse than none; that hardcode is what this removes.
         let modelName = req.headers["x-model"] ?? "afm"
-        if modelName == "qwen" {
-            let qwen = MLXVLMEye(repoID: Qwen.repo, systemPrompt: eye.systemPrompt, temperature: eye.temperature)
+        if case .mlx(let repoID) = Seer(token: modelName) {
+            let mlxEye = MLXVLMEye(repoID: repoID, systemPrompt: eye.systemPrompt, temperature: eye.temperature)
             let started = Date()
-            let perception = await ModelLane.shared.run("look:qwen") {
-                await qwen.look(at: cgImage)
+            let perception = await ModelLane.shared.run("look:mlx") {
+                await mlxEye.look(at: cgImage)
             }
             let now = Date()
             var payload: [String: Any] = [
-                "model":        "qwen",
-                "repo":         Qwen.repo,
+                "model":        seerWire(.mlx(repoID: repoID)),
+                "repo":         repoID,
                 "outcome":      perception.wireName,
                 "text":         perception.wireText,
                 "rescued":      false,
