@@ -118,12 +118,42 @@ enum Shot {
         // (Mark's call, 2026-07-16: summarize, don't truncate). Only when over budget, and only
         // now, while the eye is still resident. On failure we pass the full words on and let the
         // hard cap catch them — the belt stays buckled, we just try not to need it.
+        // One pass for every eye. For **Smol only** (2026-07-26), loop the summarizer: Smol won't
+        // get short in a single pass (measured: 253→148 words when asked for ~35, still ~3× the
+        // drawer's ~50-word ceiling), but feeding its own shortened words BACK in drives it down
+        // further while staying coherent. Keep going until it's under budget, a pass stops making
+        // progress (plateau), or a hard pass cap trips — so it can never spin. Only in third-frame
+        // mode (guaranteed by the `drawsThirdFrame` guard above) and only for the model that needs
+        // it, so no other eye's behavior changes. If it generalizes, this one-model check becomes a
+        // per-model flag on `CameraModel` (the Layer 1 pattern). The drawer's hard 75-token cap
+        // still sits underneath as the last-resort floor if even this can't get there.
         var wordsForHand = fullWords
-        if PromptBudget.exceedsDrawerBudget(fullWords),
-           let shorter = await seer.condense(fullWords, toAtMostWords: PromptBudget.condenseTargetWords,
-                                             systemPrompt: config.systemPrompt, temperature: config.temperature) {
-            cameraLog("CONDENSE: \(PromptBudget.wordCount(fullWords)) words → \(PromptBudget.wordCount(shorter)) for the hand")
-            wordsForHand = shorter
+        if PromptBudget.exceedsDrawerBudget(fullWords) {
+            let recurse = (config.seer.modelID == ModelCatalog.smolVLM2.id)
+            let maxPasses = recurse ? 5 : 1
+            var current = fullWords
+            var passes = 0
+            // Log the FULL text of each rung of the compression, not just its size — watching the
+            // machine boil its own perception down is on-theme, and it's the only way to judge
+            // whether a shorter rung is still faithful. DEBUG instrument (MemoryLog), scoped to the
+            // recursion (Smol + third frame + over budget), so it doesn't clutter a normal run.
+            cameraLog("CONDENSE pass 0 (\(PromptBudget.wordCount(fullWords))w): \(fullWords)")
+            while passes < maxPasses, PromptBudget.exceedsDrawerBudget(current) {
+                guard let shorter = await seer.condense(current,
+                                                        toAtMostWords: PromptBudget.condenseTargetWords,
+                                                        systemPrompt: config.systemPrompt,
+                                                        temperature: config.temperature) else { break }
+                passes += 1
+                // Take it only if it actually got shorter. A pass that doesn't reduce means the
+                // model has plateaued — stop rather than spin or let it re-expand.
+                guard PromptBudget.wordCount(shorter) < PromptBudget.wordCount(current) else {
+                    cameraLog("CONDENSE pass \(passes): no progress at \(PromptBudget.wordCount(current)) words — stopping")
+                    break
+                }
+                cameraLog("CONDENSE pass \(passes) (\(PromptBudget.wordCount(shorter))w): \(shorter)")
+                current = shorter
+            }
+            wordsForHand = current
         }
 
         // The hand takes ONLY the eye's words — no style, no framing, pure information. A

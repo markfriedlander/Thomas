@@ -397,8 +397,12 @@ enum Darkroom {
         para.alignment = .left
         para.lineHeightMultiple = 0.92
 
-        // Shrink to fit rather than truncate. The machine said what it said; we don't get
-        // to cut it off mid-sentence because our box was too small.
+        // Shrink to fit rather than truncate, with NO readability floor. The machine said what
+        // it said; we don't get to cut it off because our box was too small, and we don't let it
+        // overrun the box into the footer either (the 2026-07-26 Smol essay shrank to the old
+        // ⅓-size floor, gave up, and plowed straight through reality's receipt). A very wordy eye
+        // yields micro-text — honest, every word present, just small. The `> 1` guard below only
+        // guarantees the loop terminates; it is not a floor.
         var pointSize = size
         var attributes: [NSAttributedString.Key: Any] = [:]
         var bounds = CGRect.zero
@@ -417,7 +421,7 @@ enum Darkroom {
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: attributes, context: nil)
             pointSize *= 0.92
-        } while bounds.height > maxHeight && pointSize > size * 0.3
+        } while bounds.height > maxHeight && pointSize > 1
 
         (words as NSString).draw(
             with: CGRect(x: box.minX, y: box.minY, width: maxWidth, height: bounds.height),
