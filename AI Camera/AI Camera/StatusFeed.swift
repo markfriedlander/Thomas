@@ -159,9 +159,10 @@ final class StatusFeed {
 /// capture screen; see the `.onChange` hooks below. The developing and thermal families are pushed
 /// by `DarkRoomWorker` directly and need nothing here.
 struct StatusFeedView: View {
-    /// Opens the Model Library, so the privacy explanation can offer a one-tap way to pick a
-    /// downloaded local model (matching Hal's popover).
-    let onOpenModelLibrary: () -> Void
+    /// Opens Preferences, so the privacy explanation can offer a one-tap way to either pick a
+    /// downloaded local eye (via the Model Library inside Preferences) or switch off the place-name
+    /// lookup — the two remedies the popover names (Mark, 2026-07-28).
+    let onOpenPreferences: () -> Void
 
     @State private var feed = StatusFeed.shared
     @State private var settings = Settings.shared
@@ -175,24 +176,36 @@ struct StatusFeedView: View {
                 capsule(for: message)
             }
         }
-        // The privacy producer: recompute the lock whenever the eye or the network changes, and
-        // once when the panel first appears. The lock shows in BOTH states (Mark, 2026-07-20) — a
-        // closed lock when nothing can leave (local eye, or no network), an open lock on the Apple
-        // eye with a network up — so this publishes either way and only the glyph changes.
+        // The privacy producer: recompute the lock whenever any input to the two-axis state changes
+        // (the eye, eye-on/off, the raw-coordinate setting, network, or Location authorization), and
+        // once when the panel first appears. The lock shows in BOTH states — a closed lock when
+        // nothing can leave, an open lock when the look OR the place may — so this publishes either
+        // way and only the glyph changes.
         .task { network.start() }
         .onAppear { refreshPrivacy() }
         .onChange(of: settings.seer) { _, _ in refreshPrivacy() }
+        .onChange(of: settings.useEye) { _, _ in refreshPrivacy() }
+        .onChange(of: settings.stampRawCoordinates) { _, _ in refreshPrivacy() }
         .onChange(of: network.isNetworkAvailable) { _, _ in refreshPrivacy() }
+        .onChange(of: network.isLocationAuthorized) { _, _ in refreshPrivacy() }
         .onDisappear { feed.clear(.privacy) }
         .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
     }
 
+    /// The current two-axis privacy state, derived purely from live app state. Computed in one place
+    /// so the feed glyph and the popover copy can never disagree.
+    private var privacyState: PrivacyState {
+        PrivacyMonitor.state(seer: settings.seer,
+                             useEye: settings.useEye,
+                             rawCoordinates: settings.stampRawCoordinates,
+                             locationAuthorized: network.isLocationAuthorized,
+                             networkAvailable: network.isNetworkAvailable)
+    }
+
     private func refreshPrivacy() {
-        // The lock is shown in BOTH states — only the glyph differs (Mark, 2026-07-20). So this
-        // always publishes; it never clears on state, it just swaps the closed lock for the open one.
-        let locked = PrivacyMonitor.isLocked(seer: settings.seer,
-                                             networkAvailable: network.isNetworkAvailable)
-        feed.publish(.privacy(locked: locked))
+        // The lock is shown in BOTH states — only the glyph differs. So this always publishes; it
+        // never clears on state, it just swaps the closed lock for the open one.
+        feed.publish(.privacy(locked: privacyState.isLocked))
     }
 
     /// One capsule. Tappable only if the message names a tap action; otherwise a plain label.
@@ -204,11 +217,10 @@ struct StatusFeedView: View {
                 .buttonStyle(.plain)
                 .popover(isPresented: $showingPrivacy) {
                     PrivacyPopover(
-                        isLocked: PrivacyMonitor.isLocked(seer: settings.seer,
-                                                          networkAvailable: network.isNetworkAvailable),
-                        onOpenModelLibrary: {
+                        state: privacyState,
+                        onOpenPreferences: {
                             showingPrivacy = false
-                            onOpenModelLibrary()
+                            onOpenPreferences()
                         })
                     .presentationCompactAdaptation(.popover)
                 }
@@ -236,6 +248,26 @@ struct StatusFeedView: View {
         .foregroundStyle(.white.opacity(0.85))
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(.black.opacity(0.35), in: Capsule())
+    }
+}
+
+/// The uniform round chrome for the capture-screen corner controls (Preferences, flip, Photos). A
+/// FIXED circle: identical size no matter which SF Symbol sits in it. This matters because SF Symbols
+/// are not fixed-width like a monospace font — each has its own bounding box — so without a fixed frame
+/// every control would hug its own glyph and come out a different width. The dark disc also lifts a
+/// glyph off a bright viewfinder, where a bare white icon can vanish.
+///
+/// NOT used for the privacy lock: the lock lives in the status stack, whose neighbors are the text
+/// capsules ("Developing…", "Cooling"), so it stays a capsule to match THEM, not the corner circles
+/// (Mark, 2026-07-28 — matching the lock to the corners would have broken it away from its own stack).
+struct CaptureControlCircle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.title3)
+            .foregroundStyle(.white.opacity(0.85))
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.35), in: Circle())
+            .contentShape(Circle())
     }
 }
 

@@ -91,7 +91,7 @@
 //   33  StatusFeed (The Annunciator)
 //
 //  PrivacyMonitor.swift
-//   34  PrivacyMonitor (Could This Look Leave The Device?)
+//   34  PrivacyMonitor (Could Anything Leave The Device?)
 //
 //  DarkRoomView.swift
 //   35  The Dark Room Screen (The Developing Queue)

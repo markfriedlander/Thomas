@@ -70,9 +70,6 @@ struct CameraView: View {
     /// but chosen in Preferences, never here. The capture screen stays sacred.
     @State private var settings = Settings.shared
     @State private var showingPreferences = false
-    /// Presented from the privacy popover's "Model Library" action, so a user who sees the open
-    /// lock can jump straight to picking a downloaded local model (matching Hal's popover).
-    @State private var showingModelLibrary = false
     /// The zoom at the instant the pinch began. A gesture reports magnification relative
     /// to its own start, so without an anchor each update would compound the last.
     @State private var zoomAnchor: CGFloat?
@@ -114,7 +111,7 @@ struct CameraView: View {
             // status panel as the "developing" and "thermal" messages.
             VStack {
                 HStack(alignment: .top) {
-                    StatusFeedView(onOpenModelLibrary: { showingModelLibrary = true })
+                    StatusFeedView(onOpenPreferences: { showingPreferences = true })
                     Spacer()
                     preferencesButton
                 }
@@ -139,9 +136,6 @@ struct CameraView: View {
         .onDisappear { lens.stop(); place.stop() }
         .statusBarHidden()
         .sheet(isPresented: $showingPreferences) { PreferencesView() }
-        .sheet(isPresented: $showingModelLibrary) {
-            NavigationStack { ModelLibraryView() }
-        }
     }
 
     // MARK: - The shutter
@@ -160,14 +154,12 @@ struct CameraView: View {
         .disabled(!lens.isAuthorized)
     }
 
-    /// The four corner glyphs — small, quiet, one to a corner. They lose every fight with the
-    /// shutter; they are doors out of the sacred screen, not part of it. Shared style so they
-    /// read as one family.
+    /// The corner glyphs — quiet, one to a corner. They lose every fight with the shutter; they are
+    /// doors out of the sacred screen, not part of it. Each wears `CaptureControlCircle` (defined by
+    /// the status feed) so the three read as one family — a uniform disc, identical size regardless of
+    /// glyph width. (The privacy lock deliberately stays a capsule; it belongs to the status stack.)
     private func cornerGlyph(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.title3)
-            .foregroundStyle(.white.opacity(0.65))
-            .frame(width: 44, height: 44)
+        Image(systemName: name).modifier(CaptureControlCircle())
     }
 
     private var preferencesButton: some View {
@@ -186,10 +178,8 @@ struct CameraView: View {
     private var photosButton: some View {
         Button { openPhotos() } label: {
             Image(systemName: "photo.stack")
-                .font(.title3)
-                .foregroundStyle(.white.opacity(0.65))
-                .frame(width: 44, height: 44)
                 .symbolEffect(.bounce, value: worker.arrivals)
+                .modifier(CaptureControlCircle())
         }
     }
 

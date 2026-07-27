@@ -626,6 +626,13 @@ extension LocalAPIServer {
         let useEye: Bool
         let handPrompt: String
         let handStrength: Double
+        // The capture-screen privacy lock, computed from the same pure `PrivacyMonitor.state(...)`
+        // the UI uses, so the antenna sees exactly what the popover shows (instrument, don't infer).
+        let privacyLocked: Bool
+        let privacyLook: String
+        let privacyPlace: String
+        let networkAvailable: Bool
+        let locationAuthorized: Bool
         var dict: [String: Any] {
             ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
              "stampRawCoordinates": stampRawCoordinates,
@@ -633,13 +640,27 @@ extension LocalAPIServer {
              "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
-             "systemPrompt": systemPrompt]
+             "systemPrompt": systemPrompt,
+             "privacy": ["locked": privacyLocked,
+                         "look": privacyLook,
+                         "place": privacyPlace,
+                         "networkAvailable": networkAvailable,
+                         "locationAuthorized": locationAuthorized]]
         }
     }
 
     @MainActor
     private static func readSettings() -> SettingsSnapshot {
         let s = Settings.shared
+        // Ensure the privacy monitor is live so network/location reads are accurate even if the
+        // capture panel hasn't appeared yet (idempotent). Then derive the lock exactly as the UI does.
+        let mon = PrivacyMonitor.shared
+        mon.start()
+        let privacy = PrivacyMonitor.state(seer: s.seer,
+                                           useEye: s.useEye,
+                                           rawCoordinates: s.stampRawCoordinates,
+                                           locationAuthorized: mon.isLocationAuthorized,
+                                           networkAvailable: mon.isNetworkAvailable)
         return SettingsSnapshot(
             seer: s.seer.token, layout: s.layout.rawValue,
             frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
@@ -652,7 +673,12 @@ extension LocalAPIServer {
             drawSteps: s.drawSteps(for: s.selectedDrawer),
             useEye: s.useEye,
             handPrompt: s.handPrompt,
-            handStrength: s.handStrength)
+            handStrength: s.handStrength,
+            privacyLocked: privacy.isLocked,
+            privacyLook: privacy.lookLine,
+            privacyPlace: privacy.placeLine,
+            networkAvailable: mon.isNetworkAvailable,
+            locationAuthorized: mon.isLocationAuthorized)
     }
 
     /// POST /zoom — drive the zoom the way a pinch does (a pinch just calls `lens.zoom`). Reports

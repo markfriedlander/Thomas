@@ -392,11 +392,20 @@ private struct ModelLibraryRow: View {
     private var actions: some View {
         HStack(spacing: 12) {
             if !model.isInstalled {
+                // Plain accent text+icon, identical to Hal (Hal.swift) and Posey
+                // (AskPoseyModelRow) so the studio reads the same everywhere. NOT a filled
+                // .borderedProminent pill: that capsule got stretched wide by the row and
+                // rendered strangely (Mark, 2026-07-28). A plain button hugs its content and
+                // can't stretch.
                 Button(action: onDownload) {
-                    Label("Download", systemImage: "arrow.down.circle")
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text("Download")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(Color.accentColor)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(.plain)
             } else {
                 // The Select / Active control, in Hal's language and style so the studio reads the
                 // same everywhere (Mark, 2026-07-18 — "same language everywhere possible so people
