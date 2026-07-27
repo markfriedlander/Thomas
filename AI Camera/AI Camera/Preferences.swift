@@ -120,6 +120,40 @@ final class Settings {
     var selectedDrawer: String {
         didSet { store(selectedDrawer, "selectedDrawer") }
     }
+    /// The step knob's value **per drawer** — how many denoising steps each hand draws with.
+    ///
+    /// Per-drawer because the right number is a property of the model, not a global taste: turbo
+    /// draws in a handful of steps, SD-2.1 wants ~20, and switching hands shouldn't drag the wrong
+    /// number along. A drawer with no entry here falls to its catalog default (`drawSteps(for:)`).
+    /// `[String: Int]` is plist-native, so it stores straight into UserDefaults, no JSON.
+    var drawStepsByDrawer: [String: Int] {
+        didSet { store(drawStepsByDrawer, "drawStepsByDrawer") }
+    }
+
+    /// The step count for a given drawer — the stored value clamped to the drawer's range, or the
+    /// drawer's catalog default when the user hasn't touched the knob for it. The clamp means a
+    /// stored value can never fall outside the range the UI offers, even if a drawer's range changes
+    /// in a later build.
+    func drawSteps(for repoID: String) -> Int {
+        let spec = ModelCatalog.model(id: repoID)?.drawSteps
+        guard let stored = drawStepsByDrawer[repoID] else { return spec?.default ?? 4 }
+        guard let range = spec?.range else { return stored }
+        return min(max(stored, range.lowerBound), range.upperBound)
+    }
+
+    /// Set the step count for a given drawer.
+    func setDrawSteps(_ n: Int, for repoID: String) {
+        var m = drawStepsByDrawer
+        m[repoID] = n
+        drawStepsByDrawer = m
+    }
+
+    /// What the Preferences step slider binds to: the currently selected drawer's step count.
+    /// Reads through the clamp above; writes into the per-drawer map for `selectedDrawer`.
+    var currentDrawerSteps: Int {
+        get { drawSteps(for: selectedDrawer) }
+        set { setDrawSteps(newValue, for: selectedDrawer) }
+    }
     var systemPrompt: String {
         didSet { store(systemPrompt, "systemPrompt") }
     }
@@ -179,6 +213,7 @@ final class Settings {
         layout = Layout(rawValue: d.string(forKey: "layout") ?? "") ?? .superimposed
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         selectedDrawer = d.string(forKey: "selectedDrawer") ?? ModelCatalog.sdTurbo.id
+        drawStepsByDrawer = (d.dictionary(forKey: "drawStepsByDrawer") as? [String: Int]) ?? [:]
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -218,6 +253,7 @@ final class Settings {
         layout = .superimposed
         drawsThirdFrame = false
         selectedDrawer = ModelCatalog.sdTurbo.id
+        drawStepsByDrawer = [:]   // every drawer back to its catalog-default step count
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -346,14 +382,19 @@ struct PreferencesView: View {
             // bound to a view that's being rebuilt gets torn down — it opens and instantly
             // dismisses. A sheet has to hang off a stable parent. The Form is stable; the
             // Section is not.
-            .sheet(isPresented: $showingPresets) {
-                PresetPicker { preset in
-                    // Show your work: the preset writes into the visible fields. Nothing is
-                    // configured behind your back, and you can see exactly what it did.
-                    settings.systemPrompt = preset.systemPrompt
-                    settings.temperature = preset.temperature
-                }
-            }
+            // ⏸️ PRESETS COMMENTED OUT 2026-07-27 (Mark). The current presets are eye-only; the
+            // planned replacement is bigger and different — save a WHOLE setup (an eye configured +
+            // a hand configured) as a named group you can load/edit/delete, so users define their
+            // own complete looks. Kept in code (PresetPicker + Eye.presets) so reviving/expanding is
+            // trivial; just the entry points are hidden. See NEXT ("full-config presets").
+            // .sheet(isPresented: $showingPresets) {
+            //     PresetPicker { preset in
+            //         // Show your work: the preset writes into the visible fields. Nothing is
+            //         // configured behind your back, and you can see exactly what it did.
+            //         settings.systemPrompt = preset.systemPrompt
+            //         settings.temperature = preset.temperature
+            //     }
+            // }
             // Same reason as the presets sheet: alerts hang off the stable Form, not a Section
             // that re-renders when `settings` changes.
             .alert("Why can't I change this line?", isPresented: $showingLayerOneInfo) {
@@ -531,13 +572,13 @@ struct PreferencesView: View {
             }
             Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
 
-            Button("Presets…") { showingPresets = true }
+            // Button("Presets…") { showingPresets = true }   // ⏸️ hidden 2026-07-27 — see the sheet note on the Form
             Button("Reset the eye's prompt and temperature") {
                 promptFocused = false
                 settings.resetPromptToDefault()
             }
         } header: {
-            Text("The eye — how it looks")
+            Text("Frame 2 · The Eye — how it sees")
         } footer: {
             Text("The system prompt tells the eye how to describe what it sees. Higher temperature makes it reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific — not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
         }
@@ -554,13 +595,26 @@ struct PreferencesView: View {
     /// deactivated (2026-07-16): styling the drawing inserts a human's aesthetic into a
     /// machine→machine chain. The editor is commented out below (not deleted) — it's a real
     /// future feature, an opt-in "art direction" mode outside the pure chain. See NEXT.
+    /// The catalog record for the currently selected hand, and its engine — small helpers so the
+    /// hand's sections don't each re-derive them.
+    private var selectedDrawerModel: CameraModel? { ModelCatalog.model(id: settings.selectedDrawer) }
+    private var selectedDrawerEngine: DrawEngine { selectedDrawerModel?.engine ?? .mlx }
+
     private var handSection: some View {
         Section {
+            // WHICH hand is chosen in the Model Library, not here (2026-07-27) — one selection home,
+            // no duplicate picker. This read-only line just names the hand you're tuning, so the
+            // steps below have an owner; tap through to the library to switch hands.
+            if let hand = selectedDrawerModel {
+                LabeledContent("Hand", value: hand.displayName)
+                    .foregroundStyle(.secondary)
+            }
+
             Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
                 .disabled(!DrawerLoader.isAvailable(settings.selectedDrawer))
 
             if !DrawerLoader.isAvailable(settings.selectedDrawer) {
-                Text("\(ModelCatalog.sdTurbo.displayName) isn't downloaded — get it in the Model Library above.")
+                Text("\(selectedDrawerModel?.displayName ?? "This hand") isn't downloaded — get it in the Model Library above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else if settings.drawsThirdFrame {
@@ -571,6 +625,36 @@ struct PreferencesView: View {
                     ForEach(FrameTwoWords.allCases, id: \.self) { choice in
                         Text(choice.name).tag(choice)
                     }
+                }
+
+                // ── The step knob, per drawer. ──
+                // Honest terminology (Principle 2): these are denoising *steps*, the same word the
+                // model uses. More steps, more detail, more time. Per-drawer because the useful
+                // range is the model's own — turbo draws in a handful, SD-2.1 wants ~20 — so
+                // `currentDrawerSteps` reads and writes the selected hand's slot, clamped to its
+                // range. Modelled on the eye's temperature slider above.
+                if let spec = selectedDrawerModel?.drawSteps {
+                    HStack {
+                        Text("Steps")
+                        Spacer()
+                        Text("\(settings.currentDrawerSteps)")
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { Double(settings.currentDrawerSteps) },
+                            set: { settings.currentDrawerSteps = Int($0.rounded()) }
+                        ),
+                        in: Double(spec.range.lowerBound)...Double(spec.range.upperBound),
+                        step: 1
+                    )
+                    // The hand's counterpart to the eye's "reset prompt and temperature" — one tap
+                    // back to this drawer's default step count. Disabled when already at default.
+                    Button("Reset steps to default") {
+                        settings.setDrawSteps(spec.default, for: settings.selectedDrawer)
+                    }
+                    .disabled(settings.currentDrawerSteps == spec.default)
                 }
             }
 
@@ -594,9 +678,9 @@ struct PreferencesView: View {
             //         .disabled(settings.handPrompt.isEmpty)
             // }
         } header: {
-            Text("The hand — how it draws")
+            Text("Frame 3 · The Hand — how it draws")
         } footer: {
-            Text("The hand draws the scene again from the eye's words — it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. Drawing adds about ten seconds to a shot.")
+            Text("The hand draws the scene again from the eye's words — it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. More steps mean more detail and a little more time; drawing adds several seconds to a shot.")
         }
     }
 
@@ -716,7 +800,9 @@ struct PreferencesView: View {
     /// toward safety and will not let a shot crash.
     @ViewBuilder
     private var decoderSection: some View {
-        if DrawerLoader.isAvailable(settings.selectedDrawer) {
+        // MLX-only: the Detailed/Fast (full-VAE vs TAESD) choice is a property of the MLX draw
+        // pipeline. The CoreML hand decodes inside its own package, so this section hides for it.
+        if DrawerLoader.isAvailable(settings.selectedDrawer), selectedDrawerEngine == .mlx {
             Section {
                 Picker("Developer", selection: $settings.decoderChoice) {
                     ForEach(DecoderChoice.allCases, id: \.self) { c in
@@ -724,7 +810,7 @@ struct PreferencesView: View {
                     }
                 }
             } header: {
-                Text("Developing the drawing")
+                Text("Frame 3 · Developing the drawing")
             } footer: {
                 Text(settings.decoderChoice == .detailed
                      ? "Detailed uses the full decoder — sharper, and truer to what the model drew. If your device is low on memory for a shot, Thomas quietly switches that one to Fast so the drawing still finishes instead of failing."
@@ -757,7 +843,7 @@ struct PreferencesView: View {
                     }
                 }
             } header: {
-                Text("The drawing's size")
+                Text("Frame 3 · The drawing's size")
             } footer: {
                 Text(settings.drawingSize == .native
                      ? "The hand draws at 512 pixels — small next to your photograph. Larger sizes enlarge the drawing after it's made, which is quick and doesn't strain memory."

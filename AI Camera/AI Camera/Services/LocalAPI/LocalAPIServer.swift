@@ -571,6 +571,7 @@ extension LocalAPIServer {
     ///   {"seer":"apple"|<repo id>, "layout":"<rawValue>", "drawsThirdFrame":true,   // "qwen" is a legacy alias
     ///    "systemPrompt":"…", "temperature":0.8, "frameTwoShows":"sentToHand"|"fullPerception",
     ///    "drawingSize":"native"|"instagram"|"large", "upscaler":"metalFX"|"coreImage",
+    ///    "selectedDrawer":"<drawer repo id>", "drawSteps":20,   // the hand + its per-drawer step count
     ///    "reset":"prompt"|"everything"}
     private func handleSetSettings(_ req: ParsedRequest) async -> (Int, String) {
         guard let data = req.bodyData,
@@ -583,6 +584,12 @@ extension LocalAPIServer {
             if let v = obj["seer"] as? String, !v.isEmpty { s.seer = Seer(token: v); changed.append("seer=\(v)") }
             if let v = obj["layout"] as? String, let x = Layout(rawValue: v) { s.layout = x; changed.append("layout=\(v)") }
             if let v = obj["drawsThirdFrame"] as? Bool { s.drawsThirdFrame = v; changed.append("drawsThirdFrame=\(v)") }
+            // Which hand, and how many steps it draws with — the drawer picker + step knob a human
+            // now has in Preferences. `selectedDrawer` is a drawer repo id (sd-turbo or the CoreML
+            // SD-2.1); `drawSteps` sets the CURRENT drawer's per-drawer step count (clamped in the
+            // setter). Set the drawer first, then steps, so steps land on the intended hand.
+            if let v = obj["selectedDrawer"] as? String, !v.isEmpty { s.selectedDrawer = v; changed.append("selectedDrawer=\(v)") }
+            if let v = obj["drawSteps"] as? Int { s.setDrawSteps(v, for: s.selectedDrawer); changed.append("drawSteps=\(s.drawSteps(for: s.selectedDrawer))") }
             if let v = obj["systemPrompt"] as? String { s.systemPrompt = v; changed.append("systemPrompt") }
             if let v = obj["temperature"] as? Double { s.temperature = v; changed.append("temperature=\(v)") }
             if let v = obj["frameTwoShows"] as? String, let x = FrameTwoWords(rawValue: v) { s.frameTwoShows = x; changed.append("frameTwoShows=\(v)") }
@@ -609,11 +616,14 @@ extension LocalAPIServer {
         let drawsThirdFrame: Bool
         let stampRawCoordinates: Bool
         let temperature: Double
+        let selectedDrawer: String
+        let drawSteps: Int
         var dict: [String: Any] {
             ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
              "stampRawCoordinates": stampRawCoordinates,
              "temperature": temperature, "frameTwoShows": frameTwoShows,
              "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
+             "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "systemPrompt": systemPrompt]
         }
     }
@@ -628,7 +638,9 @@ extension LocalAPIServer {
             systemPrompt: s.systemPrompt,
             drawsThirdFrame: s.drawsThirdFrame,
             stampRawCoordinates: s.stampRawCoordinates,
-            temperature: s.temperature)
+            temperature: s.temperature,
+            selectedDrawer: s.selectedDrawer,
+            drawSteps: s.drawSteps(for: s.selectedDrawer))
     }
 
     /// POST /zoom — drive the zoom the way a pinch does (a pinch just calls `lens.zoom`). Reports
@@ -1136,12 +1148,22 @@ extension LocalAPIServer {
             ]))
         }
 
-        cameraLog("DOWNLOAD: antenna starting \(repoID) sizeGB=\(sizeGB) measured=\(measured) allowlist=\(known?.fileAllowlist?.count.description ?? "none")")
+        cameraLog("DOWNLOAD: antenna starting \(repoID) sizeGB=\(sizeGB) measured=\(measured) delivery=\(known.map { "\($0.delivery)" } ?? "unknown")")
         // Fire and return. A multi-GB download does not finish inside an HTTP request —
-        // poll GET /downloads.
+        // poll GET /downloads. A `.folder` model (the CoreML drawer) resolves its subtree to a
+        // concrete file list first; a resolution failure reports as a download error to poll.
         Task {
+            let files: [String]?
+            do {
+                files = try await known?.downloadFileList()
+            } catch {
+                MLXModelDownloader.shared.reportDownloadFailure(
+                    modelID: repoID,
+                    message: "Couldn't resolve files for \(repoID): \(error.localizedDescription)")
+                return
+            }
             await MLXModelDownloader.shared.startDownload(
-                modelID: repoID, repoID: repoID, sizeGB: sizeGB, files: known?.fileAllowlist)
+                modelID: repoID, repoID: repoID, sizeGB: sizeGB, files: files)
         }
 
         return (200, json([

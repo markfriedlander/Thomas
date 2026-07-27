@@ -76,9 +76,38 @@ nonisolated enum ModelDelivery: Hashable, Sendable {
 
     /// Exactly these paths and nothing else.
     ///
-    /// **Required for diffusion repos.** See the file header for the measurements. A
+    /// **Required for MLX diffusion repos.** See the file header for the measurements. A
     /// diffusion repo is a shelf, not a model — you must name what you're taking off it.
     case files([String])
+
+    /// Every file under one repo subfolder (`prefix`), whatever its extension.
+    ///
+    /// **Required for a CoreML drawer.** Apple's CoreML diffusion repos carry the SAME model
+    /// compiled several ways in parallel folders (`original/`, `split_einsum_v2/`), and each build
+    /// is a tree of `.mlmodelc` bundles whose files are `.bin`/`.mil`/`weight`, not the
+    /// `.safetensors` the MLX pattern rule matches and too many to name one by one the way `.files`
+    /// does. So we take exactly one subtree — the Neural-Engine build — and all of it.
+    case folder(String)
+}
+
+/// Which runtime draws a hand's frame 3.
+///
+/// Two engines, by design (Mark, 2026-07-26): the MLX stack the app shipped with, and CoreML on
+/// the Neural Engine — measured on device at about a third of MLX's memory and cooler
+/// (HISTORY 2026-07-26). An eye carries `.mlx` and never reads it; only a drawing model's engine
+/// is consulted (`Shot.seeThenDraw` forks on it).
+nonisolated enum DrawEngine: String, Hashable, Sendable {
+    case mlx     // the vendored StableDiffusion-on-MLX path (sd-turbo)
+    case coreML  // Apple's ml-stable-diffusion package, run on the Neural Engine
+}
+
+/// A drawer's step knob — the range the user's slider spans, and where it starts.
+///
+/// Per-drawer because the right number is a property of the model: a distilled turbo draws in a
+/// handful of steps, a base SD model wants more. `nil` for an eye, which has no steps.
+nonisolated struct DrawStepSpec: Hashable, Sendable {
+    let range: ClosedRange<Int>
+    let `default`: Int
 }
 
 /// One thing the camera can load.
@@ -110,12 +139,57 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// takes the eye's words and has no system prompt of its own. See `PromptLayers`.
     let layerOnePrompt: String?
 
+    /// For a drawing model, which runtime draws it — the fork point in `Shot.seeThenDraw`.
+    /// `.mlx` for an eye, where it is never read (an eye doesn't draw).
+    let engine: DrawEngine
+
+    /// For a drawing model, the step knob's range and default (see `DrawStepSpec`). `nil` for an
+    /// eye. Read by the Preferences step slider and frozen per-shot in `ShotConfig.drawSteps`.
+    let drawSteps: DrawStepSpec?
+
     var isBuiltIn: Bool { delivery == .builtIn }
 
     /// The exact file list to fetch, or `nil` to fall back to the pattern rule.
     var fileAllowlist: [String]? {
         if case .files(let f) = delivery { return f }
         return nil
+    }
+
+    /// The subtree to take wholesale, for a `.folder` delivery (a CoreML drawer). `nil` otherwise.
+    /// The download preserves repo-relative paths, so the model lands under this prefix inside its
+    /// shared-store folder; `CoreMLDrawer` loads from `<modelDir>/<folderPrefix>`.
+    var folderPrefix: String? {
+        if case .folder(let p) = delivery { return p }
+        return nil
+    }
+
+    /// The concrete file list to hand the downloader, resolving a `.folder` delivery against the
+    /// live repo tree. `.files` returns its named paths; `.wholeRepo`/`.builtIn` return `nil` (the
+    /// downloader's MLX pattern rule is right for those). A `.folder` model fetches the repo tree at
+    /// its pinned revision and takes every file under the prefix — the many `.mlmodelc` internal
+    /// files (`.bin`/`.mil`/`weight`) the pattern rule would drop.
+    ///
+    /// Resolved HERE, at the call site, on purpose: `MLXModelDownloader` is a verbatim copy of Hal's
+    /// and copies flow one way (Hal → here), so it gets no new `.folder` parameter to drift on — it
+    /// just receives a concrete `files:` list, the shape it already handles. Throws if the tree can't
+    /// be read, so a folder download fails loudly here rather than silently fetching nothing.
+    func downloadFileList() async throws -> [String]? {
+        switch delivery {
+        case .builtIn, .wholeRepo:
+            return nil
+        case .files(let f):
+            return f
+        case .folder(let prefix):
+            let revision = SharedModelStore.revision(forRepoID: id)
+            let all = try await HFTree.fileList(repoID: id, revision: revision)
+            let matched = all.filter { $0.hasPrefix(prefix) }
+            guard !matched.isEmpty else {
+                throw NSError(domain: "ModelCatalog", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "\(id) has no files under \(prefix) — the repository layout may have changed."
+                ])
+            }
+            return matched
+        }
     }
 
     /// Whether the weights are on the phone right now.
@@ -210,7 +284,9 @@ nonisolated enum ModelCatalog {
         blurb: "On the phone already — nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
         licence: nil,
         // The shared gentle brevity line — the one it uses today. Behaves well within it.
-        layerOnePrompt: PromptLayers.brevity
+        layerOnePrompt: PromptLayers.brevity,
+        engine: .mlx,        // unused for an eye
+        drawSteps: nil
     )
 
     /// The fast prime. Downloaded, richer, unguarded.
@@ -225,7 +301,9 @@ nonisolated enum ModelCatalog {
         licence: "Apache 2.0",
         // The same shared gentle line Apple uses — Qwen keeps to it well enough. Explicit here
         // (not a hidden fallback) so every eye's record states its own Layer 1 plainly.
-        layerOnePrompt: PromptLayers.brevity
+        layerOnePrompt: PromptLayers.brevity,
+        engine: .mlx,        // unused for an eye
+        drawSteps: nil
     )
 
     /// The small eye. A second downloadable eye, and the proof that the eye loader really is
@@ -256,7 +334,9 @@ nonisolated enum ModelCatalog {
         // "### Analysis" section, hundreds of words), which overran the frame. This forbids the
         // exact behaviors it reached for. No bluff, no truncation threat, no assumption it knows
         // it feeds a drawing — just a firm, honest instruction. Tuned on device 2026-07-26.
-        layerOnePrompt: "Describe what you see in no more than two or three sentences. Do not explain, analyze, list, or add commentary. Give only the description, then stop."
+        layerOnePrompt: "Describe what you see in no more than two or three sentences. Do not explain, analyze, list, or add commentary. Give only the description, then stop.",
+        engine: .mlx,        // unused for an eye
+        drawSteps: nil
     )
 
     /// The hand — frame 3.
@@ -297,10 +377,49 @@ nonisolated enum ModelCatalog {
         blurb: "Draws the third frame — the machine's re-imagining, made from its own words. Never sees your photograph; it only reads what the eye said about it.",
         licence: "Stability AI Community License — free under $1M revenue",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
-        layerOnePrompt: nil
+        layerOnePrompt: nil,
+        engine: .mlx,
+        // Distilled to draw in very few steps and stays coherent to about 6; default 4 (its
+        // trained sweet spot). The knob lets a user trade a touch more time for a touch more detail
+        // without leaving turbo's comfortable range.
+        drawSteps: DrawStepSpec(range: 1...6, default: 4)
     )
 
-    static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo]
+    /// The second hand — CoreML on the Neural Engine.
+    ///
+    /// Proven on device 2026-07-26 (HISTORY, the CoreML spike): SD-2.1-base **palettized**,
+    /// `split_einsum_v2` (Neural-Engine) build, run through Apple's `ml-stable-diffusion` package
+    /// with `.cpuAndNeuralEngine`. Peak ~800 MB against the MLX hand's ~2,700 (about a third), ~11 s
+    /// a shot once warm, with a one-time ~190 s Neural-Engine compile on first use. Clean images.
+    ///
+    /// Delivery is `.folder`, not `.files`: the repo carries the model compiled several ways in
+    /// parallel folders and each build is a tree of `.mlmodelc` bundles — too many internal files to
+    /// name — so we take exactly the Neural-Engine subtree and all of it. 1.14 GB (22 files) measured
+    /// from HuggingFace 2026-07-26, not estimated.
+    ///
+    /// **Licence: CreativeML OpenRAIL++-M** — Apple's re-publish of Stability's SD-2.1 (`openrail++`
+    /// on the model card, verified 2026-07-26). A use-based licence, NOT the sd-turbo Community
+    /// Licence; it gets its own line in About. Pinned to `dca5f2f…` and registered at launch by THIS
+    /// app alone (`AI_CameraApp.init` → `SharedModelStore.registerPinnedRevisions`), because only the
+    /// camera uses this drawer. Not a `plainFolderRepos` model: we control the load path, so it uses
+    /// the normal version-stamped identity like Qwen (`repo@<sha>`), which is the version-safe default.
+    static let coreMLSD21 = CameraModel(
+        id: "apple/coreml-stable-diffusion-2-1-base-palettized",
+        displayName: "SD-2.1 (Neural Engine)",
+        job: .drawing,
+        delivery: .folder("split_einsum_v2/compiled/"),
+        sizeGB: 1.14,
+        blurb: "Draws the third frame on the Neural Engine — Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing.",
+        licence: "CreativeML OpenRAIL++-M",
+        // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
+        layerOnePrompt: nil,
+        engine: .coreML,
+        // A base (non-turbo) SD model needs real denoising steps; 20 is a good default, 15–30 the
+        // useful range. Fewer is faster and rougher, more is slower and cleaner.
+        drawSteps: DrawStepSpec(range: 15...30, default: 20)
+    )
+
+    static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo, coreMLSD21]
 
     static func models(for job: ModelJob) -> [CameraModel] {
         all.filter { $0.job == job }
@@ -320,6 +439,32 @@ nonisolated enum ModelCatalog {
         case .apple:       return apple
         case .mlx(let id): return model(id: id) ?? apple
         }
+    }
+}
+
+/// The catalog's own tiny reader for a HuggingFace repo file tree — used by a `.folder` model to
+/// resolve its subtree to concrete paths (`CameraModel.downloadFileList`).
+///
+/// Deliberately separate from `BackgroundDownloadCoordinator.fetchRepoFileList`, which is private
+/// and part of the verbatim Hal copy: duplicating fifteen lines here is the price of NOT adding a
+/// parameter to a file that must stay a clean copy. Reads at the same pinned revision the download
+/// will fetch, so the list matches the bytes.
+nonisolated enum HFTree {
+    static func fileList(repoID: String, revision: String) async throws -> [String] {
+        guard let url = URL(string: "https://huggingface.co/api/models/\(repoID)/tree/\(revision)?recursive=1") else {
+            throw NSError(domain: "HFTree", code: 2, userInfo: [NSLocalizedDescriptionKey: "Bad repo id: \(repoID)"])
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw NSError(domain: "HFTree", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "HF tree API returned \(status) for \(repoID)"])
+        }
+        struct Entry: Decodable { let type: String; let path: String }
+        return try JSONDecoder().decode([Entry].self, from: data)
+            .filter { $0.type == "file" }.map { $0.path }
     }
 }
 

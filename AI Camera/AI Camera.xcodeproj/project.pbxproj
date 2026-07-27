@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		851C6E8D3013F6B100362DA9 /* SharedModelStoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */; };
+		856031CB301715600059F17E /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = 856031CA301715600059F17E /* StableDiffusion */; };
 		85F3B66D300740F300DA91ED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B66C300740F300DA91ED /* MLXLMCommon */; };
 		85F3B66F300740F300DA91ED /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B66E300740F300DA91ED /* MLXVLM */; };
 		85F3B6723007434600DA91ED /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B6713007434600DA91ED /* MLXHuggingFace */; };
@@ -33,6 +34,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				85F3B6793007442500DA91ED /* Transformers in Frameworks */,
+				856031CB301715600059F17E /* StableDiffusion in Frameworks */,
 				851C6E8D3013F6B100362DA9 /* SharedModelStoreKit in Frameworks */,
 				85F3B66F300740F300DA91ED /* MLXVLM in Frameworks */,
 				85F3B66D300740F300DA91ED /* MLXLMCommon in Frameworks */,
@@ -93,6 +95,7 @@
 				85F3B6763007442500DA91ED /* Tokenizers */,
 				85F3B6783007442500DA91ED /* Transformers */,
 				851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */,
+				856031CA301715600059F17E /* StableDiffusion */,
 			);
 			productName = "AI Camera";
 			productReference = 85F3B6373007128400DA91ED /* AI Camera.app */;
@@ -126,6 +129,7 @@
 				85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				85F3B6733007442500DA91ED /* XCRemoteSwiftPackageReference "swift-transformers" */,
 				851C6E8B3013F6B100362DA9 /* XCRemoteSwiftPackageReference "SharedModelStoreKit" */,
+				856031C9301715600059F17E /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 85F3B6383007128400DA91ED /* Products */;
@@ -377,6 +381,14 @@
 				minimumVersion = 1.0.1;
 			};
 		};
+		856031C9301715600059F17E /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/ml-stable-diffusion";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.1;
+			};
+		};
 		85F3B66B300740F300DA91ED /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
@@ -402,6 +414,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 851C6E8B3013F6B100362DA9 /* XCRemoteSwiftPackageReference "SharedModelStoreKit" */;
 			productName = SharedModelStoreKit;
+		};
+		856031CA301715600059F17E /* StableDiffusion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 856031C9301715600059F17E /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */;
+			productName = StableDiffusion;
 		};
 		85F3B66C300740F300DA91ED /* MLXLMCommon */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -536,6 +536,12 @@ private let thomasAcknowledgements: [Acknowledgement] = [
     Acknowledgement(name: "StableDiffusion (mlx-swift-examples)", license: .mit,
                     copyright: "Copyright (c) 2024 ml-explore",
                     url: "https://github.com/ml-explore/mlx-swift-examples"),
+    // Apple's CoreML Stable Diffusion package — the runtime for the second (Neural-Engine) hand.
+    // Ships inside the binary (SPM), so it's listed here; the SD-2.1 weights it runs are a runtime
+    // download (CreativeML OpenRAIL++-M), surfaced at download time, not redistributed.
+    Acknowledgement(name: "ml-stable-diffusion (Core ML)", license: .mit,
+                    copyright: "Copyright (c) 2024 Apple Inc.",
+                    url: "https://github.com/apple/ml-stable-diffusion"),
     Acknowledgement(name: "TAESD", license: .mit,
                     copyright: "Copyright (c) 2023 Ollin Boer Bohan",
                     url: "https://github.com/madebyollin/taesd"),

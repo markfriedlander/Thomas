@@ -67,10 +67,22 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var drawingSize: DrawingSize
     var upscaler: UpscaleMethod
     var decoderChoice: DecoderChoice
+    /// How many denoising steps the hand draws with — frozen from the per-drawer step knob so a
+    /// queued shot develops with the count it was taken at, exactly as `drawerRepoID` freezes the
+    /// hand. Optional for back-compat: a record from before the knob has no key, and
+    /// `effectiveDrawSteps` fills the drawer's catalog default — the same no-migration trick as
+    /// `drawerRepoID` (read it through `effectiveDrawSteps`, never raw).
+    var drawSteps: Int?
 
     /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
     /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
     var effectiveDrawerID: String { drawerRepoID ?? ModelCatalog.sdTurbo.id }
+
+    /// The step count this shot draws with: the frozen value, or the drawer's catalog default for a
+    /// pre-knob record. The one place the nil-means-default rule lives — never read `drawSteps` raw.
+    var effectiveDrawSteps: Int {
+        drawSteps ?? (ModelCatalog.model(id: effectiveDrawerID)?.drawSteps?.default ?? 4)
+    }
 }
 
 extension ShotConfig {
@@ -89,7 +101,8 @@ extension ShotConfig {
             frameTwoShows: s.frameTwoShows,
             drawingSize: s.drawingSize,
             upscaler: s.upscaler,
-            decoderChoice: s.decoderChoice
+            decoderChoice: s.decoderChoice,
+            drawSteps: s.drawSteps(for: s.selectedDrawer)
         )
     }
 }

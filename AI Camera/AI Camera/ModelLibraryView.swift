@@ -61,6 +61,7 @@ struct ModelLibraryView: View {
                         ModelLibraryRow(
                             model: model,
                             isActive: isActive(model),
+                            isSelected: isSelected(model),
                             downloader: downloader,
                             onUse:      { use(model) },
                             onDownload: { requestDownload(model) },
@@ -139,26 +140,45 @@ struct ModelLibraryView: View {
     /// had one. A **seeing** model is active when it's the selected eye. A **drawing** model is
     /// active when the third frame is being drawn (`drawsThirdFrame`) — it's enlisted for the
     /// next shot, exactly as the eye is. So SD-Turbo goes green the moment you turn drawing on.
-    private func isActive(_ model: CameraModel) -> Bool {
+    /// Whether this model is the CHOSEN one for its role — the selected eye, or the selected hand.
+    /// Distinct from `isActive` for a hand: a hand can be selected while the third frame is off
+    /// (chosen for the next shot, but not currently drawing). For an eye the two coincide (there is
+    /// no eye on/off — the selected eye is always the one that looks).
+    private func isSelected(_ model: CameraModel) -> Bool {
         switch model.job {
         case .seeing:  return settings.seer.modelID == model.id
-        case .drawing: return settings.drawsThirdFrame
+        case .drawing: return settings.selectedDrawer == model.id
         }
     }
 
+    /// "Active" = enlisted for the next shot. The selected eye is always active; a drawing model is
+    /// active only when it is the SELECTED hand AND the third frame is on. That second clause is the
+    /// fix for the "both hands green" bug (2026-07-27): before, any installed hand went green the
+    /// moment drawing turned on, so two installed hands both looked active at once.
+    private func isActive(_ model: CameraModel) -> Bool {
+        switch model.job {
+        case .seeing:  return settings.seer.modelID == model.id
+        case .drawing: return settings.selectedDrawer == model.id && settings.drawsThirdFrame
+        }
+    }
+
+    /// Records which model the next press uses — for EITHER role. The Model Library is the one place
+    /// you pick both the eye and the hand (2026-07-27), so tapping "Select" on a hand records it as
+    /// the drawer, exactly as tapping an eye records the seer. No load/unload here: under the
+    /// model-ownership rule the dark room worker owns all loading; the live setting is a template.
     private func use(_ model: CameraModel) {
-        guard model.job == .seeing else { return }
-        // Just records which eye the next press uses — no load/unload. Under the model-ownership
-        // rule (see `Settings.seer`), the dark room queue's worker owns all model loading; the
-        // live setting is only a recording template.
-        //
-        // The built-in is the one special case; every other seeing model is an MLX eye named by
-        // its repo id, so selecting one is generic — no per-model branch, which is the whole
-        // point of the generalization.
-        if model.id == ModelCatalog.apple.id {
-            settings.seer = .apple
-        } else {
-            settings.seer = .mlx(repoID: model.id)
+        switch model.job {
+        case .seeing:
+            // The built-in is the one special case; every other seeing model is an MLX eye named by
+            // its repo id, so selecting one is generic — no per-model branch, the whole point of the
+            // generalization.
+            if model.id == ModelCatalog.apple.id {
+                settings.seer = .apple
+            } else {
+                settings.seer = .mlx(repoID: model.id)
+            }
+        case .drawing:
+            settings.selectedDrawer = model.id
         }
     }
 
@@ -175,6 +195,20 @@ struct ModelLibraryView: View {
 
     private func download(_ model: CameraModel) {
         Task {
+            // Resolve the exact files to fetch. `.files` returns its named list; a `.folder`
+            // model (the CoreML drawer) fetches the repo tree and takes its subtree. A resolution
+            // failure (no network, repo layout changed) surfaces as a download error the row shows,
+            // rather than a silent no-op.
+            let files: [String]?
+            do {
+                files = try await model.downloadFileList()
+            } catch {
+                cameraLog("DOWNLOAD: could not resolve file list for \(model.id) — \(error.localizedDescription)")
+                downloader.reportDownloadFailure(
+                    modelID: model.id,
+                    message: "Couldn't start \(model.displayName): \(error.localizedDescription)")
+                return
+            }
             await downloader.startDownload(
                 modelID: model.id,
                 repoID: model.id,
@@ -184,7 +218,7 @@ struct ModelLibraryView: View {
                 sizeGB: model.sizeGB,
                 // The whole reason a diffusion model is downloadable at all. Without it,
                 // sd-turbo is 12.07 GB rather than 2.40.
-                files: model.fileAllowlist
+                files: files
             )
         }
     }
@@ -265,6 +299,7 @@ struct ModelLibraryView: View {
 private struct ModelLibraryRow: View {
     let model: CameraModel
     let isActive: Bool
+    let isSelected: Bool
     @ObservedObject var downloader: MLXModelDownloader
     let onUse: () -> Void
     let onDownload: () -> Void
@@ -363,28 +398,23 @@ private struct ModelLibraryRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
-                // The Select / Active control, in Hal's language and style so the studio
-                // reads the same everywhere (Mark, 2026-07-18 — "same language everywhere
-                // possible so people don't have to figure anything out"). Seeing models are
-                // chosen here; a drawing model shows "Active" when it's drawing the third
-                // frame (its on/off lives in the hand's Preferences, nothing to select).
-                if model.job == .seeing {
-                    Button(action: onUse) {
-                        HStack(spacing: 4) {
-                            Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                            Text(isActive ? "Active" : "Select")
-                        }
-                        .foregroundColor(isActive ? .secondary : .accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isActive)
-                } else if isActive {
+                // The Select / Active control, in Hal's language and style so the studio reads the
+                // same everywhere (Mark, 2026-07-18 — "same language everywhere possible so people
+                // don't have to figure anything out"). BOTH roles are chosen here now (2026-07-27):
+                // the Model Library is the one place you pick the eye AND the hand. Label is a pure
+                // function of two facts, so no per-role branch:
+                //   not chosen        → "Select"   (tappable)
+                //   chosen + active   → "Active"   (the selected eye; the selected hand with drawing on)
+                //   chosen, not active→ "Selected" (only a hand: picked, but the third frame is off)
+                Button(action: onUse) {
                     HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                        Text("Active")
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        Text(!isSelected ? "Select" : (isActive ? "Active" : "Selected"))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(isSelected ? .secondary : .accentColor)
                 }
+                .buttonStyle(.plain)
+                .disabled(isSelected)
                 Spacer()
                 if !model.isBuiltIn {
                     Button(role: .destructive, action: onDelete) {

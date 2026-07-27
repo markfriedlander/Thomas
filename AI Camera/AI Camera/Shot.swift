@@ -163,34 +163,54 @@ enum Shot {
         // mode, clearly outside the pure chain.
         let prompt = wordsForHand
 
-        // Frame 2 is over. Let the eye go before the hand arrives.
+        // Frame 2 is over. Let the eye go before either hand arrives — both engines load into a
+        // freed device (Mark's rule: no overhead carried between frames).
         await MLXEyeLoader.shared.unload()
         onStage?(.drawing)
 
-        // How big to save it, with which upscaler, and which developer — from the frozen config.
+        // How big to save it, and with which upscaler — from the frozen config. The step count and
+        // the drawer id are frozen too, so a queued shot develops exactly as it was taken.
         let size = config.drawingSize
         let method = config.upscaler
-        let decoderPreference = config.decoderChoice
+        let drawerID = config.effectiveDrawerID
+        let steps = config.effectiveDrawSteps
 
-        // ── Frame 3. The hand draws what the eye said. ──
+        // ── Frame 3. The hand draws what the eye said — on whichever engine this drawer uses. ──
+        //
+        // Two engines by design (2026-07-26): the MLX hand (sd-turbo, GPU) and the CoreML hand
+        // (SD-2.1, Neural Engine). The fork is the drawer's `engine`; everything up to here — the
+        // words, the condense, the eye teardown — is shared, and everything after (upscale, save)
+        // is shared too. A failed hand is silent either way: frames 1 and 2 are already a complete
+        // photograph (see the type doc).
+        let engine = ModelCatalog.model(id: drawerID)?.engine ?? .mlx
         do {
-            // The drawer this shot froze at capture (sd-turbo for a pre-drawer-choice record).
-            // A shot whose drawer isn't installed is caught upstream as blocked, so by here the
-            // spec resolves; `.sdTurbo` is a defensive floor, not an expected path.
-            let drawing = Drawing.spec(for: config.effectiveDrawerID) ?? .sdTurbo
-            let drawn = try await DrawerLoader.shared.draw(
-                drawing, prompt: prompt, decoderPreference: decoderPreference)
-            // Frame 3's model is over. Tear it down BEFORE upscaling, so the upscale (which
-            // uses the GPU too) runs with the drawer's memory already returned. (The drawer
-            // also tears itself down in `draw`'s `defer` — this is belt to that braces.)
-            await DrawerLoader.shared.unload()
-            // Enlarge after the draw — cheap, and it never touched the VAE spike. `.native`
-            // returns the 512² unchanged.
+            let drawn: CGImage
+            switch engine {
+            case .mlx:
+                // The drawer this shot froze at capture (sd-turbo for a pre-drawer-choice record).
+                // A shot whose drawer isn't installed is caught upstream as blocked, so by here the
+                // spec resolves; `.sdTurbo` is a defensive floor, not an expected path.
+                var drawing = Drawing.spec(for: drawerID) ?? .sdTurbo
+                drawing.steps = steps      // the frozen step-knob value overrides the recipe default
+                drawn = try await DrawerLoader.shared.draw(
+                    drawing, prompt: prompt, decoderPreference: config.decoderChoice)
+                // Tear it down BEFORE upscaling, so the upscale (GPU too) runs with the drawer's
+                // memory already returned. (The drawer also tears itself down in `draw`'s `defer`.)
+                await DrawerLoader.shared.unload()
+            case .coreML:
+                // The Neural-Engine hand loads, draws, and unloads itself per shot (see
+                // CoreMLDrawer) — there is no separate unload to call. The `decoderChoice`
+                // (VAE vs TAESD) is MLX-only; CoreML decodes inside its own package.
+                drawn = try await CoreMLDrawer.shared.draw(
+                    repoID: drawerID, prompt: prompt, steps: steps)
+            }
+            // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
+            // returns the model's own resolution (512²) unchanged.
             let sized = Upscaler.enlarge(drawn, to: size, method: method)
             return (perception, UIImage(cgImage: sized), wordsForHand)
         } catch {
             cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
-            await DrawerLoader.shared.unload()
+            if engine == .mlx { await DrawerLoader.shared.unload() }
             return (perception, nil, wordsForHand)
         }
     }

@@ -96,6 +96,9 @@
 //  DarkRoomView.swift
 //   35  The Dark Room Screen (The Developing Queue)
 //
+//  CoreMLDrawer.swift
+//   36  The CoreML Hand (Frame 3 On The Neural Engine)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 
@@ -161,12 +164,43 @@ struct AI_CameraApp: App {
     /// (no view to orphan it from). Compiled out of Release entirely.
     init() {
         SharedModelStore.configure(appGroupID: "group.com.MarkFriedlander.aifamily")
+        // ⭐ AI Camera's OWN curated pin — the CoreML SD-2.1 drawer (the Neural-Engine hand). Only
+        // this app uses it, so it registers its own pin rather than waiting on the shared baseline
+        // (the package is built for exactly this: "the family relies on the baseline; an outside
+        // consumer registers its own"). MUST run before the sweep below and before any download or
+        // identity resolution reads `pinnedRevisions`. Re-registering the same SHA is a no-op; a
+        // conflicting SHA is refused loudly, so promoting it to the baseline later stays safe.
+        // Verified against the model card 2026-07-26 (ModelCatalog.coreMLSD21).
+        SharedModelStore.registerPinnedRevisions([
+            ModelCatalog.coreMLSD21.id: "dca5f2fda9c5143c71aded72bbb4ce39f3c2cc9c"
+        ])
+        // ⛔ PRE-WARM AT LAUNCH DISABLED 2026-07-27 — it was crash-looping the app.
+        //
+        // Running the CoreML load + Neural-Engine warm-up as the app's FIRST work turned out to kill
+        // the app under memory pressure before it could finish starting (iOS jetsam, which on screen
+        // looks exactly like the app "backgrounding" — Mark's diagnosis, and it fits every earlier
+        // "it went to the background again"). On-demand CoreML draws from a real shot are fine
+        // (measured); it's specifically warming DURING launch that's fatal. `CoreMLDrawer.prewarm`
+        // is kept intact and correct — it just isn't auto-triggered here anymore. A safe re-enable
+        // (deferred well past launch, gated on memory / a settled foreground) is parked in NEXT.
+        //
+        // Task.detached(priority: .userInitiated) { await CoreMLDrawer.shared.prewarm(repoID: ModelCatalog.coreMLSD21.id) }
+        // NotificationCenter.default.addObserver(forName: .mlxModelDidDownload, object: nil, queue: nil) { note in
+        //     guard (note.userInfo?["modelID"] as? String) == ModelCatalog.coreMLSD21.id else { return }
+        //     Task { await CoreMLDrawer.shared.prewarm(repoID: ModelCatalog.coreMLSD21.id) }
+        // }
         // Version-safety, no-orphans: once per launch, reap any superseded plain
         // (pre-version) model copies this app still claims. Off-main — it's file
         // I/O on a coordinated store, no business on the launch thread — and after
         // configure(), which the store requires before any access. See
         // sweepSupersededPlainCopies (ModelCatalog.swift) for why all three apps run it.
         Task.detached { sweepSupersededPlainCopies() }
+        // One-time reclaim: the 2026-07-26 CoreML evaluation spike stored its ~1 GB model at
+        // <Application Support>/coreml-spike/, outside the shared store and in a flattened layout
+        // the production CoreML hand can't use. The spike is gone now (its guts are in CoreMLDrawer);
+        // this deletes its orphaned model so it doesn't sit on the phone wasting space. A no-op once
+        // it's gone, and on any device that never ran the spike.
+        Task.detached { reapCoreMLSpikeLeftovers() }
         #if DEBUG
         LocalAPIServer.shared.start()
         #endif
