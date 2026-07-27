@@ -92,6 +92,13 @@ enum Shot {
                             config: ShotConfig,
                             onStage: ((DevelopStage) -> Void)? = nil) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
         let seer = config.seer
+
+        // ── The SILENT LOOP (eye off). A different gap: the hand reads the photograph directly and
+        // re-imagines it, skipping the words entirely. Forked here, before the eye ever loads. ──
+        if !config.effectiveUseEye {
+            return await silentLoop(photograph, config: config, onStage: onStage)
+        }
+
         // ── Frame 2. The eye reads the world and says what it sees. ──
         onStage?(.seeing)
         let perception = await seer.look(at: photograph,
@@ -212,6 +219,47 @@ enum Shot {
             cameraLog("DRAW: frame 3 skipped — \(error.localizedDescription)")
             if engine == .mlx { await DrawerLoader.shared.unload() }
             return (perception, nil, wordsForHand)
+        }
+    }
+
+    /// The silent loop: the eye is off, so the (CoreML) hand re-imagines the photograph directly,
+    /// nudged by a short hand prompt. Returns the same triple as `seeThenDraw` — here the "perception"
+    /// on frame 2 is the instruction you gave (the only language in this mode, and it may be empty),
+    /// the drawing is the image-to-image output, and `wordsForHand` is that same prompt.
+    ///
+    /// CoreML-only, by architecture: only that hand can read a photograph in (the MLX sd-turbo hand
+    /// is text-in). If the selected hand isn't CoreML — or the third frame is off — there is nothing
+    /// to draw, and the shot lands as the photograph plus your words, no drawing. A failed draw is
+    /// silent, same as the normal chain.
+    private static func silentLoop(_ photograph: CGImage,
+                                   config: ShotConfig,
+                                   onStage: ((DevelopStage) -> Void)?) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
+        let handWords = config.effectiveHandPrompt
+        let perception = Perception.spoke(text: handWords, tokens: nil)
+
+        guard config.drawsThirdFrame else { return (perception, nil, handWords) }
+
+        let drawerID = config.effectiveDrawerID
+        guard ModelCatalog.model(id: drawerID)?.engine == .coreML else {
+            cameraLog("SILENT: eye off but the selected hand isn't CoreML — the silent loop needs the Neural-Engine hand; landing the photo + your words, no drawing")
+            return (perception, nil, handWords)
+        }
+
+        // No eye was ever loaded this shot, but keep the teardown uniform before the hand loads.
+        await MLXEyeLoader.shared.unload()
+        onStage?(.drawing)
+        do {
+            let drawn = try await CoreMLDrawer.shared.draw(
+                repoID: drawerID,
+                prompt: handWords,
+                steps: config.effectiveDrawSteps,
+                startingImage: photograph,
+                strength: Float(config.effectiveHandStrength))
+            let sized = Upscaler.enlarge(drawn, to: config.drawingSize, method: config.upscaler)
+            return (perception, UIImage(cgImage: sized), handWords)
+        } catch {
+            cameraLog("SILENT: draw failed — \(error.localizedDescription)")
+            return (perception, nil, handWords)
         }
     }
 }

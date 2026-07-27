@@ -73,6 +73,12 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     /// `effectiveDrawSteps` fills the drawer's catalog default — the same no-migration trick as
     /// `drawerRepoID` (read it through `effectiveDrawSteps`, never raw).
     var drawSteps: Int?
+    /// The silent loop, frozen. `useEye == false` → the eye is skipped and the (CoreML) hand reads
+    /// the photograph directly, nudged by `handPrompt` at `handStrength`. All Optional for back-compat
+    /// (a pre-silent-loop record has none): read them through the `effective…` accessors below.
+    var useEye: Bool?
+    var handPrompt: String?
+    var handStrength: Double?
 
     /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
     /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
@@ -83,6 +89,11 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var effectiveDrawSteps: Int {
         drawSteps ?? (ModelCatalog.model(id: effectiveDrawerID)?.drawSteps?.default ?? 4)
     }
+
+    /// Silent-loop accessors. A pre-silent-loop record has the eye ON (the app's only mode then).
+    var effectiveUseEye: Bool { useEye ?? true }
+    var effectiveHandPrompt: String { handPrompt ?? "" }
+    var effectiveHandStrength: Double { handStrength ?? 0.6 }
 }
 
 extension ShotConfig {
@@ -102,7 +113,10 @@ extension ShotConfig {
             drawingSize: s.drawingSize,
             upscaler: s.upscaler,
             decoderChoice: s.decoderChoice,
-            drawSteps: s.drawSteps(for: s.selectedDrawer)
+            drawSteps: s.drawSteps(for: s.selectedDrawer),
+            useEye: s.useEye,
+            handPrompt: s.handPrompt,
+            handStrength: s.handStrength
         )
     }
 }

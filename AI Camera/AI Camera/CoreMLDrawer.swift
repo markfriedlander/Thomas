@@ -101,15 +101,30 @@ actor CoreMLDrawer {
         }
     }
 
-    /// Draw. The eye's words in, a picture out. Throws rather than returning nil, so `Shot` can
-    /// log the reason and land the shot with frames 1 and 2 intact (a failed hand is silent by
-    /// design — see `Shot.seeThenDraw`).
+    /// Draw. Words in, a picture out. Throws rather than returning nil, so `Shot` can log the reason
+    /// and land the shot with the frames that succeeded intact (a failed hand is silent by design —
+    /// see `Shot.seeThenDraw`).
+    ///
+    /// Two modes, one method:
+    ///   - **Text-to-image** (the normal chain): `startingImage == nil`. The hand draws from the
+    ///     eye's words alone and never sees the photograph.
+    ///   - **Image-to-image** (the SILENT LOOP, eye off): a photograph is passed in, so the hand
+    ///     reads reality directly and re-imagines it, nudged by an optional short `prompt`. This is
+    ///     the "different gap" — what the machine chooses to carry forward from the image itself.
+    ///     Only the CoreML hand can do this (the package supports it and our model ships the VAE
+    ///     encoder); the MLX hand is text-in only.
     ///
     /// - Parameters:
     ///   - repoID: the CoreML drawer's repo id (its resources come from `resourcesDir(for:)`).
-    ///   - prompt: the eye's words, unedited (Principle 3 — the hand draws what the eye said).
+    ///   - prompt: the words that steer the draw — the eye's words in the normal chain, or the small
+    ///     hand prompt in the silent loop (may be empty there — the image alone still steers it).
     ///   - steps: denoising steps, frozen per-shot from the step knob (`ShotConfig.drawSteps`).
-    func draw(repoID: String, prompt: String, steps: Int) async throws -> CGImage {
+    ///   - startingImage: the photograph, for the silent loop. `nil` for the normal text-only chain.
+    ///   - strength: how far to transform the starting image, 0→barely touched, 1→fully reimagined.
+    ///     Clamped below 1.0 because the package treats strength ≥ 1.0 as "ignore the image." Unused
+    ///     when `startingImage` is nil.
+    func draw(repoID: String, prompt: String, steps: Int,
+              startingImage: CGImage? = nil, strength: Float = 1.0) async throws -> CGImage {
         let dir = Self.resourcesDir(for: repoID)
         guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("Unet.mlmodelc").path) else {
             throw CoreMLDrawError.notInstalled(repoID)
@@ -163,11 +178,22 @@ actor CoreMLDrawer {
         // perception it should simply state. (Also skips loading the safety model — less memory.)
         config.disableSafety = true
 
+        // ── Silent loop: feed the photograph in. ──
+        // Resized to the model's native 512² (center-cropped square first), the size the VAE encoder
+        // expects. Strength kept strictly below 1.0 so the package stays in image-to-image mode
+        // (`PipelineConfiguration.mode` flips to text-only at strength ≥ 1.0). Higher = more
+        // transformation; the actual denoise steps run become steps × strength.
+        if let start = startingImage {
+            config.startingImage = Self.square512(start) ?? start
+            config.strength = min(max(strength, 0.05), 0.95)
+            cameraLog("COREML: SILENT LOOP (image-to-image) strength=\(config.strength) prompt=\"\(prompt.prefix(60))\"")
+        }
+
         let drawStarted = Date()
         var stepN = 0
         let images = try pipeline.generateImages(configuration: config) { _ in
             stepN += 1
-            cameraLog("COREML: step \(stepN)/\(steps) at \(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB()))")
+            cameraLog("COREML: step \(stepN) at \(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB()))")
             return true
         }
 
@@ -176,6 +202,24 @@ actor CoreMLDrawer {
         }
         cameraLog("COREML: DONE \(repoID) total=\(String(format: "%.1f", Date().timeIntervalSince(started)))s draw=\(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB())) thermal=\(thermalStateLabel())")
         return cg
+    }
+}
+
+extension CoreMLDrawer {
+    /// Center-crop to square, then scale to the model's native 512×512 — the size the VAE encoder
+    /// expects for the silent loop's starting image. The photograph is arbitrary aspect; this makes
+    /// it the drawer's shape (the same "the hand's ratio wins" rule the square layouts use).
+    nonisolated static func square512(_ image: CGImage) -> CGImage? {
+        let side = 512
+        let w = image.width, h = image.height
+        let m = min(w, h)
+        guard let cropped = image.cropping(to: CGRect(x: (w - m) / 2, y: (h - m) / 2, width: m, height: m)),
+              let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: side, height: side))
+        return ctx.makeImage()
     }
 }
 

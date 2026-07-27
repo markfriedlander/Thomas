@@ -160,19 +160,31 @@ final class Settings {
     var temperature: Double {
         didSet { store(temperature, "temperature") }
     }
-    // ── PARKED (2026-07-16): the hand's system prompt. ──
+    // ── The SILENT LOOP (eye off → the hand reads the photo directly). 2026-07-27. ──
     //
-    // A style added to the eye's words ("oil painting", "charcoal sketch") was built and then
-    // deliberately DEACTIVATED. Mark's reasoning: the hand's input should be the eye's words,
-    // clean — a user style prompt inserts a *human's* aesthetic into a machine→machine chain,
-    // and "changes what the drawer perceives the eye to have seen." Hidden from the UI and
-    // unread by `Shot`, so it cannot trigger. Commented out rather than deleted because it is a
-    // real future feature: an explicitly opt-in "art direction" mode, clearly outside the pure
-    // chain (like the silent loop). See NEXT.
-    //
-    // var handPrompt: String {
-    //     didSet { store(handPrompt, "handPrompt") }
-    // }
+    // A hand prompt was DEACTIVATED on 2026-07-16 because putting a human's aesthetic into the
+    // machine→machine chain "changes what the drawer perceives the eye to have seen." That reasoning
+    // still holds — for the NORMAL chain. So the hand prompt lives ONLY here, in the silent loop,
+    // where there is no eye and no words to protect: the eye is off, the photograph goes straight
+    // into the (CoreML) hand, and a short prompt nudges its re-interpretation. A different gap.
+
+    /// Whether the eye runs at all. Off = the silent loop. Default on (the language loop is the
+    /// app's thesis). Only meaningful with a CoreML hand; the UI gates the switch on that.
+    var useEye: Bool {
+        didSet { store(useEye, "useEye") }
+    }
+    /// The small instruction the hand gets in the silent loop — art direction on the re-imagining,
+    /// not a description of the scene. Empty is fine (the image alone steers the draw). Char-capped
+    /// in the UI so it can't crowd the model's ~75-token ceiling.
+    var handPrompt: String {
+        didSet { store(handPrompt, "handPrompt") }
+    }
+    /// How far the silent loop transforms the photograph: 0 → barely touched, 1 → fully reimagined.
+    /// Clamped into image-to-image range by the drawer. Default 0.6 — a clear re-imagining that still
+    /// remembers the photo.
+    var handStrength: Double {
+        didSet { store(handStrength, "handStrength") }
+    }
 
     /// What frame 2 prints — the eye's full words, or the (possibly condensed) words the hand
     /// actually received. See `FrameTwoWords`. Default is the airtight chain.
@@ -214,6 +226,9 @@ final class Settings {
         drawsThirdFrame = d.bool(forKey: "drawsThirdFrame")
         selectedDrawer = d.string(forKey: "selectedDrawer") ?? ModelCatalog.sdTurbo.id
         drawStepsByDrawer = (d.dictionary(forKey: "drawStepsByDrawer") as? [String: Int]) ?? [:]
+        useEye = (d.object(forKey: "useEye") as? Bool) ?? true   // default: the eye is on
+        handPrompt = d.string(forKey: "handPrompt") ?? ""
+        handStrength = (d.object(forKey: "handStrength") as? Double) ?? 0.6
         systemPrompt = d.string(forKey: "systemPrompt") ?? Eye.plain.systemPrompt
         temperature = d.object(forKey: "temperature") as? Double ?? Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -254,6 +269,9 @@ final class Settings {
         drawsThirdFrame = false
         selectedDrawer = ModelCatalog.sdTurbo.id
         drawStepsByDrawer = [:]   // every drawer back to its catalog-default step count
+        useEye = true             // the eye on — the language loop is the default
+        handPrompt = ""
+        handStrength = 0.6
         systemPrompt = Eye.plain.systemPrompt
         temperature = Eye.plain.temperature
         // handPrompt parked — see the property above.
@@ -362,6 +380,7 @@ struct PreferencesView: View {
                 modelSection
                 eyeSection
                 handSection
+                silentLoopSection
                 decoderSection
                 sizeSection
                 layoutSection
@@ -533,6 +552,22 @@ struct PreferencesView: View {
     /// for the thing, real name for the knob.
     private var eyeSection: some View {
         Section {
+            // The eye on/off — the silent-loop switch. Off means the hand reads the photograph
+            // directly (a CoreML-hand feature). The toggle stays usable regardless of the hand, so
+            // you're never stranded; but the silent loop only PRODUCES a drawing with the
+            // Neural-Engine hand, so we say so plainly when it can't.
+            Toggle("Use the eye", isOn: $settings.useEye)
+            if !settings.useEye && selectedDrawerEngine != .coreML {
+                Text("The silent loop needs the Neural-Engine hand — pick it in the Model Library, or turn the eye back on. As set, this shot would keep just the photo and your words.")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+
+            if !settings.useEye {
+                Text("Silent loop: the eye is off. The hand reads your photograph directly and paints it again — no words in between. Set the instruction and how far it strays below.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
             // Layer 1 — locked, but SHOWN. Principle 2 done honestly: we don't hide the line
             // the app depends on, we display it and lock it. The ⓘ says why. Everything below
             // is Layer 2, fully the user's. It shows the CURRENT eye's Layer 1 (per-model now,
@@ -572,11 +607,22 @@ struct PreferencesView: View {
             }
             Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
 
+            // What FRAME 2 prints — the eye's full words, or the (possibly condensed) words the hand
+            // actually received. It lives HERE, in the eye section, because it controls frame 2, the
+            // eye's own panel (Mark, 2026-07-27). The distinction only bites when a long description
+            // was shortened to fit the hand; otherwise both show the same words.
+            Picker("Frame 2 shows", selection: $settings.frameTwoShows) {
+                ForEach(FrameTwoWords.allCases, id: \.self) { choice in
+                    Text(choice.name).tag(choice)
+                }
+            }
+
             // Button("Presets…") { showingPresets = true }   // ⏸️ hidden 2026-07-27 — see the sheet note on the Form
-            Button("Reset the eye's prompt and temperature") {
+            Button("Reset defaults") {
                 promptFocused = false
                 settings.resetPromptToDefault()
             }
+            }   // end `if settings.useEye`
         } header: {
             Text("Frame 2 · The Eye — how it sees")
         } footer: {
@@ -600,16 +646,48 @@ struct PreferencesView: View {
     private var selectedDrawerModel: CameraModel? { ModelCatalog.model(id: settings.selectedDrawer) }
     private var selectedDrawerEngine: DrawEngine { selectedDrawerModel?.engine ?? .mlx }
 
+    /// Short cap on the hand prompt — art direction, not a description. The drawer's text encoder
+    /// only reads ~75 tokens, and this leaves plenty of room while keeping the instruction terse.
+    private static let handPromptMaxChars = 80
+
+    /// The silent-loop controls — a short instruction for the hand, and how far it transforms the
+    /// photo. Only when the eye is off AND the hand can actually do it (CoreML).
+    @ViewBuilder
+    private var silentLoopSection: some View {
+        if !settings.useEye && selectedDrawerEngine == .coreML {
+            Section {
+                TextField("e.g. an oil painting · a charcoal sketch · leave blank",
+                          text: Binding(
+                            get: { settings.handPrompt },
+                            set: { settings.handPrompt = String($0.prefix(Self.handPromptMaxChars)) }),
+                          axis: .vertical)
+                    .lineLimit(1...3)
+                    .font(.system(.footnote, design: .monospaced))
+                HStack {
+                    Spacer()
+                    Text("\(settings.handPrompt.count)/\(Self.handPromptMaxChars)")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+
+                HStack {
+                    Text("Transform")
+                    Spacer()
+                    Text(String(format: "%.2f", settings.handStrength))
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.handStrength, in: 0.2...0.9, step: 0.05)
+            } header: {
+                Text("Frame 3 · Silent loop — how the hand re-imagines")
+            } footer: {
+                Text("The instruction nudges the style; the hand still reads your photograph for its shapes and colors. Transform sets how far it strays — low keeps the photo's forms, high reinvents them. Blank instruction is fine — the image alone will steer it.")
+            }
+        }
+    }
+
     private var handSection: some View {
         Section {
-            // WHICH hand is chosen in the Model Library, not here (2026-07-27) — one selection home,
-            // no duplicate picker. This read-only line just names the hand you're tuning, so the
-            // steps below have an owner; tap through to the library to switch hands.
-            if let hand = selectedDrawerModel {
-                LabeledContent("Hand", value: hand.displayName)
-                    .foregroundStyle(.secondary)
-            }
-
+            // Which hand is chosen in the Model Library, not here (2026-07-27) — one selection home.
             Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame)
                 .disabled(!DrawerLoader.isAvailable(settings.selectedDrawer))
 
@@ -618,15 +696,6 @@ struct PreferencesView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else if settings.drawsThirdFrame {
-                // Peekaboo: only once the third frame is on does "what frame 2 shows" mean
-                // anything — condensation exists solely to feed the hand. Default is the
-                // airtight chain (what the hand received); see `FrameTwoWords`.
-                Picker("Frame 2 shows", selection: $settings.frameTwoShows) {
-                    ForEach(FrameTwoWords.allCases, id: \.self) { choice in
-                        Text(choice.name).tag(choice)
-                    }
-                }
-
                 // ── The step knob, per drawer. ──
                 // Honest terminology (Principle 2): these are denoising *steps*, the same word the
                 // model uses. More steps, more detail, more time. Per-drawer because the useful
@@ -649,12 +718,10 @@ struct PreferencesView: View {
                         in: Double(spec.range.lowerBound)...Double(spec.range.upperBound),
                         step: 1
                     )
-                    // The hand's counterpart to the eye's "reset prompt and temperature" — one tap
-                    // back to this drawer's default step count. Disabled when already at default.
-                    Button("Reset steps to default") {
+                    // The hand's reset — identical in look and wording to the eye's (Mark, 2026-07-27).
+                    Button("Reset defaults") {
                         settings.setDrawSteps(spec.default, for: settings.selectedDrawer)
                     }
-                    .disabled(settings.currentDrawerSteps == spec.default)
                 }
             }
 

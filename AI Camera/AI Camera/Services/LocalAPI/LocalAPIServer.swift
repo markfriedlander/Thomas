@@ -572,6 +572,7 @@ extension LocalAPIServer {
     ///    "systemPrompt":"…", "temperature":0.8, "frameTwoShows":"sentToHand"|"fullPerception",
     ///    "drawingSize":"native"|"instagram"|"large", "upscaler":"metalFX"|"coreImage",
     ///    "selectedDrawer":"<drawer repo id>", "drawSteps":20,   // the hand + its per-drawer step count
+    ///    "useEye":true, "handPrompt":"…", "handStrength":0.6,   // silent loop: eye off → CoreML img2img
     ///    "reset":"prompt"|"everything"}
     private func handleSetSettings(_ req: ParsedRequest) async -> (Int, String) {
         guard let data = req.bodyData,
@@ -590,6 +591,10 @@ extension LocalAPIServer {
             // setter). Set the drawer first, then steps, so steps land on the intended hand.
             if let v = obj["selectedDrawer"] as? String, !v.isEmpty { s.selectedDrawer = v; changed.append("selectedDrawer=\(v)") }
             if let v = obj["drawSteps"] as? Int { s.setDrawSteps(v, for: s.selectedDrawer); changed.append("drawSteps=\(s.drawSteps(for: s.selectedDrawer))") }
+            // Silent loop (eye off → the CoreML hand reads the photo directly).
+            if let v = obj["useEye"] as? Bool { s.useEye = v; changed.append("useEye=\(v)") }
+            if let v = obj["handPrompt"] as? String { s.handPrompt = v; changed.append("handPrompt") }
+            if let v = obj["handStrength"] as? Double { s.handStrength = v; changed.append("handStrength=\(v)") }
             if let v = obj["systemPrompt"] as? String { s.systemPrompt = v; changed.append("systemPrompt") }
             if let v = obj["temperature"] as? Double { s.temperature = v; changed.append("temperature=\(v)") }
             if let v = obj["frameTwoShows"] as? String, let x = FrameTwoWords(rawValue: v) { s.frameTwoShows = x; changed.append("frameTwoShows=\(v)") }
@@ -618,12 +623,16 @@ extension LocalAPIServer {
         let temperature: Double
         let selectedDrawer: String
         let drawSteps: Int
+        let useEye: Bool
+        let handPrompt: String
+        let handStrength: Double
         var dict: [String: Any] {
             ["seer": seer, "layout": layout, "drawsThirdFrame": drawsThirdFrame,
              "stampRawCoordinates": stampRawCoordinates,
              "temperature": temperature, "frameTwoShows": frameTwoShows,
              "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
+             "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt]
         }
     }
@@ -640,7 +649,10 @@ extension LocalAPIServer {
             stampRawCoordinates: s.stampRawCoordinates,
             temperature: s.temperature,
             selectedDrawer: s.selectedDrawer,
-            drawSteps: s.drawSteps(for: s.selectedDrawer))
+            drawSteps: s.drawSteps(for: s.selectedDrawer),
+            useEye: s.useEye,
+            handPrompt: s.handPrompt,
+            handStrength: s.handStrength)
     }
 
     /// POST /zoom — drive the zoom the way a pinch does (a pinch just calls `lens.zoom`). Reports
