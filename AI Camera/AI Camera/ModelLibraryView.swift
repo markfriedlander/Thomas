@@ -522,10 +522,53 @@ struct ModelStatusDot: View {
 /// a display-ready string (Principle 2 — "Stability AI Community License — free under $1M
 /// revenue", not a code), so there's no code-to-name switch to maintain. The important terms
 /// live in the catalog, next to the model.
+/// The responsible-use restrictions surfaced in the acceptance sheet (Mark, 2026-07-27): the actual
+/// prohibited-uses clause from a model's license, shown before download so the user accepts the
+/// specific terms, not just a link. This is how we pass OpenRAIL's use-restrictions downstream (its
+/// core obligation). Text is verbatim from each license's use-restriction section, not paraphrased.
+nonisolated enum ResponsibleUse {
+    /// CreativeML OpenRAIL-M / ++-M — Attachment A "Use Restrictions", verbatim (fetched from the
+    /// license 2026-07-27). Applies to the SD-2.1 (Core ML) hand.
+    static let openRAIL = """
+    By downloading and using this model you agree NOT to use it, per its CreativeML OpenRAIL license:
+
+    1. In any way that violates any applicable national, federal, state, local or international law or regulation.
+    2. For the purpose of exploiting, harming or attempting to exploit or harm minors in any way.
+    3. To generate or disseminate verifiably false information and/or content with the purpose of harming others.
+    4. To generate or disseminate personal identifiable information that can be used to harm an individual.
+    5. To defame, disparage or otherwise harass others.
+    6. For fully automated decision making that adversely impacts an individual's legal rights or otherwise creates or modifies a binding, enforceable obligation.
+    7. For any use intended to or which has the effect of discriminating against or harming individuals or groups based on online or offline social behavior or known or predicted personal or personality characteristics.
+    8. To exploit any of the vulnerabilities of a specific group of persons based on their age, social, physical or mental characteristics, in order to materially distort the behavior of a person pertaining to that group in a manner that causes or is likely to cause that person or another person physical or psychological harm.
+    9. For any use intended to or which has the effect of discriminating against individuals or groups based on legally protected characteristics or categories.
+    10. To provide medical advice and medical results interpretation.
+    11. To generate or disseminate information for the purpose to be used for administration of justice, law enforcement, immigration or asylum processes, such as predicting an individual will commit fraud/crime commitment.
+    """
+
+    /// sd-turbo is under the Stability AI Community License, which requires compliance with Stability's
+    /// Acceptable Use Policy. Faithful summary + the model-page link carries the full terms. (Not
+    /// verbatim — the AUP lives on Stability's site; can be surfaced verbatim if we choose.)
+    static let stabilityAUP = """
+    This model is provided under the Stability AI Community License and its Acceptable Use Policy. You agree not to use it for unlawful, harmful, fraudulent, infringing, or abusive purposes, or to generate content that exploits or harms minors. The full terms are at the model page linked below.
+    """
+
+    /// The responsible-use text to surface for a model, or nil (Apache-2.0 models — Qwen, Smol — are
+    /// permissive and carry no use-restrictions).
+    static func restrictions(for model: CameraModel) -> String? {
+        switch model.id {
+        case ModelCatalog.coreMLSD21.id: return openRAIL
+        case ModelCatalog.sdTurbo.id:    return stabilityAUP
+        default:                          return nil
+        }
+    }
+}
+
 struct ModelLicenseSheet: View {
     let model: CameraModel
     let onAccept: () -> Void
     let onCancel: () -> Void
+
+    private var useRestrictions: String? { ResponsibleUse.restrictions(for: model) }
 
     /// The model card / full terms on Hugging Face. `model.id` is the repo id for both
     /// downloadable models (`stabilityai/sd-turbo`, and Qwen's repo).
@@ -544,6 +587,23 @@ struct ModelLicenseSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Text("By downloading \(model.displayName), you agree to its license terms.")
                             .font(.subheadline).foregroundStyle(.secondary)
+                    }
+
+                    // The actual use-restrictions, surfaced in-app (not just linked) so acceptance is
+                    // of the specific terms — how OpenRAIL's "pass the restrictions downstream" duty
+                    // is met (Mark, 2026-07-27). Only for models that carry such restrictions.
+                    if let restrictions = useRestrictions {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Responsible use", systemImage: "hand.raised.fill")
+                                .font(.subheadline).fontWeight(.semibold)
+                            Text(restrictions)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                     }
 
                     if let gb = model.sizeGB {

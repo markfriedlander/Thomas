@@ -360,7 +360,7 @@ nonisolated enum ModelCatalog {
     /// if the pattern rule were let anywhere near this repo.
     static let sdTurbo = CameraModel(
         id: "stabilityai/sd-turbo",
-        displayName: "SD-Turbo",
+        displayName: "SD-Turbo (MLX)",
         job: .drawing,
         delivery: .files([
             "unet/config.json",
@@ -405,7 +405,7 @@ nonisolated enum ModelCatalog {
     /// the normal version-stamped identity like Qwen (`repo@<sha>`), which is the version-safe default.
     static let coreMLSD21 = CameraModel(
         id: "apple/coreml-stable-diffusion-2-1-base-palettized",
-        displayName: "SD-2.1 (Neural Engine)",
+        displayName: "SD-2.1 (Core ML)",
         job: .drawing,
         delivery: .folder("split_einsum_v2/compiled/"),
         sizeGB: 1.14,

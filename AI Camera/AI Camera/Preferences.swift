@@ -169,9 +169,22 @@ final class Settings {
     // into the (CoreML) hand, and a short prompt nudges its re-interpretation. A different gap.
 
     /// Whether the eye runs at all. Off = the silent loop. Default on (the language loop is the
-    /// app's thesis). Only meaningful with a CoreML hand; the UI gates the switch on that.
+    /// app's thesis).
+    ///
+    /// The silent loop ONLY works on the SD-2.1 (Core ML) hand (sd-turbo can't read a photo in), so
+    /// turning the eye OFF auto-selects that hand and turns drawing on — when it's installed — so
+    /// "eye off" always lands on a hand that can do the job. Enforced HERE in the model (Principle 7),
+    /// not in screen code, so it holds however the eye is toggled — Preferences, the antenna, a future
+    /// preset — and can't be bypassed. No auto-restore on the way back (Mark, 2026-07-27). If SD-2.1
+    /// isn't installed nothing switches; the UI tells the user to download it.
     var useEye: Bool {
-        didSet { store(useEye, "useEye") }
+        didSet {
+            store(useEye, "useEye")
+            if !useEye, DrawerLoader.isAvailable(ModelCatalog.coreMLSD21.id) {
+                selectedDrawer = ModelCatalog.coreMLSD21.id
+                drawsThirdFrame = true
+            }
+        }
     }
     /// The small instruction the hand gets in the silent loop — art direction on the re-imagining,
     /// not a description of the scene. Empty is fine (the image alone steers the draw). Char-capped
@@ -427,6 +440,8 @@ struct PreferencesView: View {
             // un-downloaded hand) makes the current layout impossible, snap to the richest available
             // one. This is the content-aware half of the layout rebuild (2026-07-27) — it's why the
             // picker never shows a greyed-out layout you can't make (retires bug #22).
+            // The eye→SD-2.1 auto-switch now lives in `Settings.useEye` (model-level, so the antenna
+            // and any future preset get it too). Here we only keep the layout coherent with the toggles.
             .onChange(of: settings.useEye) { _, _ in snapLayoutIfNeeded() }
             .onChange(of: settings.drawsThirdFrame) { _, _ in snapLayoutIfNeeded() }
             .onChange(of: settings.selectedDrawer) { _, _ in snapLayoutIfNeeded() }
@@ -565,7 +580,7 @@ struct PreferencesView: View {
             // Neural-Engine hand, so we say so plainly when it can't.
             Toggle("Use the eye", isOn: $settings.useEye)
             if !settings.useEye && selectedDrawerEngine != .coreML {
-                Text("The silent loop needs the Neural-Engine hand — pick it in the Model Library, or turn the eye back on. As set, this shot would keep just the photo and your words.")
+                Text("The silent loop only works with the SD-2.1 (Core ML) hand. Download it in the Model Library to use the silent loop; until then, this shot keeps just the photo and your words.")
                     .font(.footnote)
                     .foregroundStyle(.orange)
             }

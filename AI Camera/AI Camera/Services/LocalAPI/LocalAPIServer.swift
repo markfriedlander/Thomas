@@ -1506,9 +1506,15 @@ extension LocalAPIServer {
     /// app, which can actually see it.
     private func handleModels() -> (Int, String) {
         let repos = SharedModelStore.installedRepos()
-        let entries: [[String: Any]] = repos.map { repo in
-            [
+        let entries: [[String: Any]] = repos.map { repo -> [String: Any] in
+            // Strip the `@<sha>` version stamp to the bare repo id, then match the catalog EXACTLY —
+            // a prefix match is wrong here (the built-in "apple" is a prefix of "apple/coreml-…").
+            let bare = repo.split(separator: "@").first.map(String.init) ?? repo
+            return [
                 "repo":       repo,
+                // The catalog display name (what a human sees in the Model Library), so the antenna
+                // can report it too. "" for a store repo not in our catalog (the embedders).
+                "displayName": ModelCatalog.model(id: bare)?.displayName ?? "",
                 "sizeBytes":  SharedModelStore.sizeOnDisk(repo),
                 "claimedBy":  SharedModelStore.claimants(modelID: repo)
             ]
