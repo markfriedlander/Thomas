@@ -70,6 +70,9 @@ struct CameraView: View {
     /// but chosen in Preferences, never here. The capture screen stays sacred.
     @State private var settings = Settings.shared
     @State private var showingPreferences = false
+    /// Lets the antenna drive the Download → license → Accept flow: when it sets a model here, this
+    /// screen presents that model's license sheet (see `AntennaUIBridge`).
+    @State private var bridge = AntennaUIBridge.shared
     /// The zoom at the instant the pinch began. A gesture reports magnification relative
     /// to its own start, so without an anchor each update would compound the last.
     @State private var zoomAnchor: CGFloat?
@@ -136,6 +139,16 @@ struct CameraView: View {
         .onDisappear { lens.stop(); place.stop() }
         .statusBarHidden()
         .sheet(isPresented: $showingPreferences) { PreferencesView() }
+        // Antenna-driven license sheet: the same `ModelLicenseSheet` the Model Library shows, presented
+        // from the capture screen so the antenna can walk (and screenshot) the Download → license →
+        // Accept flow. Accept takes the identical `startModelDownload` path the button's Accept takes.
+        .sheet(item: $bridge.licenseModel) { model in
+            ModelLicenseSheet(
+                model: model,
+                onAccept: { bridge.licenseModel = nil; startModelDownload(model) },
+                onCancel: { bridge.licenseModel = nil }
+            )
+        }
     }
 
     // MARK: - The shutter

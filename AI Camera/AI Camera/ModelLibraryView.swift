@@ -193,35 +193,10 @@ struct ModelLibraryView: View {
         }
     }
 
-    private func download(_ model: CameraModel) {
-        Task {
-            // Resolve the exact files to fetch. `.files` returns its named list; a `.folder`
-            // model (the CoreML drawer) fetches the repo tree and takes its subtree. A resolution
-            // failure (no network, repo layout changed) surfaces as a download error the row shows,
-            // rather than a silent no-op.
-            let files: [String]?
-            do {
-                files = try await model.downloadFileList()
-            } catch {
-                cameraLog("DOWNLOAD: could not resolve file list for \(model.id) — \(error.localizedDescription)")
-                downloader.reportDownloadFailure(
-                    modelID: model.id,
-                    message: "Couldn't start \(model.displayName): \(error.localizedDescription)")
-                return
-            }
-            await downloader.startDownload(
-                modelID: model.id,
-                repoID: model.id,
-                // Measured, not estimated, and not from a catalog we don't have. Without a
-                // size the downloader's pre-flight refuses outright — which is exactly why
-                // nothing could ever be downloaded before this file existed.
-                sizeGB: model.sizeGB,
-                // The whole reason a diffusion model is downloadable at all. Without it,
-                // sd-turbo is 12.07 GB rather than 2.40.
-                files: files
-            )
-        }
-    }
+    // The Download button and the antenna's license-accept verb both call this ONE function, so the
+    // two take the identical path (Principle 7 / antenna human-parity — the antenna exercises what a
+    // human does, never a parallel copy that could pass while the real one is broken).
+    private func download(_ model: CameraModel) { startModelDownload(model) }
 
     /// Mark's semantics: give up our claim; the files go only if we were the last to hold
     /// them.
@@ -235,22 +210,12 @@ struct ModelLibraryView: View {
     /// loaded. Deleting weights out from under a live `mmap` is survivable on a Unix
     /// filesystem — the inode outlives the unlink — but leaving 1.6 GB resident for a model
     /// the user just deleted is its own bug, and the seer would still be pointing at it.
+    // Both the Delete button and the antenna's /delete verb call `deleteModelEverywhere` (below), the
+    // one copy of the release-and-remove rule (antenna human-parity).
     private func delete(_ model: CameraModel) {
         confirmingDelete = nil
-        guard !model.isBuiltIn else { return }
         Task {
-            // If we're deleting the eye that's resident right now, drop it from memory first;
-            // and if the deleted model was the selected eye, fall back to the built-in so the
-            // seer never points at weights that are gone. Generic across every MLX eye.
-            if model.job == .seeing {
-                if await MLXEyeLoader.shared.isLoadedRepo(model.id) {
-                    await MLXEyeLoader.shared.unload()
-                }
-                await MainActor.run {
-                    if settings.seer.modelID == model.id { settings.seer = .apple }
-                }
-            }
-            await downloader.deleteModel(modelID: model.id)
+            await deleteModelEverywhere(model)
             await MainActor.run { refreshToken += 1 }
         }
     }
@@ -555,10 +520,47 @@ nonisolated enum ResponsibleUse {
     """
 
     /// sd-turbo is under the Stability AI Community License, which requires compliance with Stability's
-    /// Acceptable Use Policy. Faithful summary + the model-page link carries the full terms. (Not
-    /// verbatim — the AUP lives on Stability's site; can be surfaced verbatim if we choose.)
+    /// Acceptable Use Policy. Reproduced VERBATIM below — the prohibited-use list from
+    /// stability.ai/use-policy (effective 2025-07-31), fetched 2026-07-28 — to match the OpenRAIL
+    /// treatment for SD-2.1 (Mark, 2026-07-28: surface the actual restrictions, not a paraphrase). The
+    /// model-page link below the sheet carries the complete, current policy.
     static let stabilityAUP = """
-    This model is provided under the Stability AI Community License and its Acceptable Use Policy. You agree not to use it for unlawful, harmful, fraudulent, infringing, or abusive purposes, or to generate content that exploits or harms minors. The full terms are at the model page linked below.
+    By downloading and using this model you agree to the Stability AI Community License and its Acceptable Use Policy (effective July 31, 2025). Stability prohibits using the technology to facilitate:
+
+    Violations of law or others' rights:
+    • violations of law or others' rights, including intellectual property and privacy rights.
+    • violations of AI laws, such as: using subliminal, manipulative, or deceptive techniques that can distort a person's ability to make informed decisions and is likely to cause harm; exploiting vulnerabilities due to age, disability, or socio-economic situations; evaluating or classifying persons based on their social behavior, personal characteristics, or the use of social scoring leading to detrimental or unfavorable treatment; assessing or predicting the risk of a person committing a crime, based solely on profiling or personal traits; creating or expanding facial recognition databases without consent; inferring emotions in the workplace or education institution, except for medical or safety reasons; categorizing people based on their biometric data to infer their race, political opinion, trade union membership, religious or philosophical beliefs, sex life or sexual orientation; and using real-time biometric identification systems in public spaces for law enforcement purposes.
+    • sharing of personal information without consent.
+    • provision of advice on essential services, including in the medical or health field, without review by a qualified professional and disclosure of the use of AI assistance and its potential limitations.
+
+    Harm to or exploitation against children:
+    • child sexual abuse material (CSAM), sexual exploitation, grooming, or trafficking of minors.
+    • exploiting or abusing minors, including sextortion or any impersonation or enticement of minors for exploitative purposes.
+    • pedophilic behavior, such as through suggestive depictions of minors.
+
+    Sexually explicit content:
+    • non-consensual intimate imagery (NCII).
+    • illegal pornographic content.
+    • content relating to sexual intercourse, sexual acts, or sexual violence.
+
+    Emotional or physical harm to others or self:
+    • encouragement or instructions related to self harm or harm to others.
+    • discrimination, threats, or promotion of violence or hateful content based on protected attributes.
+    • support for organizations or individuals associated with terrorism or hate.
+    • content relating to human trafficking or exploitation.
+    • extreme gore, such as content involving bodily destruction, mutilation, torture or animal abuse.
+    • the development or manufacturing of any illegal or regulated weapons.
+
+    Circumvention of safeguards:
+    • intentional bypassing of product safeguards or restrictions established within Stability Technology.
+    • intentional bypassing of an account ban, such as by creating new accounts.
+    • malicious code, malware, computer viruses, or any activity that could interfere with the integrity of a website or system.
+
+    Deceiving or misleading others:
+    • misinformation or disinformation.
+    • impersonation of others without consent or legal right, including defamatory content.
+    • misleading end users about the nature of outputs from Stability AI Technology (such as pretending it was made by a human) or failing to appropriately disclose when someone is interacting with AI where it is not apparent.
+    • content that may disrupt democratic or judicial processes, including content that discourages participation in elections.
     """
 
     /// The responsible-use text to surface for a model, or nil (Apache-2.0 models — Qwen, Smol — are
@@ -661,6 +663,63 @@ struct ModelLicenseSheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
     }
+}
+
+// MARK: - Shared model actions (one path for the buttons AND the antenna)
+
+/// Start a model download: resolve the exact files, then hand off to the downloader. Called by the
+/// Model Library's Download button (via its license sheet's Accept) and by the antenna's license
+/// verb, so a human and the antenna take the SAME path — the antenna must never exercise a parallel
+/// copy that could pass while the real one is broken (antenna human-parity, Mark 2026-07-20).
+@MainActor func startModelDownload(_ model: CameraModel) {
+    Task {
+        // `.files` returns its named list; a `.folder` model (the CoreML drawer) fetches the repo
+        // tree and takes its subtree. A resolution failure surfaces as a download error the row
+        // shows, rather than a silent no-op.
+        let files: [String]?
+        do {
+            files = try await model.downloadFileList()
+        } catch {
+            cameraLog("DOWNLOAD: could not resolve file list for \(model.id) — \(error.localizedDescription)")
+            MLXModelDownloader.shared.reportDownloadFailure(
+                modelID: model.id,
+                message: "Couldn't start \(model.displayName): \(error.localizedDescription)")
+            return
+        }
+        await MLXModelDownloader.shared.startDownload(
+            modelID: model.id,
+            repoID: model.id,
+            // Measured, not estimated. Without a size the downloader's pre-flight refuses outright.
+            sizeGB: model.sizeGB,
+            // The whole reason a diffusion model is downloadable at all (sd-turbo: 2.40 GB, not 12.07).
+            files: files
+        )
+    }
+}
+
+/// Give up this camera's claim on a model and remove the files if we were the last to hold them
+/// (`deleteModel` enforces exactly that). If the model is the resident eye, drop it from memory and
+/// fall back to the built-in seer first, so nothing points at weights that are gone. The one copy of
+/// the rule, shared by the Delete button and the antenna's /delete verb.
+@MainActor func deleteModelEverywhere(_ model: CameraModel) async {
+    guard !model.isBuiltIn else { return }
+    if model.job == .seeing {
+        if await MLXEyeLoader.shared.isLoadedRepo(model.id) {
+            await MLXEyeLoader.shared.unload()
+        }
+        if Settings.shared.seer.modelID == model.id { Settings.shared.seer = .apple }
+    }
+    await MLXModelDownloader.shared.deleteModel(modelID: model.id)
+}
+
+/// A tiny bridge the antenna uses to drive UI a human reaches by tapping. Set `licenseModel` and the
+/// capture screen presents that model's license sheet — the antenna's way through the Download →
+/// license → Accept flow (Mark, 2026-07-28: "if the antenna isn't doing what you need, add the verbs").
+@MainActor @Observable final class AntennaUIBridge {
+    static let shared = AntennaUIBridge()
+    private init() {}
+    /// When non-nil, `CameraView` presents `ModelLicenseSheet` for this model. Cleared on accept/cancel.
+    var licenseModel: CameraModel?
 }
 
 // ==== LEGO END: 25 ModelLibraryView (The Model Library) ====

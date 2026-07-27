@@ -323,6 +323,7 @@ extension LocalAPIServer {
         case ("POST", "/settings"):        return await handleSetSettings(req)
         case ("POST", "/zoom"):            return await handleZoom(req)
         case ("POST", "/flip"):            return await handleFlip(req)
+        case ("POST", "/license"):         return await handleLicense(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
@@ -747,6 +748,36 @@ extension LocalAPIServer {
         }
         await MainActor.run { MLXModelDownloader.shared.cancelDownload(modelID: repoID) }
         return (200, json(["repo": repoID, "cancelled": true]))
+    }
+
+    /// POST /license — drive the Download → license → Accept flow a human taps through, so the
+    /// antenna exercises the real gate (and its sheet can be screenshotted), not the bypass `/download`
+    /// takes. `X-Repo` names the model; `X-Action` is `show` (default — present the license sheet on
+    /// the capture screen), `accept` (dismiss it and start the download via the SAME `startModelDownload`
+    /// the button's Accept calls), or `cancel` (dismiss without downloading). Added 2026-07-28 on Mark's
+    /// directive: if the antenna can't do what a human can, add the verb.
+    private func handleLicense(_ req: ParsedRequest) async -> (Int, String) {
+        guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
+            return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
+        }
+        guard let model = ModelCatalog.model(id: repoID) else {
+            return (404, json(["error": "Unknown model \(repoID) — not in the catalog."]))
+        }
+        let action = (req.headers["x-action"] ?? "show").lowercased()
+        switch action {
+        case "accept":
+            AntennaUIBridge.shared.licenseModel = nil
+            startModelDownload(model)
+            return (200, json(["repo": repoID, "action": "accept", "started": true,
+                               "message": "License accepted; download started via the same path the Accept button takes. Poll GET /downloads."]))
+        case "cancel":
+            AntennaUIBridge.shared.licenseModel = nil
+            return (200, json(["repo": repoID, "action": "cancel", "dismissed": true]))
+        default:
+            AntennaUIBridge.shared.licenseModel = model
+            return (200, json(["repo": repoID, "action": "show", "presented": true,
+                               "message": "Presenting \(model.displayName)'s license sheet on the capture screen. Screenshot it, then POST /license with X-Action: accept."]))
+        }
     }
 
     /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.
