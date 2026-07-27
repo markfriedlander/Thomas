@@ -33,60 +33,142 @@ import UIKit
 /// Deliberately a **small, tested set** — not a freeform editor (CLAUDE.md, "The visual
 /// language"). Every option here is a property of the loaded film, chosen before the
 /// shutter, never per-shot.
+/// The five families a layout can belong to. Drives the grouped, content-aware layout picker
+/// (2026-07-27): the menu shows these as sections, offering only the variants the current eye/hand
+/// state can actually produce.
+nonisolated enum LayoutCategory: String, CaseIterable, Sendable {
+    case superimposed, single, diptych, triptych, separate
+    var title: String {
+        switch self {
+        case .superimposed: return "Superimposed"
+        case .single:       return "Single"
+        case .diptych:      return "Diptych"
+        case .triptych:     return "Triptych"
+        case .separate:     return "Separate files"
+        }
+    }
+}
+
 nonisolated enum Layout: String, CaseIterable, Sendable {
-    /// The machine's words laid ON the world it's describing. Heavy sans over the image,
-    /// no scrim, no box — the claim and the evidence in the same rectangle.
+    // ── Superimposed: the machine's words laid ON one image (no scrim, no box). ──
+    /// Words over the PHOTOGRAPH — the claim on the reality it describes.
     case superimposed
-    /// The book's other move: a black panel beside the photograph, white text, text LEFT.
-    /// The claim and the evidence side by side, arguing.
-    case diptychTextLeft
-    /// Same, text RIGHT.
-    case diptychTextRight
-    /// All three frames stitched into one plate, top to bottom: reality → perception →
-    /// re-imagining. Normalized to the drawing's resolution (the lowest of the three), so the
-    /// whole file scales with the drawing-size control. Needs the third frame — degrades to two
-    /// panels (photo + words) without it.
-    case triptychVertical
-    /// The same three, left to right — the museum-wall triptych.
-    case triptychHorizontal
-    /// **Just the words.** No photograph at all.
-    ///
-    /// This is Mark's original idea, and it is not a degraded triptych — it's a quieter
-    /// camera. *"Me initially, I just wanted the words. I kind of saw it as AI writing
-    /// poetry inspired by what it sees."* The photograph was taken; you simply don't keep
-    /// it. What survives is what the machine said about a moment nobody else can check.
+    /// Words over the DRAWING — the claim on the machine's own re-imagining (2026-07-27). A new
+    /// artifact: the same words, over reality vs over the reinvention, is the gap in one frame.
+    case superimposedOnDrawing
+
+    // ── Single: one panel. ──
+    /// **Just the words.** Mark's original idea — *"initially, I just wanted the words."* The
+    /// photograph was taken; you keep only what the machine said about a moment nobody can check.
     case textOnly
-    /// Separate assets — the photograph, the words, (and the drawing) as distinct files, at
-    /// their **own natural ratios**. Reality and perception as separate artifacts; the viewer
-    /// does the juxtaposition. (`rawValue "separate"` preserved so old saved settings still load.)
+    /// Just the drawing — the machine's re-imagining, standing alone (2026-07-27).
+    case singleDrawing
+    /// Just the photograph — reality, framed, no words (2026-07-27).
+    case singlePhoto
+
+    // ── Diptych: two panels, side by side. ──
+    /// Photo + words, words LEFT.  /  words RIGHT. The claim beside the evidence, arguing.
+    case diptychTextLeft
+    case diptychTextRight
+    /// Photo + drawing, drawing LEFT.  /  drawing RIGHT (2026-07-27). Reality beside its
+    /// re-imagining, both squared to the hand's shape.
+    case diptychDrawingLeft
+    case diptychDrawingRight
+
+    // ── Triptych: all three frames in one plate. ──
+    case triptychVertical
+    case triptychHorizontal
+
+    // ── Separate files: each artifact its own image. ──
+    /// Distinct files at their **own natural ratios**. (`rawValue "separate"` preserved so old
+    /// saved settings still load.)
     case separateNative = "separate"
-    /// Separate assets, but all **matched to one ratio** — square, the drawer's shape (the hand
-    /// trumps the camera; see the ratio rule below). Equal separate files you can pair or post
-    /// individually. The photograph is centre-cropped to the square you framed.
+    /// Distinct files all **matched to the drawer's square** so they pair. Photo centre-cropped.
     case separateSquare
 
-    var name: String {
+    /// Which family this layout belongs to (drives the grouped picker).
+    var category: LayoutCategory {
         switch self {
-        case .superimposed:       return "Capture — superimposed"
-        case .diptychTextLeft:    return "Diptych — text left"
-        case .diptychTextRight:   return "Diptych — text right"
-        case .triptychVertical:   return "Triptych — vertical"
-        case .triptychHorizontal: return "Triptych — horizontal"
-        case .textOnly:           return "Words only"
-        case .separateNative:     return "Separate — native"
-        case .separateSquare:     return "Separate — square"
+        case .superimposed, .superimposedOnDrawing:                       return .superimposed
+        case .textOnly, .singleDrawing, .singlePhoto:                     return .single
+        case .diptychTextLeft, .diptychTextRight,
+             .diptychDrawingLeft, .diptychDrawingRight:                   return .diptych
+        case .triptychVertical, .triptychHorizontal:                      return .triptych
+        case .separateNative, .separateSquare:                            return .separate
         }
+    }
+
+    /// Short label shown INSIDE a category section in the picker (the category header carries the
+    /// rest of the context, so these stay terse — Mark's readability ask, 2026-07-27).
+    var shortName: String {
+        switch self {
+        case .superimposed:          return "On the photo"
+        case .superimposedOnDrawing: return "On the drawing"
+        case .textOnly:              return "Words only"
+        case .singleDrawing:         return "Drawing only"
+        case .singlePhoto:           return "Photo only"
+        case .diptychTextLeft:       return "Words · photo"
+        case .diptychTextRight:      return "Photo · words"
+        case .diptychDrawingLeft:    return "Drawing · photo"
+        case .diptychDrawingRight:   return "Photo · drawing"
+        case .triptychVertical:      return "Vertical"
+        case .triptychHorizontal:    return "Horizontal"
+        case .separateNative:        return "Native ratios"
+        case .separateSquare:        return "Square"
+        }
+    }
+
+    /// Full name — for the picker's current-selection label and accessibility.
+    var name: String {
+        "\(category.title) · \(shortName)"
+    }
+
+    /// Whether this layout needs the eye's WORDS to exist. If the eye is off (silent loop), every
+    /// word-bearing layout is unavailable.
+    var needsEye: Bool {
+        switch self {
+        case .singleDrawing, .singlePhoto, .diptychDrawingLeft, .diptychDrawingRight: return false
+        default:                                                                       return true
+        }
+    }
+
+    /// Whether this layout needs the DRAWING to exist. If the hand is off, every drawing-bearing
+    /// layout is unavailable — which is what retires the "triptych stuck on when the hand's off" bug.
+    var needsHand: Bool {
+        switch self {
+        case .superimposedOnDrawing, .singleDrawing,
+             .diptychDrawingLeft, .diptychDrawingRight,
+             .triptychVertical, .triptychHorizontal: return true
+        default:                                     return false
+        }
+    }
+
+    /// Can this layout actually be PRODUCED given what's switched on? The one rule the picker filters
+    /// by, so no selectable layout ever conflicts with the eye/hand toggles (Mark, 2026-07-27).
+    func isAvailable(hasEye: Bool, hasHand: Bool) -> Bool {
+        (!needsEye || hasEye) && (!needsHand || hasHand)
+    }
+
+    /// A sensible layout to fall back to when the selected one becomes unavailable (a toggle flipped).
+    /// Prefers the richest thing the current state can make; `singlePhoto` always qualifies.
+    static func fallback(hasEye: Bool, hasHand: Bool) -> Layout {
+        let order: [Layout] = [.superimposed, .triptychVertical, .diptychTextLeft,
+                               .superimposedOnDrawing, .diptychDrawingLeft, .singleDrawing,
+                               .textOnly, .singlePhoto]
+        return order.first { $0.isAvailable(hasEye: hasEye, hasHand: hasHand) } ?? .singlePhoto
     }
 
     var isDiptych: Bool { self == .diptychTextLeft || self == .diptychTextRight }
     var isTriptych: Bool { self == .triptychVertical || self == .triptychHorizontal }
 
-    /// The layouts that shoot **square** — the ones where the hand (the square drawer) trumps the
-    /// camera because its output must match the others in one composition (Triptych) or as equal
-    /// separate files (Separate — square). This is the trigger for the square viewfinder guide
-    /// AND for centre-cropping the photograph. Mark's rule (2026-07-16): elements that must match
-    /// take the hand's ratio when the hand is in play, the camera's otherwise.
-    var isSquareFormat: Bool { isTriptych || self == .separateSquare }
+    /// The layouts that shoot **square** — where the hand (the square drawer) trumps the camera
+    /// because its output must match the others in one composition (Triptych, photo+drawing Diptych)
+    /// or as equal separate files (Separate — square). Triggers the square viewfinder guide AND the
+    /// photo centre-crop. Mark's rule (2026-07-16): things that must match take the hand's ratio.
+    var isSquareFormat: Bool {
+        isTriptych || self == .separateSquare
+            || self == .diptychDrawingLeft || self == .diptychDrawingRight
+    }
 }
 
 enum Darkroom {
@@ -107,45 +189,72 @@ enum Darkroom {
                         place: String?,
                         layout: Layout = .superimposed,
                         date: Date = Date()) -> [UIImage] {
-        // For every non-triptych layout the drawing rides along as its own framed asset (bars +
-        // footer — `frameDrawing`). The triptych consumes it INTO one composite instead.
-        func withDrawing(_ frames: [UIImage]) -> [UIImage] {
-            guard let drawing else { return frames }
-            return frames + [frameDrawing(drawing, place: place, date: date)]
-        }
+        // In the content-driven taxonomy (2026-07-27) each layout produces EXACTLY its named panels.
+        // The old "the drawing always rides along as an extra file" behavior is gone — except for the
+        // Separate layouts, whose whole point is one file per artifact. A layout is only ever chosen
+        // when its content exists (the picker filters by the eye/hand toggles), so the `drawing`
+        // guards below are defensive fallbacks, not the normal path.
+        let photoSize = CGSize(width: photograph.width, height: photograph.height)
 
         switch layout {
         case .triptychVertical, .triptychHorizontal:
             return [triptych(photograph: photograph, words: words, drawing: drawing,
                              axis: layout == .triptychVertical ? .vertical : .horizontal,
                              place: place, date: date)]
+
+        // ── Single: one panel. ──
         case .textOnly:
-            return withDrawing([card(words: words,
-                                     size: CGSize(width: photograph.width, height: photograph.height),
-                                     place: place, date: date)])
+            return [card(words: words, size: photoSize, place: place, date: date)]
+        case .singlePhoto:
+            return [compose(photograph: photograph, words: nil, place: place,
+                            layout: .superimposed, date: date)]
+        case .singleDrawing:
+            guard let drawing else { return [] }
+            return [frameDrawing(drawing, place: place, date: date)]
+
+        // ── Superimposed: words on one image. ──
+        case .superimposed:
+            return [compose(photograph: photograph, words: words, place: place,
+                            layout: .superimposed, date: date)]
+        case .superimposedOnDrawing:
+            guard let drawing else {
+                return [compose(photograph: photograph, words: words, place: place,
+                                layout: .superimposed, date: date)]
+            }
+            return [compose(photograph: drawing, words: words, place: place,
+                            layout: .superimposed, date: date)]
+
+        // ── Diptych: two panels. ──
+        case .diptychTextLeft, .diptychTextRight:
+            return [compose(photograph: photograph, words: words, place: place,
+                            layout: layout, date: date)]
+        case .diptychDrawingLeft, .diptychDrawingRight:
+            guard let drawing else {
+                return [compose(photograph: photograph, words: words, place: place,
+                                layout: .superimposed, date: date)]
+            }
+            return [photoDrawingDiptych(photograph: photograph, drawing: drawing,
+                                        drawingFirst: layout == .diptychDrawingLeft,
+                                        place: place, date: date)]
+
+        // ── Separate files: each artifact its own file (the ride-along survives ONLY here). ──
         case .separateNative:
-            return withDrawing([
-                compose(photograph: photograph, words: nil, place: place,
-                        layout: .superimposed, date: date),
-                card(words: words, size: CGSize(width: photograph.width, height: photograph.height),
-                     place: place, date: date)
-            ])
+            var out = [compose(photograph: photograph, words: nil, place: place,
+                               layout: .superimposed, date: date),
+                       card(words: words, size: photoSize, place: place, date: date)]
+            if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
+            return out
         case .separateSquare:
-            // Every asset square (the hand's ratio), as separate files. The photo is centre-
-            // cropped to the square you framed; the words card is square; the drawing is already
-            // square. Same ratio, so they pair — kept at their own resolutions (separate files
-            // need not be the same pixel size, only the same shape).
+            // Every asset square (the hand's ratio). Photo centre-cropped to the square you framed;
+            // the words card is square; the drawing is already square. Same shape, so they pair —
+            // kept at their own resolutions (separate files need only share a ratio, not a size).
             let square = centerCropSquare(photograph)
             let side = square.width
-            return withDrawing([
-                compose(photograph: square, words: nil, place: place,
-                        layout: .superimposed, date: date),
-                card(words: words, size: CGSize(width: side, height: side),
-                     place: place, date: date)
-            ])
-        default:
-            return withDrawing([compose(photograph: photograph, words: words, place: place,
-                                        layout: layout, date: date)])
+            var out = [compose(photograph: square, words: nil, place: place,
+                               layout: .superimposed, date: date),
+                       card(words: words, size: CGSize(width: side, height: side), place: place, date: date)]
+            if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
+            return out
         }
     }
 
@@ -277,6 +386,37 @@ enum Darkroom {
         }
     }
 
+    /// Photo + drawing side by side — two EQUAL squares (the hand's ratio), one letterbox footer
+    /// underneath (2026-07-27). Reality beside its re-imagining, no words. `drawingFirst` puts the
+    /// drawing on the left. Mirrors the triptych's horizontal grammar, for two panels.
+    private static func photoDrawingDiptych(photograph: CGImage, drawing: CGImage,
+                                            drawingFirst: Bool, place: String?, date: Date) -> UIImage {
+        let photo = UIImage(cgImage: centerCropSquare(photograph))
+        let draw = UIImage(cgImage: drawing)
+        let unit = draw.size.width            // the drawing is square; both panels are this square
+        let gutter = (unit * 0.03).rounded()
+        let footerBar = (unit * 0.11).rounded()
+        let margin = unit * 0.045
+        let footerSize = unit * 0.03
+
+        let left = drawingFirst ? draw : photo
+        let right = drawingFirst ? photo : draw
+
+        let canvas = CGSize(width: margin + unit * 2 + gutter + margin,
+                            height: gutter + unit + footerBar)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: canvas, format: format).image { ctx in
+            UIColor.black.setFill()
+            ctx.cgContext.fill(CGRect(origin: .zero, size: canvas))
+            left.draw(in: CGRect(x: margin, y: gutter, width: unit, height: unit))
+            right.draw(in: CGRect(x: margin + unit + gutter, y: gutter, width: unit, height: unit))
+            drawFooter(place: place, date: date, in: ctx.cgContext, canvas: canvas,
+                       bar: footerBar, margin: margin, size: footerSize)
+        }
+    }
+
     /// A frame containing a photograph. `words == nil` leaves it bare (the `.separate`
     /// case, where the words get their own card).
     private static func compose(photograph: CGImage,
@@ -312,19 +452,6 @@ enum Darkroom {
             let footerSize = w * 0.026
 
             switch layout {
-            // Triptych never reaches `compose` — `develop` routes it to `triptych()` — but the
-            // switch must be exhaustive, and treating it as a full-frame plate is the safe
-            // fallback if that routing ever changed.
-            case .superimposed, .textOnly, .separateNative, .separateSquare,
-                 .triptychVertical, .triptychHorizontal:
-                image.draw(in: CGRect(x: 0, y: bar, width: w, height: h))
-                if let words {
-                    drawWords(words, in: CGRect(x: margin, y: bar + margin,
-                                                width: w - margin * 2,
-                                                height: h * 0.62),
-                              size: w * 0.115, shadowed: true)
-                }
-
             case .diptychTextLeft, .diptychTextRight:
                 let textFirst = (layout == .diptychTextLeft)
                 let imageX = textFirst ? w : 0
@@ -336,6 +463,18 @@ enum Darkroom {
                                                   width: w - margin * 2,
                                                   height: h - margin * 2),
                           size: w * 0.095, shadowed: false)
+
+            default:
+                // Full-frame image + optional words over it. `develop` only ever hands `compose` a
+                // superimposed or single-image layout (words-over-photo, words-over-drawing,
+                // photo-only, drawing-only, the separate-file panels); everything lands here.
+                image.draw(in: CGRect(x: 0, y: bar, width: w, height: h))
+                if let words {
+                    drawWords(words, in: CGRect(x: margin, y: bar + margin,
+                                                width: w - margin * 2,
+                                                height: h * 0.62),
+                              size: w * 0.115, shadowed: true)
+                }
             }
 
             drawFooter(place: place, date: date, in: cg, canvas: canvas,

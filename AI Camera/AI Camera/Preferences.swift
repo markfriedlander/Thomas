@@ -423,6 +423,13 @@ struct PreferencesView: View {
             }
             .navigationTitle("Preferences")
             .navigationBarTitleDisplayMode(.inline)
+            // Keep the selected layout producible: if turning the eye or hand off (or switching to an
+            // un-downloaded hand) makes the current layout impossible, snap to the richest available
+            // one. This is the content-aware half of the layout rebuild (2026-07-27) — it's why the
+            // picker never shows a greyed-out layout you can't make (retires bug #22).
+            .onChange(of: settings.useEye) { _, _ in snapLayoutIfNeeded() }
+            .onChange(of: settings.drawsThirdFrame) { _, _ in snapLayoutIfNeeded() }
+            .onChange(of: settings.selectedDrawer) { _, _ in snapLayoutIfNeeded() }
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -919,15 +926,51 @@ struct PreferencesView: View {
         }
     }
 
+    /// What the current eye/hand switches can produce — the two facts the layout list filters by.
+    /// `hasEye` = the eye is on (words exist); `hasHand` = the third frame is on AND a drawer is
+    /// installed (a drawing exists). See `Layout.isAvailable`.
+    private var layoutHasEye: Bool { settings.useEye }
+    private var layoutHasHand: Bool {
+        settings.drawsThirdFrame && DrawerLoader.isAvailable(settings.selectedDrawer)
+    }
+
+    /// If the selected layout can no longer be produced (a toggle flipped), snap to the richest
+    /// available one. This is what retires the "triptych stuck on when the hand's off" bug — you can
+    /// never be left holding a layout the current state can't make. Called from the toggles' onChange.
+    private func snapLayoutIfNeeded() {
+        if !settings.layout.isAvailable(hasEye: layoutHasEye, hasHand: layoutHasHand) {
+            settings.layout = Layout.fallback(hasEye: layoutHasEye, hasHand: layoutHasHand)
+        }
+    }
+
     private var layoutSection: some View {
         Section {
-            // A dropdown, not the old inline list (Mark: it was "growing and taking lots of
-            // screen space"). It's a Menu of Buttons rather than a Picker because the triptych
-            // needs three states a Picker can't give a single row: hidden when there's no drawer
-            // model, greyed when the model's here but the third frame is off (a hint — flip the
-            // switch), live when drawing is on. See `layoutVisibility`.
+            // Grouped by family, and — the point of the rebuild (Mark, 2026-07-27) — each family
+            // shows ONLY the variants the current eye/hand switches can actually produce, so no
+            // selectable layout ever conflicts with the toggles. Short names inside the sections
+            // (the header carries the family) so the menu reads cleanly instead of wrapping.
             Menu {
-                ForEach(Layout.allCases, id: \.self) { layoutMenuItem($0) }
+                ForEach(LayoutCategory.allCases, id: \.self) { category in
+                    let items = Layout.allCases.filter {
+                        $0.category == category
+                            && $0.isAvailable(hasEye: layoutHasEye, hasHand: layoutHasHand)
+                    }
+                    if !items.isEmpty {
+                        Section(category.title) {
+                            ForEach(items, id: \.self) { layout in
+                                Button {
+                                    settings.layout = layout
+                                } label: {
+                                    if settings.layout == layout {
+                                        Label(layout.shortName, systemImage: "checkmark")
+                                    } else {
+                                        Text(layout.shortName)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } label: {
                 HStack {
                     Text("Layout")
@@ -941,44 +984,7 @@ struct PreferencesView: View {
         } header: {
             Text("Layout")
         } footer: {
-            Text("Capture — superimposed puts the words on the world they describe. A diptych sets them beside it, white on black. A triptych stitches all three frames — photograph, words, drawing — into one plate, top to bottom or left to right, all squared to match. Words only keeps what the machine said and discards the photograph. Separate — native saves each frame as its own picture at its own shape; Separate — square matches them all to the drawing's square so they pair. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
-        }
-    }
-
-    private enum LayoutVisibility { case hidden, greyed, live }
-
-    /// The triptych's three states (Mark, 2026-07-16): not there when it's irrelevant (no drawer
-    /// model), greyed to hint at the possibility when the model's downloaded but the third frame
-    /// switch is off, and live when drawing is on. Every non-triptych layout is always live.
-    private func layoutVisibility(_ layout: Layout) -> LayoutVisibility {
-        guard layout.isTriptych else { return .live }
-        if !DrawerLoader.isAvailable(settings.selectedDrawer) { return .hidden }
-        return settings.drawsThirdFrame ? .live : .greyed
-    }
-
-    @ViewBuilder
-    private func layoutMenuItem(_ layout: Layout) -> some View {
-        switch layoutVisibility(layout) {
-        case .hidden:
-            EmptyView()
-        case .greyed:
-            // Visible but disabled — the hint. Still checked if it's the current selection.
-            Button {} label: {
-                if settings.layout == layout {
-                    Label(layout.name, systemImage: "checkmark")
-                } else {
-                    Text(layout.name)
-                }
-            }
-            .disabled(true)
-        case .live:
-            Button { settings.layout = layout } label: {
-                if settings.layout == layout {
-                    Label(layout.name, systemImage: "checkmark")
-                } else {
-                    Text(layout.name)
-                }
-            }
+            Text("Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo — or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych stitches all three frames into one plate. Separate saves each as its own file. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
         }
     }
 }

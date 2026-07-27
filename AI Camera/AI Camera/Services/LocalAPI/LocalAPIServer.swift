@@ -783,25 +783,29 @@ extension LocalAPIServer {
             if let m = methodOverride { c.upscaler = m }
             return c
         }
-        struct ShotOut: Sendable { let words: String; let wordsToHand: String; let outcome: String; let drawn: CGImage? }
+        struct ShotOut: Sendable { let words: String; let wordsToHand: String; let outcome: String; let drawn: CGImage?; let framePNGs: [Data] }
         let out = await ModelLane.shared.run("shoot") { () -> ShotOut in
             let (perception, drawnImage, wordsForHand) = await Shot.seeThenDraw(photograph, config: config)
             let fullWords = perception.wireText
             // Build the composited frames, so this holds the same memory a real shot holds
-            // while everything is still warm — reality's receipt, the words over the world.
-            let frames = await MainActor.run {
+            // while everything is still warm — reality's receipt, the words over the world. Also
+            // encode them to PNG so the antenna can RETURN the actual composited layout, not just
+            // the raw drawing — the only way to eyeball a layout's composition from a host (the
+            // finished frames land in Photos, which the antenna can't see). PNG bytes are Sendable.
+            let framePNGs = await MainActor.run { () -> [Data] in
                 let frameTwo = Settings.shared.frameTwoShows == .fullPerception ? fullWords : wordsForHand
-                return Darkroom.develop(photograph: photograph,
-                                        words: frameTwo,
-                                        drawing: drawnImage?.cgImage,   // measure the composite too
-                                        place: nil,   // footer text; not memory-relevant
-                                        layout: Settings.shared.layout)
+                let frames = Darkroom.develop(photograph: photograph,
+                                              words: frameTwo,
+                                              drawing: drawnImage?.cgImage,
+                                              place: nil,   // footer text; not memory-relevant
+                                              layout: Settings.shared.layout)
+                return frames.compactMap { $0.pngData() }
             }
-            _ = frames.count  // held to end of scope on purpose; this is the memory under test
             return ShotOut(words: fullWords,
                            wordsToHand: wordsForHand,
                            outcome: perception.wireName,
-                           drawn: drawnImage?.cgImage)
+                           drawn: drawnImage?.cgImage,
+                           framePNGs: framePNGs)
         }
 
         let seconds = Date().timeIntervalSince(started)
@@ -828,6 +832,10 @@ extension LocalAPIServer {
             payload["pngBytes"] = png.count
             payload["pngBase64"] = png.base64EncodedString()
         }
+        // The COMPOSITED layout frame(s) — what actually lands in Photos. One for most layouts, more
+        // for Separate. This is how a layout's composition gets eyeballed from a host.
+        payload["frameCount"] = out.framePNGs.count
+        payload["framesBase64"] = out.framePNGs.map { $0.base64EncodedString() }
         return (200, json(payload))
     }
 
