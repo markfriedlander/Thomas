@@ -148,7 +148,8 @@ struct DarkRoomView: View {
         let ids = offsets.map { records[$0].id }
         records.remove(atOffsets: offsets)                 // optimistic — the store follows
         Task {
-            for id in ids { await DarkRoomStore.shared.remove(id: id) }
+            // Through the worker, so its counts (which drive the capture-screen pill) stay in sync.
+            await DarkRoomWorker.shared.remove(ids: ids)
             await reload()
         }
     }
@@ -161,7 +162,8 @@ struct DarkRoomView: View {
 
     private func purgeAll() {
         records = []
-        Task { await DarkRoomStore.shared.removeAll(); await reload() }
+        // Through the worker, so the "Developing N" pill can't survive an emptied queue.
+        Task { await DarkRoomWorker.shared.purgeAll(); await reload() }
     }
 
     private func load(_ item: PhotosPickerItem?) {

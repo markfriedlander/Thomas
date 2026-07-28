@@ -464,6 +464,22 @@ final class DarkRoomWorker {
     /// Resume after a user pause, and immediately look for work.
     func resume() { isPaused = false; kick() }
 
+    /// Purge the whole queue (the Dark Room's "Purge All"). Routed THROUGH the worker on purpose:
+    /// the worker's counts drive the capture-screen status pill, so a purge that deleted straight from
+    /// the store left a stale "Developing N" pill behind (Mark, 2026-07-28). Mutating the store only
+    /// via the worker, then reconciling, makes that divergence unreachable (Principle 7).
+    func purgeAll() async {
+        await DarkRoomStore.shared.removeAll()
+        refreshCounts()
+    }
+
+    /// Remove specific shots (the Dark Room's swipe-to-delete), then reconcile the counts — same
+    /// reason as `purgeAll`: never mutate the queue behind the counts' back.
+    func remove(ids: [UUID]) async {
+        for id in ids { await DarkRoomStore.shared.remove(id: id) }
+        refreshCounts()
+    }
+
     /// Prepare for the app going to the background: stop pulling new shots and wait for the shot in
     /// flight to reach a safe stop — its current operation finishes (inside iOS's grace window),
     /// then it abandons WITHOUT saving anything partial, leaving its durable record untouched. Only

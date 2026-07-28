@@ -545,9 +545,12 @@ extension LocalAPIServer {
             await MainActor.run { DarkRoomWorker.shared.kick() }
             return (200, json(["action": "kick", "ok": true]))
         case "purge":
-            let pending = await DarkRoomStore.shared.pending()
-            for r in pending { await DarkRoomStore.shared.remove(r) }
-            return (200, json(["action": "purge", "ok": true, "removed": pending.count]))
+            // Through the worker (same path the Dark Room's Purge All now takes), so the counts that
+            // drive the capture-screen pill reconcile — deleting straight from the store here left a
+            // stale "Developing N" pill, the same bug the UI had (Mark, 2026-07-28).
+            let removed = await DarkRoomStore.shared.pending().count
+            await DarkRoomWorker.shared.purgeAll()
+            return (200, json(["action": "purge", "ok": true, "removed": removed]))
         default:
             return (200, json(["ok": false, "error": "Unknown action. Use X-Action: kick | purge."]))
         }
