@@ -406,6 +406,16 @@ struct PreferencesView: View {
                 #endif
             }
             .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
+            #if DEBUG
+            // Human-parity for the antenna's model-library verb: push the SAME `ModelLibraryView` the
+            // "Browse Model Library" row pushes, onto Preferences' own nav stack — not a parallel
+            // presenter. Driven by the bridge flag the antenna sets, and cleared when the library is
+            // popped. DEBUG-only (the bridge exists only in DEBUG). See `AntennaUIBridge.tapModelLibrary`.
+            .navigationDestination(isPresented: Binding(
+                get: { AntennaUIBridge.shared.tapModelLibrary },
+                set: { AntennaUIBridge.shared.tapModelLibrary = $0 }
+            )) { ModelLibraryView() }
+            #endif
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
             //
             // It used to hang off the Section, and that is why it "hid itself as soon as you

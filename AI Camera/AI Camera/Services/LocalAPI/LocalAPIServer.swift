@@ -326,6 +326,7 @@ extension LocalAPIServer {
         case ("POST", "/zoom"):            return await handleZoom(req)
         case ("POST", "/flip"):            return await handleFlip(req)
         case ("POST", "/license"):         return await handleLicense(req)
+        case ("POST", "/open"):            return await handleOpen(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
@@ -782,6 +783,36 @@ extension LocalAPIServer {
             AntennaUIBridge.shared.licenseModel = model
             return (200, json(["repo": repoID, "action": "show", "presented": true,
                                "message": "Presenting \(model.displayName)'s license sheet on the capture screen. Screenshot it, then POST /license with X-Action: accept."]))
+        }
+    }
+
+    /// POST /open — open one of the app's interior screens the way a human's finger does, then screenshot
+    /// it with `devicectl`. This sets a request on `AntennaUIBridge`; the view that OWNS the real control
+    /// (the Preferences gear, the dark-room pill, the "Browse Model Library" row) mirrors it into its own
+    /// state, so what opens is exactly what a tap opens — never a parallel presenter (Mark, 2026-07-28:
+    /// "why aren't there verbs to tap what a human would?"). Replaces the old `openScreen`, which shoved
+    /// each view onstage as its own sheet — a false path no human ever produced (Model Library, especially,
+    /// lives INSIDE Preferences, never as a lone sheet over the viewfinder).
+    ///
+    ///   X-Screen: preferences | darkroom | modellibrary
+    private func handleOpen(_ req: ParsedRequest) async -> (Int, String) {
+        let screen = (req.headers["x-screen"] ?? "").lowercased()
+        let bridge = AntennaUIBridge.shared
+        switch screen {
+        case "preferences", "prefs":
+            bridge.tapPreferences = true
+            return (200, json(["screen": "preferences", "opened": true,
+                               "message": "Opened Preferences the way the gear button does. Screenshot with devicectl."]))
+        case "darkroom", "dark-room", "dark":
+            bridge.tapDarkRoom = true
+            return (200, json(["screen": "darkroom", "opened": true,
+                               "message": "Opened the Dark Room the way the status pill does. Screenshot with devicectl."]))
+        case "modellibrary", "model-library", "library":
+            bridge.tapModelLibrary = true
+            return (200, json(["screen": "modellibrary", "opened": true,
+                               "message": "Opened Preferences and pushed the Model Library, the way tapping Browse Model Library does. Screenshot with devicectl."]))
+        default:
+            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary"}"#)
         }
     }
 

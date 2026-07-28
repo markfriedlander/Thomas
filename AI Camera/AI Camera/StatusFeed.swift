@@ -169,6 +169,11 @@ struct StatusFeedView: View {
     @State private var network = PrivacyMonitor.shared
     @State private var showingPrivacy = false
     @State private var showingDarkRoom = false
+    #if DEBUG
+    /// The antenna's UI bridge — so `POST /open darkroom` opens the Dark Room through the pill's own
+    /// `showingDarkRoom`, exactly as tapping the pill does (no parallel presenter). DEBUG-only.
+    @State private var antennaBridge = AntennaUIBridge.shared
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -190,6 +195,12 @@ struct StatusFeedView: View {
         .onChange(of: network.isLocationAuthorized) { _, _ in refreshPrivacy() }
         .onDisappear { feed.clear(.privacy) }
         .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
+        #if DEBUG
+        // Human-parity: the antenna's dark-room verb opens the Dark Room through the pill's own state.
+        .onChange(of: antennaBridge.tapDarkRoom) { _, want in
+            if want { showingDarkRoom = true; antennaBridge.tapDarkRoom = false }
+        }
+        #endif
     }
 
     /// The current two-axis privacy state, derived purely from live app state. Computed in one place

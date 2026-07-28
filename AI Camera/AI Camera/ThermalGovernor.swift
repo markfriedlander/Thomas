@@ -50,9 +50,12 @@ actor ThermalGovernor {
         return ProcessInfo.processInfo.thermalState
     }
 
+    #if DEBUG
     /// The state the governor is actually acting on (respects DEBUG injection). For the
-    /// antenna's `GET /thermal`, so a test can confirm the injected state took.
+    /// antenna's `GET /thermal`, so a test can confirm the injected state took. DEBUG-only:
+    /// read only by that route; the governor uses `currentState()` internally in every build.
     func snapshot() -> ProcessInfo.ThermalState { currentState() }
+    #endif
 
     // MARK: - Pacing policy (⚠️ STARTING VALUE — device-tune from the logs)
 

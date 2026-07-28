@@ -98,6 +98,11 @@ final class Lens: NSObject {
         return device.minAvailableVideoZoomFactor...min(device.maxAvailableVideoZoomFactor, 12)
     }
 
+    // DEBUG-only diagnostics. Every member below is read ONLY by the DEBUG antenna's diagnostic
+    // routes (rawZoomBounds/diagnostics/interfaceOrientationName by GET routes, `current` as the
+    // antenna's live handle); nothing in a shipping build calls any of them. Wrapped so no dead
+    // code ships (Mark, 2026-07-28: "we should not ship dead code — it isn't safe — wrap it").
+    #if DEBUG
     /// The RAW device zoom bounds, read without ever constructing `zoomRange` — because that
     /// `ClosedRange` traps the instant `minAvailableVideoZoomFactor` exceeds the 12× cap
     /// (`low...high` with low > high). This is the antenna's way to SEE those numbers, and
@@ -113,11 +118,9 @@ final class Lens: NSObject {
         ]
     }
 
-    #if DEBUG
     /// The lens currently on screen, so the antenna can interrogate it. DEBUG-only —
     /// this exists to serve a diagnostic route that doesn't ship.
     static weak var current: Lens?
-    #endif
 
     /// Live rotation state, exposed so the antenna can report it. Reading the real
     /// numbers beats reasoning about what they ought to be.
@@ -147,6 +150,7 @@ final class Lens: NSObject {
             }
         }
     }
+    #endif
 
     func start() async {
         isAuthorized = await Self.authorize()
@@ -269,10 +273,13 @@ final class Lens: NSObject {
         beginTrackingRotation()   // the new device faces the other way; its angles must be remade
     }
 
-    /// Which way it faces, as a plain bool, so callers (and the antenna) don't have to import
-    /// AVFoundation to ask. `setCamera(front:)` flips only if it isn't already there.
+    #if DEBUG
+    /// Which way it faces, as a plain bool, so the antenna doesn't have to import AVFoundation to ask.
+    /// `setCamera(front:)` flips only if it isn't already there. DEBUG-only: read/driven solely by the
+    /// antenna's `/flip` verb; a human uses `flip()` (the flip button), which stays in every build.
     var isFront: Bool { position == .front }
     func setCamera(front: Bool) { if isFront != front { flip() } }
+    #endif
 
     private func beginTrackingRotation() {
         guard let device else { return }

@@ -74,6 +74,11 @@ import SharedModelStoreKit
 /// default, which made them `@MainActor` and left `log()` unable to touch its own storage.
 /// That is six warnings, and this project treats warnings as errors. The `NSLock` is what
 /// actually makes this safe, which is what `@unchecked Sendable` is asserting.
+///
+/// DEBUG-ONLY (gated 2026-07-28): this ring exists solely so the DEBUG antenna's `GET /memory` can
+/// serve the reclamation curve — nothing in a shipping build ever reads it. Wrapped so the buffer and
+/// the `print` below cost nothing in Release (Mark: don't ship dead/dev code; no user sees those prints).
+#if DEBUG
 nonisolated final class MemoryLog: @unchecked Sendable {
     static let shared = MemoryLog()
 
@@ -109,12 +114,22 @@ nonisolated final class MemoryLog: @unchecked Sendable {
         lock.unlock()
     }
 }
+#endif
 
-/// AI Camera's `halLog`. Same job, same reason: `print` alone vanishes when the app runs
-/// off a device install rather than from Xcode, which is Mark's actual workflow.
+/// AI Camera's `halLog`. In DEBUG it appends to `MemoryLog` (the antenna serves it, and `print`
+/// surfaces it on a device install — Mark's workflow); in Release it compiles to NOTHING — no ring,
+/// no `print`, no dead buffer — so the 100+ call sites are free in a shipping build (Mark, 2026-07-28:
+/// wrap the dev logging out; no one sees those prints).
+///
+/// `@autoclosure` is load-bearing, not decoration: without it the interpolated argument (e.g.
+/// `"DRAW: unload active=\(String(format:...))"`) is still BUILT at every call in Release before the
+/// empty body discards it, which both wastes the work and leaves the format literal in the shipped
+/// binary. As a closure the string is never evaluated when the body is compiled out, so nothing ships.
 @inline(__always)
-nonisolated func cameraLog(_ message: String) {
-    MemoryLog.shared.log(message)
+nonisolated func cameraLog(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    MemoryLog.shared.log(message())
+    #endif
 }
 
 // MARK: - Process memory introspection

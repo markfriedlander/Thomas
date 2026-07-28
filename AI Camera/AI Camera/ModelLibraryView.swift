@@ -713,9 +713,10 @@ struct ModelLicenseSheet: View {
 }
 
 #if DEBUG
-/// A tiny bridge the antenna uses to drive UI a human reaches by tapping. Set `licenseModel` and the
-/// capture screen presents that model's license sheet — the antenna's way through the Download →
-/// license → Accept flow (Mark, 2026-07-28: "if the antenna isn't doing what you need, add the verbs").
+/// A tiny bridge the antenna uses to drive UI a human reaches by tapping. It NEVER presents a parallel
+/// copy of a screen; each field is a request that the view OWNING the real control observes and mirrors
+/// into the SAME state a finger sets, so what the antenna opens is byte-for-byte what a tap opens (Mark,
+/// 2026-07-28: "why aren't there verbs to tap what a human would?"). Driven by `handleOpen` / `handleLicense`.
 ///
 /// DEBUG-ONLY (gated 2026-07-27): this is antenna plumbing (its own docs say so) and is set only by the
 /// DEBUG-only `LocalAPIServer`. It used to compile into Release along with its `CameraView` consumers,
@@ -727,12 +728,18 @@ struct ModelLicenseSheet: View {
     /// When non-nil, `CameraView` presents `ModelLicenseSheet` for this model. Cleared on accept/cancel.
     var licenseModel: CameraModel?
 
-    /// One of the app's own interior screens a human reaches by tapping. When non-nil, `CameraView`
-    /// presents it as a sheet, so a session can open Preferences / the Dark Room / the Model Library
-    /// without Mark's thumbs — e.g. to capture real device screenshots of each. `Identifiable` so it
-    /// drives a `.sheet(item:)`. DEBUG plumbing only (the antenna that sets it is DEBUG-only).
-    enum Screen: String, Identifiable { case preferences, darkRoom, modelLibrary; var id: String { rawValue } }
-    var openScreen: Screen?
+    // Tap-the-real-control requests (one-shot). The antenna sets one true; the view that owns that
+    // control flips its own real @State exactly as the gear, the pill, and the "Browse Model Library"
+    // row do — no parallel presenter — then the flag is cleared. See `POST /open`.
+
+    /// = tapping the Preferences gear. `CameraView` mirrors this into its real `showingPreferences`.
+    var tapPreferences = false
+    /// = tapping the dark-room pill. `StatusFeedView` mirrors this into its real `showingDarkRoom`.
+    var tapDarkRoom = false
+    /// = opening Preferences and pushing "Browse Model Library" (the library lives inside Preferences).
+    /// `CameraView` opens Preferences; `PreferencesView` pushes the library onto its own nav stack while
+    /// this stays true, and clears it when the library is popped.
+    var tapModelLibrary = false
 }
 #endif
 

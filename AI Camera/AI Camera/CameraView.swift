@@ -155,16 +155,17 @@ struct CameraView: View {
                 onCancel: { bridge.licenseModel = nil }
             )
         }
-        // Antenna-driven "open a screen", so a session can present Preferences / the Dark Room / the
-        // Model Library from the capture screen — for real device screenshots without Mark's thumbs.
-        // Each view is self-contained (its own NavigationStack), so presenting it as a sheet shows the
-        // same content a human sees. DEBUG-only path (the bridge is set only by the DEBUG antenna).
-        .sheet(item: $bridge.openScreen) { screen in
-            switch screen {
-            case .preferences:  PreferencesView()
-            case .darkRoom:     DarkRoomView()
-            case .modelLibrary: NavigationStack { ModelLibraryView() }
-            }
+        // Human-parity "open a screen": the antenna flips the SAME state a finger flips, never a
+        // parallel presenter. The gear = `showingPreferences`. The Model Library lives INSIDE
+        // Preferences, so that request opens Preferences and Preferences pushes the library itself
+        // (see its `navigationDestination`). The dark-room pill lives on the status panel, so that
+        // request is honored by `StatusFeedView`, not here.
+        .onChange(of: bridge.tapPreferences) { _, want in
+            if want { showingPreferences = true; bridge.tapPreferences = false }
+        }
+        .onChange(of: bridge.tapModelLibrary) { _, want in
+            // Open Preferences; leave the flag set so Preferences pushes the library and clears it.
+            if want { showingPreferences = true }
         }
 #endif
     }
