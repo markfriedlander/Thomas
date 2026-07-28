@@ -313,6 +313,8 @@ extension LocalAPIServer {
         case ("POST", "/release"):   return await handleRelease(req)
         case ("POST", "/draw"):      return await handleDraw(req)
         case ("POST", "/shoot"):     return await handleShoot(req)
+        case ("POST", "/develop"):   return await handleDevelop(req)
+        case ("GET",  "/developed"): return await handleDeveloped()
         case ("POST", "/press"):     return await handlePress(req)
         // ── The dark room queue: enqueue a real shot, inspect it, drive it. ──
         case ("POST", "/capture"):   return await handleCapture(req)
@@ -897,6 +899,70 @@ extension LocalAPIServer {
         payload["frameCount"] = out.framePNGs.count
         payload["framesBase64"] = out.framePNGs.map { $0.base64EncodedString() }
         return (200, json(payload))
+    }
+
+    /// POST /develop — feed a chosen photograph into the REAL dark room queue, exactly as the Dark
+    /// Room's "Load a picture to develop" door does (`DarkRoomWorker.enqueue`). Unlike `/shoot`
+    /// (which composes off to the side and hands the frames straight back), this runs the whole
+    /// shipping assembly line: freeze the config, durably enqueue, the worker sees + draws +
+    /// composites at the CURRENT layout setting, and SAVES to Photos. Returns instantly with the
+    /// queue depth; watch it finish with `GET /darkroom`, then look at exactly what landed in
+    /// Photos with `GET /developed`.
+    ///
+    /// This is the layout audit's faithful intake (Mark, 2026-07-28): set the layout with
+    /// `POST /settings`, feed a photo here, and the app itself picks and composites the layout the
+    /// way a real user's shot does — the one path where a real layout bug actually surfaces.
+    ///
+    ///   Body:          the photograph bytes (JPEG/PNG/HEIC). Required.
+    ///   X-Orientation: the CGImagePropertyOrientation raw value (optional; else read from the file).
+    private func handleDevelop(_ req: ParsedRequest) async -> (Int, String) {
+        guard let data = req.bodyData, !data.isEmpty,
+              let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let raw = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            return (400, #"{"error":"POST the photograph bytes"}"#)
+        }
+        let orientation: CGImagePropertyOrientation = {
+            if let s = req.headers["x-orientation"], let n = UInt32(s),
+               let o = CGImagePropertyOrientation(rawValue: n) { return o }
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+            let n = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
+            return CGImagePropertyOrientation(rawValue: n) ?? .up
+        }()
+        let photograph = raw.uprighted(orientation)
+
+        let before = await MainActor.run {
+            (depth: DarkRoomWorker.shared.developingCount, layout: Settings.shared.layout.name)
+        }
+        // The one intake path — same call the shutter and the library door use. Freezes the live
+        // config (including the current layout) and wakes the worker.
+        await DarkRoomWorker.shared.enqueue(photograph, place: nil)
+        let after = await MainActor.run { DarkRoomWorker.shared.developingCount }
+        return (200, json([
+            "enqueued":    true,
+            "layout":      before.layout,     // the layout the app will develop this shot at
+            "depthBefore": before.depth,
+            "depthAfter":  after,
+            "width":       photograph.width,
+            "height":      photograph.height
+        ]))
+    }
+
+    /// GET /developed — the exact composited frames of the most recently developed shot, captured at
+    /// the worker's save point (DEBUG only). This is precisely the `[UIImage]` array `Shot.save`
+    /// wrote to Photos, so it is the honest "look at what the user sees" for the layout audit, with
+    /// no Photos read access needed. Empty until at least one shot has developed since launch.
+    private func handleDeveloped() async -> (Int, String) {
+        let (frames, layout, id) = await MainActor.run { () -> ([Data], String?, String?) in
+            (DarkRoomWorker.shared.lastDevelopedFrames,
+             DarkRoomWorker.shared.lastDevelopedLayout,
+             DarkRoomWorker.shared.lastDevelopedID?.uuidString)
+        }
+        return (200, json([
+            "layout":       layout as Any,
+            "shotID":       id as Any,
+            "frameCount":   frames.count,
+            "framesBase64": frames.map { $0.base64EncodedString() }
+        ]))
     }
 
     /// POST /draw — frame 3, on demand. Words in, a picture out.

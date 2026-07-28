@@ -78,3 +78,7 @@ Test Materials/
 # Internal tooling — the LEGO validator + the antenna client (incl. its token config)
 scripts/
 tools/
+
+# Marketing screenshot drafts + Mark's source photos (personal, never commit)
+screenshots-draft/
+IMG_*.HEIC

@@ -359,6 +359,17 @@ final class DarkRoomWorker {
     /// message: it's a one-shot glyph animation, not a standing status.)
     private(set) var arrivals: Int = 0
 
+    #if DEBUG
+    /// DEBUG ONLY — the exact composited frames of the most recently developed shot, the PNG bytes of
+    /// the very `[UIImage]` array `Shot.save` wrote to Photos, captured at the save point below. It
+    /// exists so a test (via the antenna's `GET /developed`) can look at *precisely what a user sees*
+    /// after a shot travels the whole real assembly line, without needing Photos read access. Not
+    /// compiled into Release. Overwritten by each shot, so it holds at most one shot's frames.
+    private(set) var lastDevelopedFrames: [Data] = []
+    private(set) var lastDevelopedLayout: String? = nil
+    private(set) var lastDevelopedID: UUID? = nil
+    #endif
+
     /// True while the worker is holding a shot because the phone is too hot to develop. The worker
     /// is also the producer of the annunciator's "thermal" family: `didSet` mirrors it into the
     /// `StatusFeed` as the "Cooling down…" message, so the user understands the pause (nothing is
@@ -654,6 +665,13 @@ final class DarkRoomWorker {
             return false
         }
         await DarkRoomStore.shared.remove(shot)
+        #if DEBUG
+        // Capture exactly what just landed in Photos, so the layout audit can look at the real
+        // saved frames (antenna GET /developed) rather than a side-door recomposition.
+        lastDevelopedFrames = frames.compactMap { $0.pngData() }
+        lastDevelopedLayout = config.layout.name
+        lastDevelopedID = shot.id
+        #endif
         arrivals += 1
         currentShotID = nil; currentStage = nil
         return true
