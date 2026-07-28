@@ -712,14 +712,28 @@ struct ModelLicenseSheet: View {
     await MLXModelDownloader.shared.deleteModel(modelID: model.id)
 }
 
+#if DEBUG
 /// A tiny bridge the antenna uses to drive UI a human reaches by tapping. Set `licenseModel` and the
 /// capture screen presents that model's license sheet — the antenna's way through the Download →
 /// license → Accept flow (Mark, 2026-07-28: "if the antenna isn't doing what you need, add the verbs").
+///
+/// DEBUG-ONLY (gated 2026-07-27): this is antenna plumbing (its own docs say so) and is set only by the
+/// DEBUG-only `LocalAPIServer`. It used to compile into Release along with its `CameraView` consumers,
+/// which shipped antenna test scaffolding into the production binary. It is now `#if DEBUG` so it exists
+/// in no shipping build. Real users' license flow is independent (Model Library's `$modelForLicense`).
 @MainActor @Observable final class AntennaUIBridge {
     static let shared = AntennaUIBridge()
     private init() {}
     /// When non-nil, `CameraView` presents `ModelLicenseSheet` for this model. Cleared on accept/cancel.
     var licenseModel: CameraModel?
+
+    /// One of the app's own interior screens a human reaches by tapping. When non-nil, `CameraView`
+    /// presents it as a sheet, so a session can open Preferences / the Dark Room / the Model Library
+    /// without Mark's thumbs — e.g. to capture real device screenshots of each. `Identifiable` so it
+    /// drives a `.sheet(item:)`. DEBUG plumbing only (the antenna that sets it is DEBUG-only).
+    enum Screen: String, Identifiable { case preferences, darkRoom, modelLibrary; var id: String { rawValue } }
+    var openScreen: Screen?
 }
+#endif
 
 // ==== LEGO END: 25 ModelLibraryView (The Model Library) ====
