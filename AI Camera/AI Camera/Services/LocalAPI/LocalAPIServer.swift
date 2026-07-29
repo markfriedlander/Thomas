@@ -538,15 +538,31 @@ extension LocalAPIServer {
         ]))
     }
 
-    /// POST /darkroom — drive the queue for testing. `X-Action: kick` wakes the worker (resume a
-    /// held queue without a relaunch); `X-Action: purge` removes every pending shot (test hygiene —
-    /// clears the queue between runs; this is the eventual Phase-2 "purge", permanent deletion).
+    /// POST /darkroom — drive the queue the way the Dark Room's controls do (antenna human-parity,
+    /// Mark 2026-07-28: if the antenna can't do what a human can, add the verb). Each action calls the
+    /// SAME worker/store method the UI button calls — no parallel copy.
+    ///   X-Action: kick     — wake the worker (resume a held queue without a relaunch)
+    ///   X-Action: pause    — the Dark Room's Pause button (`worker.pause()`; drives the "Paused" pill/banner)
+    ///   X-Action: resume   — the Resume button (`worker.resume()`, which also kicks)
+    ///   X-Action: purge    — Purge All (permanent; reconciles the "Developing N" pill via the worker)
+    ///   X-Action: remove   — swipe-to-delete one or more; `X-Ids:` comma-separated shot UUIDs (from GET /darkroom)
+    ///   X-Action: reorder  — drag-to-reorder; `X-Order:` the shot UUIDs in the new order
     private func handleDarkroomAction(_ req: ParsedRequest) async -> (Int, String) {
         let action = req.headers["x-action"] ?? ""
+        func ids(from header: String) -> [UUID] {
+            (req.headers[header] ?? "").split(separator: ",")
+                .compactMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespaces)) }
+        }
         switch action {
         case "kick":
             await MainActor.run { DarkRoomWorker.shared.kick() }
             return (200, json(["action": "kick", "ok": true]))
+        case "pause":
+            await MainActor.run { DarkRoomWorker.shared.pause() }
+            return (200, json(["action": "pause", "ok": true, "isPaused": true]))
+        case "resume":
+            await MainActor.run { DarkRoomWorker.shared.resume() }
+            return (200, json(["action": "resume", "ok": true, "isPaused": false]))
         case "purge":
             // Through the worker (same path the Dark Room's Purge All now takes), so the counts that
             // drive the capture-screen pill reconcile — deleting straight from the store here left a
@@ -554,8 +570,24 @@ extension LocalAPIServer {
             let removed = await DarkRoomStore.shared.pending().count
             await DarkRoomWorker.shared.purgeAll()
             return (200, json(["action": "purge", "ok": true, "removed": removed]))
+        case "remove":
+            let targets = ids(from: "x-ids")
+            guard !targets.isEmpty else {
+                return (400, #"{"error":"X-Ids: comma-separated shot UUIDs (from GET /darkroom)"}"#)
+            }
+            // Same worker path swipe-to-delete takes, so the pill counts reconcile.
+            await DarkRoomWorker.shared.remove(ids: targets)
+            return (200, json(["action": "remove", "ok": true, "removed": targets.count]))
+        case "reorder":
+            let order = ids(from: "x-order")
+            guard !order.isEmpty else {
+                return (400, #"{"error":"X-Order: comma-separated shot UUIDs in the new order"}"#)
+            }
+            // Same store call the drag-to-reorder makes; the worker develops in `queueOrder`.
+            await DarkRoomStore.shared.reorder(order)
+            return (200, json(["action": "reorder", "ok": true, "count": order.count]))
         default:
-            return (200, json(["ok": false, "error": "Unknown action. Use X-Action: kick | purge."]))
+            return (200, json(["ok": false, "error": "Unknown action. Use X-Action: kick | pause | resume | purge | remove | reorder."]))
         }
     }
 
