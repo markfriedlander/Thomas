@@ -220,7 +220,18 @@ struct AI_CameraApp: App {
                 // claims if it hasn't been seen in that long, so we stamp a heartbeat on every
                 // foreground (cold launch + return). Off-main on purpose: it's a coordinated file
                 // write three apps may contend on, which has no business on the main thread.
-                Task.detached { SharedModelStore.touchHeartbeat() }
+                // While we're here (1.1.0), run the active dead-app cleanup: grace-stamp any
+                // pre-lease (heartbeat-less) claims so a long-deleted app's immortal claim can
+                // age out, then reap provably-dead claimants across all models and delete any
+                // now-unclaimed files. touchHeartbeat runs first so WE are never seen as stale.
+                // Every family app runs this, so a deleted sibling's models get reclaimed by
+                // whoever launches. Idempotent + cheap (a manifest scan; deletes only truly
+                // abandoned models), so running it per-foreground is fine.
+                Task.detached {
+                    SharedModelStore.touchHeartbeat()
+                    SharedModelStore.graceStampMissingHeartbeats()
+                    SharedModelStore.reapStaleClaims()
+                }
                 // ⭐ RESUME — the whole crash/background/call/thermal recovery story in one line.
                 // `.active` fires on cold launch AND on every return to the foreground, so any
                 // shot left undeveloped on disk (a crash mid-develop, a kill while backgrounded)
