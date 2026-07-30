@@ -41,6 +41,7 @@ struct ModelLibraryView: View {
     @State private var settings = Settings.shared
     @ObservedObject private var downloader = MLXModelDownloader.shared
     @State private var confirmingDelete: CameraModel?
+    @State private var showingClearFamilyAlert = false   // Clear all family models (last resort)
     /// The model whose license sheet is open. Set when the user taps Download; the actual
     /// download only starts once they accept — the studio's surface-the-license-before-you-
     /// -take-it pattern, ported from Hal/Posey (`ModelLicenseSheet` below).
@@ -82,6 +83,27 @@ struct ModelLibraryView: View {
 
             Section {
                 DiskRow()
+                // Last-resort family-wide clear, matching Hal's Maintenance screen.
+                // Distinct from the per-model Delete above (which gives up only this
+                // camera's claim): this removes EVERY shared model for the whole family
+                // at once and resets the manifest. Manifest-aware
+                // (SharedModelStore.clearEntireSharedStore) so it leaves no ghost entries.
+                Button {
+                    showingClearFamilyAlert = true
+                } label: {
+                    HStack(alignment: .top) {
+                        Image(systemName: "trash.fill")
+                            .foregroundColor(.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear all family models")
+                                .foregroundColor(.red)
+                            Text("Removes every shared model for Hal, Posey, and AI Camera at once. Each app re-downloads as needed. Last resort.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
             } footer: {
                 // The store is shared, so "delete" does not always mean "free space", and
                 // saying so up front is cheaper than a user wondering where their gigabytes
@@ -122,6 +144,16 @@ struct ModelLibraryView: View {
             if let model = confirmingDelete {
                 Text(deleteMessage(for: model))
             }
+        }
+        .alert("Clear all family models?", isPresented: $showingClearFamilyAlert) {
+            Button("Clear all family models", role: .destructive) {
+                let removed = SharedModelStore.clearEntireSharedStore()
+                refreshToken += 1
+                print("AICAMERA: cleared entire shared store: \(removed) repos removed")
+            }
+            Button("Cancel", role: .cancel) { showingClearFamilyAlert = false }
+        } message: {
+            Text("Removes every downloaded AI model shared across Hal, Posey, and AI Camera to reclaim all model storage at once. Each app re-downloads what it needs the next time you use it. Your photos and settings are not affected.")
         }
         // Surface the model's license before the download begins. Hangs off the stable List,
         // not a row (rows come and go with `refreshToken`, which would tear the sheet down).
