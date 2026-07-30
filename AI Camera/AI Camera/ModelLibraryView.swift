@@ -46,11 +46,9 @@ struct ModelLibraryView: View {
     /// download only starts once they accept — the studio's surface-the-license-before-you-
     /// -take-it pattern, ported from Hal/Posey (`ModelLicenseSheet` below).
     @State private var modelForLicense: CameraModel?
-    /// The app-level model-store signal. Reading `storeSignal.version` takes a dependency on it,
-    /// so these rows redraw whenever a model is downloaded, deleted, or cleared — from here OR any
-    /// other screen. Replaces a local `refreshToken` only this view could see, which is what let
-    /// Preferences show a stale "active" dot after a removal (2026-07-30). See `ModelStoreSignal`.
-    @State private var storeSignal = ModelStoreSignal.shared
+    /// Recomputed on download completion — `isInstalled` reads the disk, which SwiftUI
+    /// cannot observe. See `.onReceive` below.
+    @State private var refreshToken = 0
     /// How many queued shots still need each model (by model id), so the delete confirmation can
     /// warn that deleting will pause them. Loaded from the dark room store on appear and refreshed
     /// when a model lands.
@@ -71,7 +69,7 @@ struct ModelLibraryView: View {
                             onCancel:   { downloader.cancelDownload(modelID: model.id) },
                             onDelete:   { confirmingDelete = model }
                         )
-                        .id("\(model.id)-\(storeSignal.version)")
+                        .id("\(model.id)-\(refreshToken)")
                     }
                 } header: {
                     Label(job.title, systemImage: job == .seeing ? "eye" : "hand.draw")
@@ -122,11 +120,13 @@ struct ModelLibraryView: View {
         // Leaving the library is a natural moment to let the queue re-check: a model the user just
         // downloaded can unblock the shots that were waiting for it.
         .onDisappear { DarkRoomWorker.shared.kick() }
-        // A model landing is a filesystem change SwiftUI can't see. `ModelStoreSignal` catches the
-        // same notification and refreshes every screen (this row's `.id` reads its version), so here
-        // we keep only the library-specific follow-ups: unblock the queue that was waiting on it, and
-        // refresh the "shots still use this" counts behind the delete warning.
+        // The row's "installed" state is a question about the filesystem, and SwiftUI has no
+        // way to know the answer changed. The downloader posts when a model lands; that's
+        // the cue to look again.
         .onReceive(NotificationCenter.default.publisher(for: .mlxModelDidDownload)) { _ in
+            refreshToken += 1
+            // A model just landed — let the queue develop anything that was blocked waiting for it,
+            // and refresh the "shots still use this" counts behind the delete warning.
             DarkRoomWorker.shared.kick()
             Task { await loadQueuedUsage() }
         }
@@ -148,7 +148,7 @@ struct ModelLibraryView: View {
         .alert("Clear all family models?", isPresented: $showingClearFamilyAlert) {
             Button("Clear all family models", role: .destructive) {
                 let removed = SharedModelStore.clearEntireSharedStore()
-                ModelStoreSignal.shared.bump()
+                refreshToken += 1
                 print("AICAMERA: cleared entire shared store: \(removed) repos removed")
             }
             Button("Cancel", role: .cancel) { showingClearFamilyAlert = false }
@@ -248,7 +248,7 @@ struct ModelLibraryView: View {
         confirmingDelete = nil
         Task {
             await deleteModelEverywhere(model)
-            await MainActor.run { ModelStoreSignal.shared.bump() }
+            await MainActor.run { refreshToken += 1 }
         }
     }
 
