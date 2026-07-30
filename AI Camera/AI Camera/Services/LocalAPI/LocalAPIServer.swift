@@ -997,8 +997,11 @@ extension LocalAPIServer {
             (depth: DarkRoomWorker.shared.developingCount, layout: Settings.shared.layout.name)
         }
         // The one intake path — same call the shutter and the library door use. Freezes the live
-        // config (including the current layout) and wakes the worker.
-        await DarkRoomWorker.shared.enqueue(photograph, place: nil)
+        // config (including the current layout) and wakes the worker. Optional `X-Place` stamps a
+        // location on this fed-in shot (e.g. the original photo's own GPS, for a marketing frame);
+        // a human's library import has none, so it defaults to nil like the "Load a picture" door.
+        let placeStamp = req.headers["x-place"].flatMap { $0.isEmpty ? nil : $0 }
+        await DarkRoomWorker.shared.enqueue(photograph, place: placeStamp)
         let after = await MainActor.run { DarkRoomWorker.shared.developingCount }
         return (200, json([
             "enqueued":    true,
