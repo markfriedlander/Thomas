@@ -42,9 +42,49 @@
 //
 
 import Foundation
+import Observation
 import SharedModelStoreKit
 
 // ==== LEGO START: 24 Model Catalog (What The Camera Can Load) ====
+
+/// App-level "the shared model store changed" signal.
+///
+/// SwiftUI cannot observe the filesystem, and whether a model is on disk is a filesystem
+/// question (`CameraModel.isInstalled`, `DrawerLoader.isAvailable`, `Seer.isAvailable`). So every
+/// view that shows that state — the Model Library's rows, Preferences' Eye/Hand dots — needs a
+/// cue to look again. This is that cue, in ONE place: any download, delete, or clear bumps
+/// `version`, and every view that reads `version` re-derives.
+///
+/// ⭐ Why app-level and not a per-view `@State` (the bug this fixes, 2026-07-30). The library used
+/// to own a local `refreshToken`, so removing a model refreshed the library but left Preferences
+/// still showing a green "active" dot for a model that was gone — the app claiming a model was
+/// present when it wasn't, in the one app whose whole subject is honest state. A signal about a
+/// shared resource has to live where every reader can see it (CLAUDE.md: *"instruments belong at
+/// app level, not on a view"*).
+@MainActor
+@Observable
+final class ModelStoreSignal {
+    static let shared = ModelStoreSignal()
+
+    /// Bumped on every change to the shared store. Views read it only to take a dependency on it;
+    /// the value itself means nothing beyond "it changed since you last looked."
+    private(set) var version = 0
+
+    private init() {
+        // A finished download lands weights on disk from the background downloader. Treat it as a
+        // store change here, once, so it refreshes whichever view is on screen — not only the
+        // library that happened to start it. (Delete and clear post no notification; their call
+        // sites call `bump()` directly.)
+        NotificationCenter.default.addObserver(
+            forName: .mlxModelDidDownload, object: nil, queue: nil
+        ) { _ in
+            Task { @MainActor in ModelStoreSignal.shared.bump() }
+        }
+    }
+
+    /// Call right after any add, remove, or clear of the shared model store.
+    func bump() { version &+= 1 }
+}
 
 /// Which frame a model serves.
 ///

@@ -376,6 +376,11 @@ struct Preset: Identifiable {
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings = Settings.shared
+    /// The app-level model-store signal. The Eye/Hand rows below show whether a model is on disk,
+    /// which is a filesystem fact SwiftUI can't observe; reading `storeSignal.version` makes this
+    /// screen redraw when a model is downloaded, deleted, or cleared anywhere. Without it, removing
+    /// a model in the library left a stale green "active" dot here (2026-07-30). See `ModelStoreSignal`.
+    @State private var storeSignal = ModelStoreSignal.shared
     @State private var showingPresets = false
     @State private var confirmingReset = false
     @State private var showingLayerOneInfo = false
@@ -524,12 +529,17 @@ struct PreferencesView: View {
             loadedRow(role: "Eye",
                       name: settings.seer.name,
                       downloaded: settings.seer.isAvailable)
+                .id(storeSignal.version)   // redraw when the store changes — `isAvailable` reads disk
             // The hand joins it only when the third frame is being drawn — then both models are
             // in use, and both are listed. Off, the hand isn't in use, so it isn't shown.
             if settings.drawsThirdFrame {
+                // Name the hand actually selected, not a hardcoded one — a second drawer would
+                // otherwise mislabel here (2026-07-30). Falls back to sd-turbo only if the id is
+                // somehow unknown to the catalog.
                 loadedRow(role: "Hand",
-                          name: ModelCatalog.sdTurbo.displayName,
+                          name: selectedDrawerModel?.displayName ?? ModelCatalog.sdTurbo.displayName,
                           downloaded: DrawerLoader.isAvailable(settings.selectedDrawer))
+                    .id(storeSignal.version)
             }
             // Kept from the old section — the one thing the library can't say, because it's
             // about the eye you're *currently* shooting with. Three distinct reasons need
