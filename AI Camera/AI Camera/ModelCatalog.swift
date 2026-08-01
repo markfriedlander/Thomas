@@ -42,6 +42,7 @@
 //
 
 import Foundation
+import Observation
 import SharedModelStoreKit
 
 // ==== LEGO START: 24 Model Catalog (What The Camera Can Load) ====
@@ -146,6 +147,20 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// For a drawing model, the step knob's range and default (see `DrawStepSpec`). `nil` for an
     /// eye. Read by the Preferences step slider and frozen per-shot in `ShotConfig.drawSteps`.
     let drawSteps: DrawStepSpec?
+
+    /// Whether the weights are on the phone — the DISPLAY copy of the download state, refreshed
+    /// centrally by `ModelCatalogService.refreshDownloadStates()` (Hal's pattern: the catalog holds
+    /// each model's downloaded flag and every screen reads that one array, so a delete or download
+    /// updates every dot at once instead of each view keeping its own idea and drifting). The
+    /// built-in is always present. Seeds start `false` and are reconciled against disk at launch and
+    /// on every store change. For a point-in-time check off the UI (a loader, the develop-time block
+    /// reason), read `isInstalled`, which queries the store live by id. Copied from Hal's
+    /// `ModelConfiguration.isDownloaded`.
+    var isDownloaded: Bool = false
+
+    /// The on-disk location once present, or `nil`. Set alongside `isDownloaded` by the service's
+    /// refresh. Mirrors Hal's `ModelConfiguration.localPath`.
+    var localPath: URL? = nil
 
     var isBuiltIn: Bool { delivery == .builtIn }
 
@@ -465,6 +480,96 @@ nonisolated enum HFTree {
         struct Entry: Decodable { let type: String; let path: String }
         return try JSONDecoder().decode([Entry].self, from: data)
             .filter { $0.type == "file" }.map { $0.path }
+    }
+}
+
+/// The live model catalog — Hal's `ModelCatalogService`, brought into Thomas so both apps share the
+/// same battle-tested shape instead of each keeping its own. This is the fix for the stale "active"
+/// dot: Preferences and the Library now read ONE centrally-refreshed source, so a delete or a
+/// download updates every dot at once and none can lie. Hal's dots have never gone stale because of
+/// exactly this.
+///
+/// Hal keeps `@Published availableModels: [ModelConfiguration]` and calls `refreshDownloadStates()`
+/// after any download / delete / switch; every view observes that one array. Thomas's version is the
+/// same shape, in the Observation-framework idiom Thomas already uses (`@Observable`), carrying
+/// Thomas's richer `CameraModel` (which has eye/hand roles Hal's text-only `ModelConfiguration` does
+/// not) instead of porting Hal's LLM-only fields (context window, KV-cache, reasoning tokens).
+///
+/// Increment 1 (2026-08-01, branch `hal-model-system`): the curated catalog + honest, centrally
+/// refreshed download state. The live HuggingFace "download any model" browser is increment 2 —
+/// Hal's `fetchMLXCommunityModels`, made role-aware (eyes are VLMs, hands are diffusion models).
+@MainActor
+@Observable
+final class ModelCatalogService {
+    static let shared = ModelCatalogService()
+
+    /// The one array every screen reads. Seeded from the curated `ModelCatalog.all` so the Library
+    /// shows something at launch with no network; each model's `isDownloaded`/`localPath` is then
+    /// reconciled against the shared store by `refreshDownloadStates()`. Increment 2 appends the
+    /// live-fetched community models here.
+    private(set) var availableModels: [CameraModel] = ModelCatalog.all
+
+    private init() {
+        // Reconcile the seed against disk before anyone reads `availableModels` — without this the
+        // catalog would report every downloadable model as absent until the first manual refresh,
+        // exactly the launch-time lie Hal's own init comment calls out.
+        refreshDownloadStates()
+        // A finished background download lands weights on disk and posts `.mlxModelDidDownload`;
+        // refresh so whichever screen is showing updates, not only the one that started the download.
+        // Delete and clear post no notification — their call sites call `refresh()` directly. This is
+        // Hal's app-level model-state observer, the reason Hal's dots stay honest across screens.
+        NotificationCenter.default.addObserver(
+            forName: .mlxModelDidDownload, object: nil, queue: nil
+        ) { _ in
+            Task { @MainActor in ModelCatalogService.shared.refreshDownloadStates() }
+        }
+        cameraLog("CATALOG: ModelCatalogService initialized with \(availableModels.count) models; refreshed download states from disk.")
+    }
+
+    /// Recompute every model's on-disk state from the shared store, in ONE place. This is the whole
+    /// point: display state is derived here and nowhere else, so it cannot drift between screens.
+    /// Copied from Hal's `refreshDownloadStates()`; reads Thomas's `SharedModelStore` (same package
+    /// Hal's downloader reads).
+    func refreshDownloadStates() {
+        availableModels = availableModels.map { model in
+            var m = model
+            if model.isBuiltIn {
+                m.isDownloaded = true
+                m.localPath = nil            // system-provided; no on-disk path to show
+                return m
+            }
+            let key = sharedStoreKey(forRepoID: model.id)
+            m.isDownloaded = SharedModelStore.isRepoDownloaded(key)
+            m.localPath = m.isDownloaded ? SharedModelStore.mlxModelDir(key) : nil
+            return m
+        }
+    }
+
+    /// Call right after any delete or clear the app itself performs. (A download completion arrives
+    /// via the notification above; a delete/clear posts nothing, so its call site pokes this.) Same
+    /// body as `refreshDownloadStates`; named for the call site's intent, mirroring how Hal calls
+    /// `refreshDownloadStates()` straight after `deleteModel`.
+    func refresh() { refreshDownloadStates() }
+
+    /// The refreshed models for one role — what the Library's eye/hand sections and Preferences read,
+    /// so their dots reflect the one source of truth.
+    func models(for job: ModelJob) -> [CameraModel] {
+        availableModels.filter { $0.job == job }
+    }
+
+    /// A refreshed model by the id the store and downloader key on. Prefer this over
+    /// `ModelCatalog.model(id:)` anywhere the download state is shown: the static catalog carries
+    /// definitions, this carries live, observed state.
+    func model(id: String) -> CameraModel? {
+        availableModels.first { $0.id == id }
+    }
+
+    /// The refreshed model backing a given eye — state-aware twin of `ModelCatalog.model(for:)`.
+    func model(for seer: Seer) -> CameraModel {
+        switch seer {
+        case .apple:       return model(id: ModelCatalog.apple.id) ?? ModelCatalog.apple
+        case .mlx(let id): return model(id: id) ?? ModelCatalog.apple
+        }
     }
 }
 

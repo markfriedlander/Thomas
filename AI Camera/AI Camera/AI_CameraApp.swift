@@ -201,6 +201,11 @@ struct AI_CameraApp: App {
         // this deletes its orphaned model so it doesn't sit on the phone wasting space. A no-op once
         // it's gone, and on any device that never ran the spike.
         Task.detached { reapCoreMLSpikeLeftovers() }
+        // Instantiate the shared model catalog at launch so its `.mlxModelDidDownload` observer is
+        // live before any background download can complete, and the download state is honest from the
+        // first read (Hal instantiates ModelCatalogService the same way). MainActor hop: App.init is
+        // not actor-isolated, and the service is @MainActor.
+        Task { @MainActor in _ = ModelCatalogService.shared }
         #if DEBUG
         LocalAPIServer.shared.start()
         #endif

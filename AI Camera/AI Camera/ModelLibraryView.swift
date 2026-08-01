@@ -40,15 +40,17 @@ import SharedModelStoreKit
 struct ModelLibraryView: View {
     @State private var settings = Settings.shared
     @ObservedObject private var downloader = MLXModelDownloader.shared
+    /// The one catalog every screen reads (Hal's pattern). Its `availableModels` carry the
+    /// centrally-refreshed download state, so these rows and Preferences' dots always agree and a
+    /// delete/download updates both at once. Replaces the old per-view `refreshToken` that only this
+    /// screen could see — the split that let Preferences show a stale "active" dot after a removal.
+    @State private var catalog = ModelCatalogService.shared
     @State private var confirmingDelete: CameraModel?
     @State private var showingClearFamilyAlert = false   // Clear all family models (last resort)
     /// The model whose license sheet is open. Set when the user taps Download; the actual
     /// download only starts once they accept — the studio's surface-the-license-before-you-
     /// -take-it pattern, ported from Hal/Posey (`ModelLicenseSheet` below).
     @State private var modelForLicense: CameraModel?
-    /// Recomputed on download completion — `isInstalled` reads the disk, which SwiftUI
-    /// cannot observe. See `.onReceive` below.
-    @State private var refreshToken = 0
     /// How many queued shots still need each model (by model id), so the delete confirmation can
     /// warn that deleting will pause them. Loaded from the dark room store on appear and refreshed
     /// when a model lands.
@@ -58,7 +60,7 @@ struct ModelLibraryView: View {
         List {
             ForEach([ModelJob.seeing, ModelJob.drawing], id: \.self) { job in
                 Section {
-                    ForEach(ModelCatalog.models(for: job)) { model in
+                    ForEach(catalog.models(for: job)) { model in
                         ModelLibraryRow(
                             model: model,
                             isActive: isActive(model),
@@ -69,7 +71,6 @@ struct ModelLibraryView: View {
                             onCancel:   { downloader.cancelDownload(modelID: model.id) },
                             onDelete:   { confirmingDelete = model }
                         )
-                        .id("\(model.id)-\(refreshToken)")
                     }
                 } header: {
                     Label(job.title, systemImage: job == .seeing ? "eye" : "hand.draw")
@@ -120,13 +121,11 @@ struct ModelLibraryView: View {
         // Leaving the library is a natural moment to let the queue re-check: a model the user just
         // downloaded can unblock the shots that were waiting for it.
         .onDisappear { DarkRoomWorker.shared.kick() }
-        // The row's "installed" state is a question about the filesystem, and SwiftUI has no
-        // way to know the answer changed. The downloader posts when a model lands; that's
-        // the cue to look again.
+        // A model landing is a filesystem change SwiftUI can't see. `ModelCatalogService` already
+        // catches `.mlxModelDidDownload` and refreshes every screen's dots (these rows read its
+        // `availableModels`), so here we keep only the library-specific follow-ups: unblock the queue
+        // that was waiting on the new model, and refresh the "shots still use this" delete-warning counts.
         .onReceive(NotificationCenter.default.publisher(for: .mlxModelDidDownload)) { _ in
-            refreshToken += 1
-            // A model just landed — let the queue develop anything that was blocked waiting for it,
-            // and refresh the "shots still use this" counts behind the delete warning.
             DarkRoomWorker.shared.kick()
             Task { await loadQueuedUsage() }
         }
@@ -148,7 +147,7 @@ struct ModelLibraryView: View {
         .alert("Clear all family models?", isPresented: $showingClearFamilyAlert) {
             Button("Clear all family models", role: .destructive) {
                 let removed = SharedModelStore.clearEntireSharedStore()
-                refreshToken += 1
+                catalog.refresh()   // store changed with no notification — poke the one source
                 print("AICAMERA: cleared entire shared store: \(removed) repos removed")
             }
             Button("Cancel", role: .cancel) { showingClearFamilyAlert = false }
@@ -156,7 +155,7 @@ struct ModelLibraryView: View {
             Text("Removes every downloaded AI model shared across Hal, Posey, and AI Camera to reclaim all model storage at once. Each app re-downloads what it needs the next time you use it. Your photos and settings are not affected.")
         }
         // Surface the model's license before the download begins. Hangs off the stable List,
-        // not a row (rows come and go with `refreshToken`, which would tear the sheet down).
+        // not a row (rows come and go as the catalog refreshes, which would tear the sheet down).
         .sheet(item: $modelForLicense) { model in
             ModelLicenseSheet(
                 model: model,
@@ -247,8 +246,9 @@ struct ModelLibraryView: View {
     private func delete(_ model: CameraModel) {
         confirmingDelete = nil
         Task {
+            // `deleteModelEverywhere` refreshes the shared catalog at its end, so every screen's dots
+            // re-derive — no per-view refresh needed here anymore (that split was the original bug).
             await deleteModelEverywhere(model)
-            await MainActor.run { refreshToken += 1 }
         }
     }
 
@@ -364,7 +364,7 @@ private struct ModelLibraryRow: View {
     /// downloaded and active, grey = downloaded and inactive, no dot = not here. A model
     /// mid-download shows no dot — the progress bar below is already saying so.
     private var statusDot: some View {
-        ModelStatusDot(isDownloaded: model.isInstalled, isActive: isActive)
+        ModelStatusDot(isDownloaded: model.isDownloaded, isActive: isActive)
     }
 
     private func progress(_ state: MLXModelDownloader.DownloadState) -> some View {
@@ -388,7 +388,7 @@ private struct ModelLibraryRow: View {
     @ViewBuilder
     private var actions: some View {
         HStack(spacing: 12) {
-            if !model.isInstalled {
+            if !model.isDownloaded {
                 // Plain accent text+icon, identical to Hal (Hal.swift) and Posey
                 // (AskPoseyModelRow) so the studio reads the same everywhere. NOT a filled
                 // .borderedProminent pill: that capsule got stretched wide by the row and
@@ -430,7 +430,7 @@ private struct ModelLibraryRow: View {
                     .controlSize(.small)
                 }
             }
-            if !model.isInstalled { Spacer() }
+            if !model.isDownloaded { Spacer() }
         }
         .font(.caption)
     }
@@ -732,7 +732,8 @@ struct ModelLicenseSheet: View {
 /// Give up this camera's claim on a model and remove the files if we were the last to hold them
 /// (`deleteModel` enforces exactly that). If the model is the resident eye, drop it from memory and
 /// fall back to the built-in seer first, so nothing points at weights that are gone. The one copy of
-/// the rule, shared by the Delete button and the antenna's /delete verb.
+/// the rule, shared by the Delete button and the antenna's /release verb (which delegates here rather
+/// than reimplementing release-and-remove — 2026-07-30 parity fix).
 @MainActor func deleteModelEverywhere(_ model: CameraModel) async {
     guard !model.isBuiltIn else { return }
     if model.job == .seeing {
@@ -742,6 +743,11 @@ struct ModelLicenseSheet: View {
         if Settings.shared.seer.modelID == model.id { Settings.shared.seer = .apple }
     }
     await MLXModelDownloader.shared.deleteModel(modelID: model.id)
+    // Refresh the one shared catalog at the deletion SOURCE, so every path that deletes — the Delete
+    // button AND the antenna's /release — updates every screen's dots identically. (A delete posts no
+    // notification, unlike a download.) Putting it here, not in the button's handler, is what keeps the
+    // antenna faithful to the human path and mirrors Hal calling refreshDownloadStates after deleteModel.
+    ModelCatalogService.shared.refresh()
 }
 
 #if DEBUG

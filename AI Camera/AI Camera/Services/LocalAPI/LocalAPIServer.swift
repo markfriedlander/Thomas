@@ -476,37 +476,27 @@ extension LocalAPIServer {
         let drawThird = (req.headers["x-draw"] ?? "true") != "false"
         let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
         let hold = (req.headers["x-hold"] ?? "false") == "true"
-
-        // Freeze the config exactly as the shutter does, honoring the overrides.
-        let config = await MainActor.run { () -> ShotConfig in
-            var c = ShotConfig.capture()
-            c.drawsThirdFrame = drawThird
-            if let layoutOverride { c.layout = layoutOverride }
-            return c
-        }
         let place = await MainActor.run { Place.current?.placeStamp }
 
-        guard let photoData = ShotPhoto.encode(photograph) else {
-            return (200, json(["captured": false, "error": "Could not encode the captured frame."]))
+        // Call the SAME intake the shutter uses (`DarkRoomWorker.enqueue`), threading the test knobs
+        // through its params — NOT a reimplementation of its freeze/encode/store/kick body. Copying
+        // that body is what let /capture silently drift from the real shutter (2026-07-30 parity fix).
+        guard let id = await DarkRoomWorker.shared.enqueue(
+                photograph, place: place,
+                drawsThirdFrame: drawThird, layoutOverride: layoutOverride, kickAfter: !hold) else {
+            return (200, json(["captured": false, "error": "Could not encode or enqueue the captured frame."]))
         }
-        let record: ShotRecord
-        do {
-            record = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place)
-        } catch {
-            return (200, json(["captured": false, "error": "Enqueue failed: \(error.localizedDescription)"]))
+        let (seerName, layoutName) = await MainActor.run {
+            (seerWire(Settings.shared.seer), (layoutOverride ?? Settings.shared.layout).name)
         }
-
-        // Kick unless holding for a resume test.
-        if !hold { await MainActor.run { DarkRoomWorker.shared.kick() } }
-
         let pending = await DarkRoomStore.shared.pending().count
         return (200, json([
             "captured":     true,
             "held":         hold,
-            "id":           record.id.uuidString,
-            "seer":         seerWire(config.seer),
-            "drawsThird":   config.drawsThirdFrame,
-            "layout":       config.layout.name,
+            "id":           id.uuidString,
+            "seer":         seerName,
+            "drawsThird":   drawThird,
+            "layout":       layoutName,
             "place":        place as Any,
             "pendingCount": pending
         ]))
@@ -856,12 +846,14 @@ extension LocalAPIServer {
     ///   X-Orientation, X-System-Prompt, X-Temperature — as /look.
     ///
     /// **Why this is not `/draw`.** `/draw` runs the drawer in isolation — no eye, no
-    /// photograph resident — and it passed while the real shutter crashed. This runs the
-    /// exact code a press runs (`Shot.seeThenDraw`, the same function `CameraView.develop`
-    /// calls), holds the captured photograph across the draw the way the shutter does, and
-    /// **builds the composited frames** so the memory in flight is the memory of a real shot.
-    /// The number it reports is therefore the number that decides whether the shutter lives.
-    /// It does not save to Photos — that needs a permission prompt and is not memory-relevant.
+    /// photograph resident — and it passed while the real shutter crashed. This route is a
+    /// DIAGNOSTIC, not the user path. It runs `Shot.seeThenDraw` directly, which is the model work
+    /// the dark-room worker performs for a real shot, and builds the composited frames, so the
+    /// memory in flight is the memory of a real shot and the number it reports is what decides
+    /// whether the shutter lives. But a press does NOT call `seeThenDraw`; it calls
+    /// `DarkRoomWorker.enqueue`, and the worker develops the shot later. So this route bypasses the
+    /// real queue and worker, and it does not save to Photos. For the faithful end-to-end shutter
+    /// over the antenna, use `/capture`.
     private func handleShoot(_ req: ParsedRequest) async -> (Int, String) {
         guard let data = req.bodyData, !data.isEmpty,
               let src = CGImageSourceCreateWithData(data as CFData, nil),
@@ -1493,37 +1485,29 @@ extension LocalAPIServer {
         }
 
         let sizeBefore = SharedModelStore.sizeOnDisk(key)
-        let wasLast = SharedModelStore.releaseClaim(modelID: key)
-        var deleted = false
-        var deleteError: String?
-
-        if wasLast {
-            let dir = SharedModelStore.mlxModelDir(key)
-            do {
-                if FileManager.default.fileExists(atPath: dir.path) {
-                    try FileManager.default.removeItem(at: dir)
-                    deleted = true
-                    cameraLog("RELEASE: last claimant — deleted \(repoID) (\(sizeBefore) bytes)")
-                }
-            } catch {
-                deleteError = error.localizedDescription
-                cameraLog("RELEASE: delete FAILED for \(repoID): \(error.localizedDescription)")
-            }
-        } else {
-            cameraLog("RELEASE: released claim on \(repoID); siblings still hold it — kept on disk")
+        // Delegate to the SAME function the Delete button calls, instead of a parallel
+        // releaseClaim+removeItem here. `deleteModelEverywhere` releases the claim, removes the files
+        // only if we were the last holder, drops a resident eye and resets the seer, AND updates the
+        // downloader's own bookkeeping (`downloadedModelIDs` / `downloadStates` / cache) — the last of
+        // which the old parallel body skipped, leaving the downloader thinking the model was still
+        // present, a state a human delete never produces. The human Delete button only ever deletes
+        // catalog models, so resolve the catalog entry; the ownership guard above and this lookup both
+        // refuse anything a user could not reach. (2026-07-30 antenna-parity fix — the reason this verb
+        // could pass while the real delete's UI was broken.)
+        guard let model = ModelCatalog.model(id: repoID) else {
+            return (404, json(["repo": repoID, "released": false, "deleted": false,
+                               "error": "\(repoID) is claimed but not in the catalog; the Delete button only deletes catalog models."]))
         }
-
-        var payload: [String: Any] = [
-            "repo":             repoID,
-            "released":         true,
-            "claimedByThisApp": true,
-            "wasLastClaimant":  wasLast,
-            "deleted":          deleted,
-            "freedBytes":       deleted ? sizeBefore : 0,
+        await deleteModelEverywhere(model)
+        let deleted = !SharedModelStore.isRepoDownloaded(key)
+        return (200, json([
+            "repo":               repoID,
+            "released":           true,
+            "claimedByThisApp":   true,
+            "deleted":            deleted,
+            "freedBytes":         deleted ? sizeBefore : 0,
             "remainingClaimants": SharedModelStore.claimants(modelID: key)
-        ]
-        if let deleteError { payload["error"] = deleteError }
-        return (200, json(payload))
+        ]))
     }
 
     /// GET /memory — what the process is holding, and the reclamation curve.

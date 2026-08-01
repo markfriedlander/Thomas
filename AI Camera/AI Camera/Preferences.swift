@@ -111,14 +111,14 @@ final class Settings {
     /// choice, not a default. The latency is the film developing, but the user gets to decide
     /// how long the bath takes.
     var drawsThirdFrame: Bool {
-        didSet { store(drawsThirdFrame, "drawsThirdFrame") }
+        didSet { store(drawsThirdFrame, "drawsThirdFrame"); snapLayoutIfNeeded() }
     }
     /// Which hand draws the third frame — the drawer's shared-store repo id. The counterpart to
     /// `seer` for the eye: `drawsThirdFrame` is the on/off, this is the which. Only sd-turbo
     /// exists today, so it is effectively constant until a second drawer (and a picker) arrive;
     /// it is stored now so each shot can freeze the drawer it was taken with (see `ShotConfig`).
     var selectedDrawer: String {
-        didSet { store(selectedDrawer, "selectedDrawer") }
+        didSet { store(selectedDrawer, "selectedDrawer"); snapLayoutIfNeeded() }
     }
     /// The step knob's value **per drawer** — how many denoising steps each hand draws with.
     ///
@@ -184,6 +184,7 @@ final class Settings {
                 selectedDrawer = ModelCatalog.coreMLSD21.id
                 drawsThirdFrame = true
             }
+            snapLayoutIfNeeded()
         }
     }
     /// The small instruction the hand gets in the silent loop — art direction on the re-imagining,
@@ -250,6 +251,21 @@ final class Settings {
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
         decoderChoice = DecoderChoice(rawValue: d.string(forKey: "decoderChoice") ?? "") ?? .detailed
         stampRawCoordinates = d.bool(forKey: "stampRawCoordinates")   // default false
+    }
+
+    /// Keep the selected layout producible. Whenever the eye/hand availability changes (`useEye`,
+    /// `drawsThirdFrame`, `selectedDrawer`), a layout that can no longer be made snaps to the richest
+    /// one that can. This used to live in Preferences' `.onChange`, so any non-UI mutation (the
+    /// antenna's /settings, a future preset) bypassed it and could leave a greyed-out, un-drawable
+    /// layout selected. Enforced HERE in the model (Principle 7, matching `useEye`'s own enforcement),
+    /// so it holds however those are changed and can't be bypassed. This is the invariant that retires
+    /// the "triptych stuck on with the hand off" bug (2026-07-30 antenna-parity fix).
+    private func snapLayoutIfNeeded() {
+        let hasEye = useEye
+        let hasHand = drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
+        if !layout.isAvailable(hasEye: hasEye, hasHand: hasHand) {
+            layout = Layout.fallback(hasEye: hasEye, hasHand: hasHand)
+        }
     }
 
     private func store(_ value: Any, _ key: String) {
@@ -376,6 +392,10 @@ struct Preset: Identifiable {
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings = Settings.shared
+    /// The one shared catalog (Hal's pattern). Reading its refreshed models below is what makes the
+    /// Eye/Hand dots here re-derive when a model is downloaded or deleted anywhere — the fix for the
+    /// stale "active" dot. Same source the Model Library reads, so the two never disagree.
+    @State private var catalog = ModelCatalogService.shared
     @State private var showingPresets = false
     @State private var confirmingReset = false
     @State private var showingLayerOneInfo = false
@@ -446,15 +466,11 @@ struct PreferencesView: View {
             }
             .navigationTitle("Preferences")
             .navigationBarTitleDisplayMode(.inline)
-            // Keep the selected layout producible: if turning the eye or hand off (or switching to an
-            // un-downloaded hand) makes the current layout impossible, snap to the richest available
-            // one. This is the content-aware half of the layout rebuild (2026-07-27) — it's why the
-            // picker never shows a greyed-out layout you can't make (retires bug #22).
-            // The eye→SD-2.1 auto-switch now lives in `Settings.useEye` (model-level, so the antenna
-            // and any future preset get it too). Here we only keep the layout coherent with the toggles.
-            .onChange(of: settings.useEye) { _, _ in snapLayoutIfNeeded() }
-            .onChange(of: settings.drawsThirdFrame) { _, _ in snapLayoutIfNeeded() }
-            .onChange(of: settings.selectedDrawer) { _, _ in snapLayoutIfNeeded() }
+            // Keeping the selected layout producible (the "retires bug #22" invariant) now lives in the
+            // model: `Settings` snaps the layout in the didSet of `useEye`/`drawsThirdFrame`/
+            // `selectedDrawer`, so EVERY mutation path gets it — a Preferences toggle, the antenna's
+            // /settings, a future preset — and none can bypass it (2026-07-30 antenna-parity fix). The
+            // menu below still filters to producible layouts, so the picker never offers an impossible one.
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -520,16 +536,19 @@ struct PreferencesView: View {
     private var modelSection: some View {
         Section {
             // The eye is always in use; green when it's ready to shoot, no dot when it isn't
-            // (the reason text below says why). See `ModelStatusDot`.
+            // (the reason text below says why). Its downloaded flag comes from the shared catalog so
+            // this dot re-derives the moment a model is added or removed anywhere. See `ModelStatusDot`.
             loadedRow(role: "Eye",
                       name: settings.seer.name,
-                      downloaded: settings.seer.isAvailable)
+                      downloaded: catalog.model(for: settings.seer).isDownloaded)
             // The hand joins it only when the third frame is being drawn — then both models are
-            // in use, and both are listed. Off, the hand isn't in use, so it isn't shown.
+            // in use, and both are listed. Off, the hand isn't in use, so it isn't shown. Name the
+            // hand actually selected (a second drawer would otherwise mislabel), and read its
+            // downloaded flag from the same shared catalog.
             if settings.drawsThirdFrame {
                 loadedRow(role: "Hand",
-                          name: ModelCatalog.sdTurbo.displayName,
-                          downloaded: DrawerLoader.isAvailable(settings.selectedDrawer))
+                          name: catalog.model(id: settings.selectedDrawer)?.displayName ?? ModelCatalog.sdTurbo.displayName,
+                          downloaded: catalog.model(id: settings.selectedDrawer)?.isDownloaded ?? false)
             }
             // Kept from the old section — the one thing the library can't say, because it's
             // about the eye you're *currently* shooting with. Three distinct reasons need
@@ -957,15 +976,6 @@ struct PreferencesView: View {
     private var layoutHasEye: Bool { settings.useEye }
     private var layoutHasHand: Bool {
         settings.drawsThirdFrame && DrawerLoader.isAvailable(settings.selectedDrawer)
-    }
-
-    /// If the selected layout can no longer be produced (a toggle flipped), snap to the richest
-    /// available one. This is what retires the "triptych stuck on when the hand's off" bug — you can
-    /// never be left holding a layout the current state can't make. Called from the toggles' onChange.
-    private func snapLayoutIfNeeded() {
-        if !settings.layout.isAvailable(hasEye: layoutHasEye, hasHand: layoutHasHand) {
-            settings.layout = Layout.fallback(hasEye: layoutHasEye, hasHand: layoutHasHand)
-        }
     }
 
     private var layoutSection: some View {

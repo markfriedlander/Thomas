@@ -453,19 +453,33 @@ final class DarkRoomWorker {
     /// shot — same frozen config, same durability, same pipeline.
     /// - Parameter place: where the shot was taken. The live shutter passes the current GPS; a
     ///   picture imported from the library has no capture location, so it passes nil.
-    func enqueue(_ photograph: CGImage, place: String?) async {
-        let config = ShotConfig.capture()
+    /// - Parameters drawsThirdFrame / layoutOverride: nil keeps the live setting; a value overrides
+    ///   the frozen config. They exist so the antenna's /capture can thread its X-Draw / X-Layout test
+    ///   knobs through this SAME body instead of copying it. A copy is exactly how /capture drifted
+    ///   from the real shutter (2026-07-30 antenna-parity fix).
+    /// - Parameter kickAfter: false enqueues WITHOUT waking the worker, for /capture's X-Hold resume
+    ///   test. Returns the stored record id, or nil if the frame could not be encoded or stored.
+    @discardableResult
+    func enqueue(_ photograph: CGImage, place: String?,
+                 drawsThirdFrame: Bool? = nil,
+                 layoutOverride: Layout? = nil,
+                 kickAfter: Bool = true) async -> UUID? {
+        var config = ShotConfig.capture()
+        if let drawsThirdFrame { config.drawsThirdFrame = drawsThirdFrame }
+        if let layoutOverride { config.layout = layoutOverride }
         guard let photoData = ShotPhoto.encode(photograph) else {
             cameraLog("INTAKE: could not encode the frame — shot dropped")
-            return
+            return nil
         }
+        let record: ShotRecord
         do {
-            _ = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place)
+            record = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place)
         } catch {
             cameraLog("INTAKE: could not enqueue the shot — \(error.localizedDescription)")
-            return
+            return nil
         }
-        kick()
+        if kickAfter { kick() }
+        return record.id
     }
 
     /// Stop pulling new shots (user paused the queue from the Dark Room). The shot already
