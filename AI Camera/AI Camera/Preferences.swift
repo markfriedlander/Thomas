@@ -435,6 +435,12 @@ struct PreferencesView: View {
                 get: { AntennaUIBridge.shared.tapModelLibrary },
                 set: { AntennaUIBridge.shared.tapModelLibrary = $0 }
             )) { ModelLibraryView() }
+            // Human-parity for the antenna's About verb: push the SAME `AboutView` the "About Thomas"
+            // row pushes, onto Preferences' own nav stack, driven by the bridge flag.
+            .navigationDestination(isPresented: Binding(
+                get: { AntennaUIBridge.shared.tapAbout },
+                set: { AntennaUIBridge.shared.tapAbout = $0 }
+            )) { AboutView.thomas }
             #endif
             // ⚠️ The presets sheet lives HERE, on the Form, not on `promptSection`.
             //

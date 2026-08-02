@@ -129,6 +129,16 @@ struct ModelLibraryView: View {
             DarkRoomWorker.shared.kick()
             Task { await loadQueuedUsage() }
         }
+        #if DEBUG
+        // Human-parity: the antenna's delete-confirm verb opens the SAME confirmation dialog the row's
+        // Delete button opens, by setting the real `confirmingDelete`. DEBUG-only (bridge is DEBUG-only).
+        .onChange(of: AntennaUIBridge.shared.confirmDeleteModelID) { _, id in
+            if let id, let m = catalog.model(id: id) {
+                confirmingDelete = m
+                AntennaUIBridge.shared.confirmDeleteModelID = nil
+            }
+        }
+        #endif
         .confirmationDialog(
             confirmingDelete.map { "Delete \($0.displayName)?" } ?? "",
             isPresented: Binding(get: { confirmingDelete != nil },
@@ -263,7 +273,7 @@ struct ModelLibraryView: View {
         }
         // Warn if shots in the dark room still need this model — they aren't lost, they pause.
         if let n = queuedUsage[model.id], n > 0 {
-            message += "\n\n\(n) shot\(n == 1 ? "" : "s") still waiting to develop use this. "
+            message += "\n\n\(n) shot\(n == 1 ? "" : "s") still waiting to develop use\(n == 1 ? "s" : "") this. "
                 + "\(n == 1 ? "It" : "They") will pause - shown as \u{201C}Needs \(model.displayName)\u{201D} in the Dark Room - until you download it again."
         }
         return message
@@ -277,7 +287,9 @@ struct ModelLibraryView: View {
         for r in records {
             counts[ModelCatalog.model(for: r.config.seer).id, default: 0] += 1
             if r.config.drawsThirdFrame {
-                counts[ModelCatalog.sdTurbo.id, default: 0] += 1
+                // The shot's OWN frozen drawer, not a hardcoded sd-turbo - a shot taken with the SD-2.1
+                // hand must count against SD-2.1, so its delete-warning is right.
+                counts[r.config.effectiveDrawerID, default: 0] += 1
             }
         }
         queuedUsage = counts
@@ -790,6 +802,13 @@ struct ModelLicenseSheet: View {
     /// = tapping the Photos glyph, which opens the system Photos app. `CameraView` calls the same
     /// `openPhotos()` the button calls. A human can leave to Photos; so can the antenna.
     var tapPhotos = false
+    /// = tapping a model row's Delete button: shows its delete-CONFIRMATION dialog (which carries the
+    /// "N shots still use this…" warning). `ModelLibraryView` mirrors this into its real `confirmingDelete`
+    /// (the same state the button sets). Set to the model's repo id; cleared when the dialog opens.
+    var confirmDeleteModelID: String? = nil
+    /// = tapping "About Thomas" in Preferences. `PreferencesView` pushes `AboutView` onto its own nav
+    /// stack, the same push the row does. Cleared when the About screen is popped.
+    var tapAbout = false
 }
 #endif
 

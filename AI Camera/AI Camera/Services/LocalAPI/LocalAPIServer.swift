@@ -816,10 +816,11 @@ extension LocalAPIServer {
     /// each view onstage as its own sheet — a false path no human ever produced (Model Library, especially,
     /// lives INSIDE Preferences, never as a lone sheet over the viewfinder).
     ///
-    ///   X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos
+    ///   X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos | about
     /// (`capture` backs all the way out to the bare capture screen, the way tapping Done does — so the
     /// antenna can return home, not only open interior screens. `privacy` taps the lock to reveal its
-    /// popover; `photos` taps the Photos glyph, which leaves for the system Photos app.)
+    /// popover; `photos` taps the Photos glyph, which leaves for the system Photos app; `about` pushes
+    /// the About screen inside Preferences.)
     private func handleOpen(_ req: ParsedRequest) async -> (Int, String) {
         let screen = (req.headers["x-screen"] ?? "").lowercased()
         let bridge = AntennaUIBridge.shared
@@ -848,8 +849,12 @@ extension LocalAPIServer {
             bridge.tapPhotos = true
             return (200, json(["screen": "photos", "opened": true,
                                "message": "Tapped the Photos glyph, which opens the system Photos app (leaves the camera, same as a human tap)."]))
+        case "about":
+            bridge.tapAbout = true
+            return (200, json(["screen": "about", "opened": true,
+                               "message": "Opened Preferences and pushed the About screen, the way tapping About Thomas does. Screenshot with devicectl."]))
         default:
-            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos"}"#)
+            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos | about"}"#)
         }
     }
 
@@ -1474,6 +1479,19 @@ extension LocalAPIServer {
     private func handleRelease(_ req: ParsedRequest) async -> (Int, String) {
         guard let repoID = req.headers["x-repo"], !repoID.isEmpty else {
             return (400, #"{"error":"Pass the repo in an X-Repo header"}"#)
+        }
+
+        // X-Action: confirm shows the delete-CONFIRMATION dialog (the same one the row's Delete button
+        // opens, warning "N shots still use this…") so the antenna can screenshot it, instead of
+        // deleting. The default (no X-Action) performs the real delete, matching the dialog's Delete
+        // button. The dialog lives on the Model Library, so open that first (POST /open modellibrary).
+        if (req.headers["x-action"] ?? "").lowercased() == "confirm" {
+            guard ModelCatalog.model(id: repoID) != nil else {
+                return (404, json(["error": "Unknown model \(repoID) - not in the catalog."]))
+            }
+            await MainActor.run { AntennaUIBridge.shared.confirmDeleteModelID = repoID }
+            return (200, json(["repo": repoID, "action": "confirm", "presented": true,
+                               "message": "Showing \(repoID)'s delete-confirmation dialog in the Model Library. Screenshot it, then POST /release again with no X-Action to actually delete."]))
         }
 
         // The store key (identity for a shared model, plain for a single-app one) is what the

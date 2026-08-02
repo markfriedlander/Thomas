@@ -167,6 +167,17 @@ struct CameraView: View {
             // Open Preferences; leave the flag set so Preferences pushes the library and clears it.
             if want { showingPreferences = true }
         }
+        .onChange(of: bridge.tapAbout) { _, want in
+            // Open Preferences; leave the flag set so Preferences pushes About and clears it.
+            if want { showingPreferences = true }
+        }
+        // When Preferences closes for ANY reason (Done, or the antenna's return-to-capture), reset the
+        // interior-push flags. Dismissing the sheet does NOT pop its nav stack, so the navigationDestination
+        // isPresented bindings never clear on their own — a stuck `tapAbout`/`tapModelLibrary` would then
+        // re-push the wrong screen the next time Preferences opens (device-found 2026-08-01).
+        .onChange(of: showingPreferences) { _, isShowing in
+            if !isShowing { bridge.tapModelLibrary = false; bridge.tapAbout = false }
+        }
         // Human-parity "return to capture": dropping `showingPreferences` dismisses Preferences and any
         // Model Library pushed inside it, landing on the bare capture screen — exactly what tapping Done
         // does. `StatusFeedView` honors the same flag for the Dark Room. Cleared here (the always-present
