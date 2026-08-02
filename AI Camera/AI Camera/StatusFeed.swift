@@ -77,7 +77,18 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
                                        text: "Cooling down…",
                                        tap: .openDarkRoom)
 
-    /// State 2 — developing N: shots actively in the bath. A spinner, no icon, echoing the toast
+    /// State 2 - mixing the developer: the hand is loading before the first draw step. On a normal
+    /// shot this is a beat; on the FIRST-ever Core ML draw it is the one-time ~190 s Neural-Engine
+    /// compile, which would otherwise sit under a plain "Developing" and read as a hang. A flask, in
+    /// character with the darkroom metaphor, tells the user this is one-time setup, not a stall. It
+    /// flips to "Developing" the instant the first denoising step fires. Ranks just under cooling and
+    /// paused, above the plain developing count (it IS the develop, in its setup phase).
+    static let mixing = StatusMessage(kind: .darkRoom,
+                                      icon: "flask.fill",
+                                      text: "Mixing the developer…",
+                                      tap: .openDarkRoom)
+
+    /// State 3 — developing N: shots actively in the bath. A spinner, no icon, echoing the toast
     /// Mark called "beautiful and understated." Singular when there's one.
     static func developing(count: Int) -> StatusMessage {
         StatusMessage(kind: .darkRoom,

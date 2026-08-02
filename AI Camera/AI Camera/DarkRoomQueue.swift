@@ -160,6 +160,7 @@ nonisolated enum ShotStatus: String, Codable, Sendable {
 /// Every other shot's row is derived without this: `waiting` if pending, `blocked` if blocked.
 nonisolated enum DevelopStage: String, Sendable {
     case seeing    // the eye is reading the photograph (frame 2)
+    case mixing    // the hand is loading/compiling, before the first draw step ("Mixing the developer")
     case drawing   // the hand is drawing from the words (frame 3)
     case saving    // compositing the frames and writing to Photos
 }
@@ -380,7 +381,10 @@ final class DarkRoomWorker {
     /// screen reads these to show "seeing / drawing / saving" on that one row; every other row is
     /// derived from its own status (waiting or blocked). `nil` when nothing is developing.
     private(set) var currentShotID: UUID? = nil
-    private(set) var currentStage: DevelopStage? = nil
+    /// The stage of the shot developing right now. `didSet` mirrors into the pill because the "Mixing
+    /// the developer" state is a stage (the hand loading before its first draw step), so a stage change
+    /// can change which pill shows even when the counts don't move.
+    private(set) var currentStage: DevelopStage? = nil { didSet { syncStatusFeed() } }
 
     /// True while the app is backgrounded. The worker stops pulling new shots and, after the
     /// operation already in flight finishes (inside iOS's grace window), abandons that shot WITHOUT
@@ -425,6 +429,10 @@ final class DarkRoomWorker {
             StatusFeed.shared.publish(.cooling)
         } else if isPaused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.paused)
+        } else if developingCount > 0 && currentStage == .mixing {
+            // The hand is loading/compiling before its first draw step - "Mixing the developer"
+            // (the one-time Core ML compile lands here, so a long setup reads as setup, not a hang).
+            StatusFeed.shared.publish(.mixing)
         } else if developingCount > 0 {
             StatusFeed.shared.publish(.developing(count: developingCount))
         } else if blockedCount > 0 {
@@ -432,6 +440,21 @@ final class DarkRoomWorker {
         } else {
             StatusFeed.shared.clear(.darkRoom)
         }
+    }
+
+    /// Called by the hand (through `Shot.seeThenDraw`) the instant its first denoising step fires:
+    /// the load and any one-time Neural-Engine compile are done and the image is now forming, so flip
+    /// the pill from "Mixing the developer" to "Developing". Guarded to the mixing phase, so it is a
+    /// no-op otherwise - including the `/shoot` and live-shutter paths, which never enter `.mixing`.
+    func noteDrawingStarted() {
+        if currentStage == .mixing { currentStage = .drawing }
+    }
+
+    /// A `nonisolated` entry point the hand's off-actor first-step callback can call without capturing
+    /// any main-actor state: it hops to the main actor and flips the stage. (The hop lives in a function
+    /// body, not a returning closure, so `Task {}`'s init isn't ambiguous.)
+    nonisolated static func signalDrawingStarted() {
+        Task { @MainActor in shared.noteDrawingStarted() }
     }
 
     /// Begin developing if not already, and mark that there is new work. Idempotent; cheap to

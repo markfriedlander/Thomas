@@ -233,6 +233,7 @@ private struct DarkRoomRow: View {
         guard isDeveloping else { return "Waiting" }
         switch worker.currentStage {
         case .seeing?:  return "Seeing…"
+        case .mixing?:  return "Mixing the developer…"
         case .drawing?: return "Drawing…"
         case .saving?:  return "Saving…"
         case .none:     return "Developing…"

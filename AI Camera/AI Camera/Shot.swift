@@ -173,7 +173,12 @@ enum Shot {
         // Frame 2 is over. Let the eye go before either hand arrives — both engines load into a
         // freed device (Mark's rule: no overhead carried between frames).
         await MLXEyeLoader.shared.unload()
-        onStage?(.drawing)
+        // The hand now LOADS (and, on its first-ever Core ML draw, compiles for the Neural Engine).
+        // That is the "Mixing the developer" phase (set via onStage, so only the worker path shows it in
+        // the pill); it flips to "Developing" when the first denoising step fires below.
+        // `signalDrawingStarted()` is a no-op off the worker path (nothing is in `.mixing` there), so it
+        // is safe to wire unconditionally.
+        onStage?(.mixing)
 
         // How big to save it, and with which upscaler — from the frozen config. The step count and
         // the drawer id are frozen too, so a queued shot develops exactly as it was taken.
@@ -200,7 +205,8 @@ enum Shot {
                 var drawing = Drawing.spec(for: drawerID) ?? .sdTurbo
                 drawing.steps = steps      // the frozen step-knob value overrides the recipe default
                 drawn = try await DrawerLoader.shared.draw(
-                    drawing, prompt: prompt, decoderPreference: config.decoderChoice)
+                    drawing, prompt: prompt, decoderPreference: config.decoderChoice,
+                    onStep: { step, _ in if step == 1 { DarkRoomWorker.signalDrawingStarted() } })
                 // Tear it down BEFORE upscaling, so the upscale (GPU too) runs with the drawer's
                 // memory already returned. (The drawer also tears itself down in `draw`'s `defer`.)
                 await DrawerLoader.shared.unload()
@@ -209,7 +215,8 @@ enum Shot {
                 // CoreMLDrawer) — there is no separate unload to call. The `decoderChoice`
                 // (VAE vs TAESD) is MLX-only; CoreML decodes inside its own package.
                 drawn = try await CoreMLDrawer.shared.draw(
-                    repoID: drawerID, prompt: prompt, steps: steps)
+                    repoID: drawerID, prompt: prompt, steps: steps,
+                    onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             }
             // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
             // returns the model's own resolution (512²) unchanged.
@@ -247,14 +254,16 @@ enum Shot {
 
         // No eye was ever loaded this shot, but keep the teardown uniform before the hand loads.
         await MLXEyeLoader.shared.unload()
-        onStage?(.drawing)
+        // Same "Mixing the developer" -> "Developing" flip as the normal chain (see seeThenDraw).
+        onStage?(.mixing)
         do {
             let drawn = try await CoreMLDrawer.shared.draw(
                 repoID: drawerID,
                 prompt: handWords,
                 steps: config.effectiveDrawSteps,
                 startingImage: photograph,
-                strength: Float(config.effectiveHandStrength))
+                strength: Float(config.effectiveHandStrength),
+                onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             let sized = Upscaler.enlarge(drawn, to: config.drawingSize, method: config.upscaler)
             return (perception, UIImage(cgImage: sized), handWords)
         } catch {

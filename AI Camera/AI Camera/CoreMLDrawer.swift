@@ -124,7 +124,8 @@ actor CoreMLDrawer {
     ///     Clamped below 1.0 because the package treats strength ≥ 1.0 as "ignore the image." Unused
     ///     when `startingImage` is nil.
     func draw(repoID: String, prompt: String, steps: Int,
-              startingImage: CGImage? = nil, strength: Float = 1.0) async throws -> CGImage {
+              startingImage: CGImage? = nil, strength: Float = 1.0,
+              onFirstStep: (@Sendable () -> Void)? = nil) async throws -> CGImage {
         let dir = Self.resourcesDir(for: repoID)
         guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("Unet.mlmodelc").path) else {
             throw CoreMLDrawError.notInstalled(repoID)
@@ -193,6 +194,9 @@ actor CoreMLDrawer {
         var stepN = 0
         let images = try pipeline.generateImages(configuration: config) { _ in
             stepN += 1
+            // The first step firing means load + the (one-time) Neural-Engine compile are done and the
+            // image is now forming - flip the pill from "Mixing the developer" to "Developing".
+            if stepN == 1 { onFirstStep?() }
             cameraLog("COREML: step \(stepN) at \(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB()))")
             return true
         }
