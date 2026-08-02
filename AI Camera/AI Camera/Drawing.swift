@@ -532,7 +532,7 @@ enum DrawingError: LocalizedError {
         case .wrongKind:
             return "The drawer loaded, but not as something that can draw from text."
         case .producedNothing:
-            return "The drawing finished with no image. That shouldn't happen — check the step count."
+            return "The drawing finished with no image. That shouldn't happen - check the step count."
         case .drawFailed(let message):
             return message
         }

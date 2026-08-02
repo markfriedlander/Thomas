@@ -167,6 +167,17 @@ struct CameraView: View {
             // Open Preferences; leave the flag set so Preferences pushes the library and clears it.
             if want { showingPreferences = true }
         }
+        // Human-parity "return to capture": dropping `showingPreferences` dismisses Preferences and any
+        // Model Library pushed inside it, landing on the bare capture screen — exactly what tapping Done
+        // does. `StatusFeedView` honors the same flag for the Dark Room. Cleared here (the always-present
+        // root); the guarded `want` means the clear can't re-trigger either observer.
+        .onChange(of: bridge.dismissToCapture) { _, want in
+            if want { showingPreferences = false; bridge.dismissToCapture = false }
+        }
+        // Human-parity: the antenna's photos verb taps the Photos glyph — the same `openPhotos()`.
+        .onChange(of: bridge.tapPhotos) { _, want in
+            if want { openPhotos(); bridge.tapPhotos = false }
+        }
 #endif
     }
 

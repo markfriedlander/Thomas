@@ -100,10 +100,10 @@ struct AboutView: View {
     let acknowledgements: [Acknowledgement]
 
     private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
     }
     private var build: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "-"
     }
 
     /// Grouped by license so identical terms sit together (all the MIT projects,
@@ -186,7 +186,7 @@ struct AboutView: View {
                 } header: {
                     Text("Models in use")
                 } footer: {
-                    Text("The machines \(appName) is actually running right now, and the terms they're used under. A model that's installed but not selected doesn't appear here — it isn't being used, so its terms don't apply.")
+                    Text("The machines \(appName) is actually running right now, and the terms they're used under. A model that's installed but not selected doesn't appear here - it isn't being used, so its terms don't apply.")
                 }
             }
 

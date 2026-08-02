@@ -200,6 +200,15 @@ struct StatusFeedView: View {
         .onChange(of: antennaBridge.tapDarkRoom) { _, want in
             if want { showingDarkRoom = true; antennaBridge.tapDarkRoom = false }
         }
+        // Human-parity "return to capture": drop the Dark Room the way its own Done does. `CameraView`
+        // honors the same flag for Preferences and clears it (this closes only the sheet we own).
+        .onChange(of: antennaBridge.dismissToCapture) { _, want in
+            if want { showingDarkRoom = false }
+        }
+        // Human-parity: the antenna's privacy verb opens the popover through the lock's own state.
+        .onChange(of: antennaBridge.tapPrivacyLock) { _, want in
+            if want { showingPrivacy = true; antennaBridge.tapPrivacyLock = false }
+        }
         #endif
     }
 

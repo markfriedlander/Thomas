@@ -536,10 +536,25 @@ final class DarkRoomWorker {
     /// (leaving the shot on disk for the next kick) only if a save fails, so we never spin re-
     /// developing an unsaveable shot.
     private func loop() async {
+        // ⭐ Keep the screen awake for the ENTIRE draining session — across the eye, the hand (either
+        // engine), and the settle/cool waits between. A develop whose non-CoreML phases outran the
+        // phone's auto-lock timer, with no one touching the screen, let the screen sleep, which
+        // backgrounds and SUSPENDS the app mid-develop (the "backgrounding drop" seen 2026-08-01: the
+        // antenna froze / curl timed out, and it recovered only on foreground). The shot itself is safe
+        // — it is abandoned WITHOUT a partial save and redone whole on the next foreground kick — but
+        // developing stalls and the app looks dead. The keep-awake used to wrap only the CoreML draw
+        // (CoreMLDrawer), which left the eye phase and the MLX draw unprotected; hoisting it here covers
+        // every phase and every engine. Cleared in the defer, so once the queue drains the screen sleeps
+        // normally. (App-level lifecycle still owns the real background transition; this only stops the
+        // screen from putting us there while a develop is in flight.)
+        UIApplication.shared.isIdleTimerDisabled = true
         // Note: the counts are NOT reset here. The loop's last pass sets them to the true store
         // depth (0 developing when drained, but blockedCount stays > 0 if shots are held), so the
         // "N blocked" pill survives the loop exiting. Only the transient develop state is cleared.
-        defer { running = false; isCoolingDown = false; currentShotID = nil; currentStage = nil }
+        defer {
+            running = false; isCoolingDown = false; currentShotID = nil; currentStage = nil
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
         while dirty && !suspended && !isPaused {
             dirty = false
             while !suspended && !isPaused {

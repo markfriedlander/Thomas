@@ -351,7 +351,7 @@ struct Preset: Identifiable {
         ),
         Preset(
             name: "Close Reader",
-            note: "Pushes for detail — texture, edges, small things. Where naming breaks down.",
+            note: "Pushes for detail - texture, edges, small things. Where naming breaks down.",
             systemPrompt: """
                 You are the eye of a camera. Report the small things.
 
@@ -462,7 +462,7 @@ struct PreferencesView: View {
             .alert("Why can't I change this line?", isPresented: $showingLayerOneInfo) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("This keeps the eye's description short enough for the hand to draw from — the drawing model can only read about seventy-five words, and a longer description used to crash the camera. It's locked so it can't be removed by accident. Everything below it is yours.")
+                Text("This keeps the eye's description short enough for the hand to draw from - the drawing model can only read about seventy-five words, and a longer description used to crash the camera. It's locked so it can't be removed by accident. Everything below it is yours.")
             }
             .navigationTitle("Preferences")
             .navigationBarTitleDisplayMode(.inline)
@@ -499,7 +499,7 @@ struct PreferencesView: View {
         } header: {
             Text("Location")
         } footer: {
-            Text("The footer stamps where a shot was taken. Normally that's a place name (\"Los Angeles, CA\"), looked up by sending the coordinate to Apple's mapping service. Turn this on to stamp raw latitude and longitude instead — no lookup, no network call — so with a downloaded local eye and hand, nothing about the shot leaves your phone.")
+            Text("The footer stamps where a shot was taken. Normally that's a place name (\"Los Angeles, CA\"), looked up by sending the coordinate to Apple's mapping service. Turn this on to stamp raw latitude and longitude instead - no lookup, no network call - so with a downloaded local eye and hand, nothing about the shot leaves your phone.")
         }
     }
 
@@ -567,7 +567,7 @@ struct PreferencesView: View {
         } header: {
             Text("Models")
         } footer: {
-            Text("Download the machines the camera runs on, and choose which eye is loaded. Models are shared with Hal and Posey — anything they've already fetched is here for free.")
+            Text("Download the machines the camera runs on, and choose which eye is loaded. Models are shared with Hal and Posey - anything they've already fetched is here for free.")
         }
     }
 
@@ -591,7 +591,7 @@ struct PreferencesView: View {
         // Was: "Download it in Hal or Posey and it appears here." That stopped being true
         // the moment the library existed, and it was the app admitting it was a parasite on
         // two apps that aren't released.
-        case .mlx:   return "Not downloaded yet — get it in the Model Library."
+        case .mlx:   return "Not downloaded yet - get it in the Model Library."
         }
     }
 
@@ -615,7 +615,7 @@ struct PreferencesView: View {
             }
 
             if !settings.useEye {
-                Text("Silent loop: the eye is off. The hand reads your photograph directly and paints it again — no words in between. Set the instruction and how far it strays below.")
+                Text("Silent loop: the eye is off. The hand reads your photograph directly and paints it again - no words in between. Set the instruction and how far it strays below.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -675,9 +675,9 @@ struct PreferencesView: View {
             }
             }   // end `if settings.useEye`
         } header: {
-            Text("Frame 2 · The Eye — how it sees")
+            Text("Frame 2 · The Eye - how it sees")
         } footer: {
-            Text("The system prompt tells the eye how to describe what it sees. Higher temperature makes it reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific — not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
+            Text("The system prompt tells the eye how to describe what it sees. Higher temperature makes it reach for less likely words. At 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific - not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
         }
         // NOTE: the `.sheet` for presets is on the Form (see `body`), NOT here — attaching it
         // to this Section made it dismiss itself on every re-render.
@@ -729,9 +729,9 @@ struct PreferencesView: View {
                 }
                 Slider(value: $settings.handStrength, in: 0.2...0.9, step: 0.05)
             } header: {
-                Text("Frame 3 · Silent loop — how the hand re-imagines")
+                Text("Frame 3 · Silent loop - how the hand re-imagines")
             } footer: {
-                Text("The instruction nudges the style; the hand still reads your photograph for its shapes and colors. Transform sets how far it strays — low keeps the photo's forms, high reinvents them. Blank instruction is fine — the image alone will steer it.")
+                Text("The instruction nudges the style; the hand still reads your photograph for its shapes and colors. Transform sets how far it strays - low keeps the photo's forms, high reinvents them. Blank instruction is fine - the image alone will steer it.")
             }
         }
     }
@@ -743,7 +743,7 @@ struct PreferencesView: View {
                 .disabled(!DrawerLoader.isAvailable(settings.selectedDrawer))
 
             if !DrawerLoader.isAvailable(settings.selectedDrawer) {
-                Text("\(selectedDrawerModel?.displayName ?? "This hand") isn't downloaded — get it in the Model Library above.")
+                Text("\(selectedDrawerModel?.displayName ?? "This hand") isn't downloaded - get it in the Model Library above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else if settings.drawsThirdFrame {
@@ -796,9 +796,9 @@ struct PreferencesView: View {
             //         .disabled(settings.handPrompt.isEmpty)
             // }
         } header: {
-            Text("Frame 3 · The Hand — how it draws")
+            Text("Frame 3 · The Hand - how it draws")
         } footer: {
-            Text("The hand draws the scene again from the eye's words — it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. More steps mean more detail and a little more time; drawing adds several seconds to a shot.")
+            Text("The hand draws the scene again from the eye's words - it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. More steps mean more detail and a little more time; drawing adds several seconds to a shot.")
         }
     }
 
@@ -931,8 +931,8 @@ struct PreferencesView: View {
                 Text("Frame 3 · Developing the drawing")
             } footer: {
                 Text(settings.decoderChoice == .detailed
-                     ? "Detailed uses the full decoder — sharper, and truer to what the model drew. If your device is low on memory for a shot, Thomas quietly switches that one to Fast so the drawing still finishes instead of failing."
-                     : "Fast uses a tiny, low-memory decoder — softer and less detailed, but it draws in almost any conditions. On a dreamy re-imagining, the softness can read as intentional.")
+                     ? "Detailed uses the full decoder - sharper, and truer to what the model drew. If your device is low on memory for a shot, Thomas quietly switches that one to Fast so the drawing still finishes instead of failing."
+                     : "Fast uses a tiny, low-memory decoder - softer and less detailed, but it draws in almost any conditions. On a dreamy re-imagining, the softness can read as intentional.")
             }
         }
     }
@@ -964,8 +964,8 @@ struct PreferencesView: View {
                 Text("Frame 3 · The drawing's size")
             } footer: {
                 Text(settings.drawingSize == .native
-                     ? "The hand draws at 512 pixels — small next to your photograph. Larger sizes enlarge the drawing after it's made, which is quick and doesn't strain memory."
-                     : "MetalFX is Apple's GPU upscaler — sharper, and it falls back to Core Image on any device that doesn't support it. Core Image is softer; on a dreamy re-imagining that can read as intentional. The enlarging happens after the draw, so it costs no extra memory.")
+                     ? "The hand draws at 512 pixels - small next to your photograph. Larger sizes enlarge the drawing after it's made, which is quick and doesn't strain memory."
+                     : "MetalFX is Apple's GPU upscaler - sharper, and it falls back to Core Image on any device that doesn't support it. Core Image is softer; on a dreamy re-imagining that can read as intentional. The enlarging happens after the draw, so it costs no extra memory.")
             }
         }
     }
@@ -1019,7 +1019,7 @@ struct PreferencesView: View {
         } header: {
             Text("Layout")
         } footer: {
-            Text("Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo — or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych stitches all three frames into one plate. Separate saves each as its own file. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
+            Text("Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo - or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych stitches all three frames into one plate. Separate saves each as its own file. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
         }
     }
 }

@@ -302,7 +302,7 @@ nonisolated func memoryRefusalMessage(
         ? "an unknown amount"
         : String(format: "%.1f GB", availableMB / 1024.0)
     let requiredStr = String(format: "%.1f GB", requiredMB / 1024.0)
-    return "Not enough memory to load \(modelName) right now. It needs roughly \(requiredStr) but only \(availableStr) is available. Try closing other apps, or give iOS a moment — it reclaims memory lazily after a model is released."
+    return "Not enough memory to load \(modelName) right now. It needs roughly \(requiredStr) but only \(availableStr) is available. Try closing other apps, or give iOS a moment - it reclaims memory lazily after a model is released."
 }
 
 // ==== LEGO END: 22 ProcessMemoryGuard (Load-Time Memory Headroom) ====

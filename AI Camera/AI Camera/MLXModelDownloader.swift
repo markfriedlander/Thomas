@@ -1667,7 +1667,7 @@ class MLXModelDownloader: ObservableObject {
                     if var state = self.downloadStates[modelID] {
                         state.isDownloading = false
                         state.error = error.localizedDescription
-                        state.message = "Download failed — will retry next launch."
+                        state.message = "Download failed - will retry next launch."
                         state.progress = 0.0
                         self.downloadStates[modelID] = state
                     }
@@ -1745,7 +1745,7 @@ class MLXModelDownloader: ObservableObject {
                 if expectedBytes > 0 {
                     let frac = min(0.99, Double(size) / Double(expectedBytes))
                     state.progress = frac
-                    state.message = "Downloading in \(SharedModelStore.displayName(forAppID: holder)) — \(Int(frac * 100))%…"
+                    state.message = "Downloading in \(SharedModelStore.displayName(forAppID: holder)) - \(Int(frac * 100))%…"
                 } else {
                     state.message = "Downloading in \(SharedModelStore.displayName(forAppID: holder))…"
                 }

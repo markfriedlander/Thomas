@@ -816,7 +816,10 @@ extension LocalAPIServer {
     /// each view onstage as its own sheet — a false path no human ever produced (Model Library, especially,
     /// lives INSIDE Preferences, never as a lone sheet over the viewfinder).
     ///
-    ///   X-Screen: preferences | darkroom | modellibrary
+    ///   X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos
+    /// (`capture` backs all the way out to the bare capture screen, the way tapping Done does — so the
+    /// antenna can return home, not only open interior screens. `privacy` taps the lock to reveal its
+    /// popover; `photos` taps the Photos glyph, which leaves for the system Photos app.)
     private func handleOpen(_ req: ParsedRequest) async -> (Int, String) {
         let screen = (req.headers["x-screen"] ?? "").lowercased()
         let bridge = AntennaUIBridge.shared
@@ -833,8 +836,20 @@ extension LocalAPIServer {
             bridge.tapModelLibrary = true
             return (200, json(["screen": "modellibrary", "opened": true,
                                "message": "Opened Preferences and pushed the Model Library, the way tapping Browse Model Library does. Screenshot with devicectl."]))
+        case "capture", "camera", "home":
+            bridge.dismissToCapture = true
+            return (200, json(["screen": "capture", "opened": true,
+                               "message": "Backed out to the bare capture screen the way tapping Done does. Screenshot with devicectl."]))
+        case "privacy", "lock":
+            bridge.tapPrivacyLock = true
+            return (200, json(["screen": "privacy", "opened": true,
+                               "message": "Tapped the privacy lock; its popover is showing on the capture screen. Screenshot with devicectl. (The lock lives on the capture screen - open there first.)"]))
+        case "photos":
+            bridge.tapPhotos = true
+            return (200, json(["screen": "photos", "opened": true,
+                               "message": "Tapped the Photos glyph, which opens the system Photos app (leaves the camera, same as a human tap)."]))
         default:
-            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary"}"#)
+            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos"}"#)
         }
     }
 
@@ -1474,7 +1489,7 @@ extension LocalAPIServer {
                 "deleted":  false,
                 "claimedByThisApp": false,
                 "claimants": SharedModelStore.claimants(modelID: key),
-                "message":  "AI Camera has no claim on \(repoID). Refusing — a model this app never adopted is not this app's to delete."
+                "message":  "AI Camera has no claim on \(repoID). Refusing - a model this app never adopted is not this app's to delete."
             ]))
         }
 

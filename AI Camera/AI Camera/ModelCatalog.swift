@@ -296,7 +296,7 @@ nonisolated enum ModelCatalog {
         job: .seeing,
         delivery: .builtIn,
         sizeGB: nil,
-        blurb: "On the phone already — nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
+        blurb: "On the phone already - nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
         licence: nil,
         // The shared gentle brevity line — the one it uses today. Behaves well within it.
         layerOnePrompt: PromptLayers.brevity,
@@ -389,8 +389,8 @@ nonisolated enum ModelCatalog {
             "tokenizer/merges.txt",
         ]),
         sizeGB: 2.40,
-        blurb: "Draws the third frame — the machine's re-imagining, made from its own words. Never sees your photograph; it only reads what the eye said about it.",
-        licence: "Stability AI Community License — free under $1M revenue",
+        blurb: "Draws the third frame - the machine's re-imagining, made from its own words. Never sees your photograph; it only reads what the eye said about it.",
+        licence: "Stability AI Community License - free under $1M revenue",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
         layerOnePrompt: nil,
         engine: .mlx,
@@ -424,7 +424,7 @@ nonisolated enum ModelCatalog {
         job: .drawing,
         delivery: .folder("split_einsum_v2/compiled/"),
         sizeGB: 1.14,
-        blurb: "Draws the third frame on the Neural Engine — Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing.",
+        blurb: "Draws the third frame on the Neural Engine - Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing.",
         licence: "CreativeML OpenRAIL++-M",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
         layerOnePrompt: nil,
@@ -521,7 +521,18 @@ final class ModelCatalogService {
         NotificationCenter.default.addObserver(
             forName: .mlxModelDidDownload, object: nil, queue: nil
         ) { _ in
-            Task { @MainActor in ModelCatalogService.shared.refreshDownloadStates() }
+            Task { @MainActor in
+                ModelCatalogService.shared.refreshDownloadStates()
+                // A just-landed model may unblock queued shots that were waiting for it, so nudge the
+                // dark room here too. This is APP-LEVEL, so it fires no matter which screen is showing.
+                // Before, the only worker kick on a completed download lived in `ModelLibraryView`
+                // (onReceive/onDisappear) plus the app `.active` foreground, so a download that finished
+                // while the user was on the capture screen left blocked shots blocked until the next
+                // foreground (device-found 2026-08-01: an antenna download from the capture screen did
+                // not auto-unblock). `kick()` is idempotent, so the library's own kick still standing is
+                // harmless.
+                DarkRoomWorker.shared.kick()
+            }
         }
         cameraLog("CATALOG: ModelCatalogService initialized with \(availableModels.count) models; refreshed download states from disk.")
     }

@@ -134,12 +134,12 @@ actor CoreMLDrawer {
         busy = true
         defer { busy = false }
 
-        // Keep the screen awake for the duration of THIS draw only (defer restores it). The first
-        // draw's Neural-Engine compile is long (~190 s); a foregrounded user shouldn't have the
-        // screen lock and let the OS suspend the compile out from under the shot. Scoped, so a
-        // normal ~11 s draw doesn't hold the screen open any longer than it runs.
-        await MainActor.run { UIApplication.shared.isIdleTimerDisabled = true }
-        defer { Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = false } }
+        // Keeping the screen awake is now owned by `DarkRoomWorker.loop()`, which wraps the WHOLE
+        // develop — this draw, the eye phase before it, and the settle waits between — so the long
+        // non-CoreML phases can't let the screen sleep and suspend the app mid-develop either (the
+        // 2026-08-01 backgrounding drop; the guard used to live only here, around the CoreML draw). A
+        // standalone diagnostic call straight to this drawer (antenna /draw) runs without that guard,
+        // which is fine: it is not the user path, and the user path always comes through the worker.
 
         let started = Date()
         let availBefore = processAvailableMemoryMB()
@@ -232,7 +232,7 @@ enum CoreMLDrawError: LocalizedError {
         case .notInstalled(let repo):
             return "\(repo) isn't downloaded yet. Get it in Preferences → Models → Browse Model Library."
         case .producedNothing:
-            return "The Neural-Engine drawing finished with no image. That shouldn't happen — check the step count."
+            return "The Neural-Engine drawing finished with no image. That shouldn't happen - check the step count."
         }
     }
 }

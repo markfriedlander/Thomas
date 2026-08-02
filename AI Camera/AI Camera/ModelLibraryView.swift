@@ -111,7 +111,7 @@ struct ModelLibraryView: View {
                 // went. Mark's rule for the store, verbatim: "Deleting a model from an app
                 // does not delete it from the repository. Deleting it from the last
                 // remaining app to have it in use deletes it from the repository."
-                Text("Models are shared with Hal and Posey. Deleting one here gives up this camera's claim on it — the files are removed only when no other app is still using them.")
+                Text("Models are shared with Hal and Posey. Deleting one here gives up this camera's claim on it - the files are removed only when no other app is still using them.")
                     .font(.caption2)
             }
         }
@@ -264,7 +264,7 @@ struct ModelLibraryView: View {
         // Warn if shots in the dark room still need this model — they aren't lost, they pause.
         if let n = queuedUsage[model.id], n > 0 {
             message += "\n\n\(n) shot\(n == 1 ? "" : "s") still waiting to develop use this. "
-                + "\(n == 1 ? "It" : "They") will pause — shown as \u{201C}Needs \(model.displayName)\u{201D} in the Dark Room — until you download it again."
+                + "\(n == 1 ? "It" : "They") will pause - shown as \u{201C}Needs \(model.displayName)\u{201D} in the Dark Room - until you download it again."
         }
         return message
     }
@@ -778,6 +778,18 @@ struct ModelLicenseSheet: View {
     /// `CameraView` opens Preferences; `PreferencesView` pushes the library onto its own nav stack while
     /// this stays true, and clears it when the library is popped.
     var tapModelLibrary = false
+    /// = tapping "Done" / backing all the way out to the bare capture screen. Both presenters observe it:
+    /// `CameraView` drops `showingPreferences` (which also drops any Model Library pushed inside it) and
+    /// `StatusFeedView` drops `showingDarkRoom`, exactly as the Done button / a back-swipe does. Without
+    /// this the antenna could open interior screens but never return to capture — below human parity.
+    var dismissToCapture = false
+    /// = tapping the privacy lock capsule to reveal the popover. `StatusFeedView` mirrors this into its
+    /// real `showingPrivacy`, exactly as tapping the lock does, so the antenna can open (and screenshot)
+    /// the privacy explanation a human sees.
+    var tapPrivacyLock = false
+    /// = tapping the Photos glyph, which opens the system Photos app. `CameraView` calls the same
+    /// `openPhotos()` the button calls. A human can leave to Photos; so can the antenna.
+    var tapPhotos = false
 }
 #endif
 
