@@ -68,11 +68,12 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
     // the worker publishes exactly one at a time by precedence (cooling > developing > blocked),
     // and clears the family when there is nothing to report so the pill disappears.
 
-    /// State 1 — cooling down: the queue is holding until the phone cools. A snowflake, not a
-    /// spinner, because this is a deliberate pause, not active work. Highest precedence: when the
-    /// phone is hot this is *why* nothing is progressing, so it speaks over the count.
+    /// State 1 - cooling down: the queue is holding until the phone cools. A thermometer, not a
+    /// spinner, because this is a deliberate pause, not active work; the thermometer (rather than a
+    /// snowflake) keeps it consistent with Hal's thermal indicator across the studio. Highest
+    /// precedence: when the phone is hot this is *why* nothing is progressing, so it speaks over the count.
     static let cooling = StatusMessage(kind: .darkRoom,
-                                       icon: "snowflake",
+                                       icon: "thermometer.high",
                                        text: "Cooling down…",
                                        tap: .openDarkRoom)
 

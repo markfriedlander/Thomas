@@ -19,10 +19,10 @@
 //  `.cpuAndNeuralEngine` is not a knob to soften when it's inconvenient — it is the entire reason
 //  to run CoreML here (efficiency, heat, memory). The one price it charges: the FIRST draw after
 //  install compiles the model for this exact device's Neural Engine — a one-time ~190 s cost, its
-//  result cached by the OS outside our sandbox, so every later draw pays only the fast ~11 s. That
-//  compile is why a draw keeps the screen awake while it runs (below): a foregrounded user carries
-//  it to completion instead of the OS suspending us mid-compile. (A future improvement, parked in
-//  NEXT: warm that compile at install/selection rather than on the first shot.)
+//  result cached by the OS outside our sandbox, so every later draw pays only the fast ~11 s. We do
+//  NOT keep the screen awake for that compile (Mark, 2026-08-01: never hijack the user's sleep); if
+//  sleep interrupts it, the shot is redone whole on the next foreground. (A future improvement, parked
+//  in NEXT: warm that compile at install/selection rather than on the first shot.)
 //
 //  ── Same discipline as the MLX hand ──
 //
@@ -134,12 +134,12 @@ actor CoreMLDrawer {
         busy = true
         defer { busy = false }
 
-        // Keeping the screen awake is now owned by `DarkRoomWorker.loop()`, which wraps the WHOLE
-        // develop — this draw, the eye phase before it, and the settle waits between — so the long
-        // non-CoreML phases can't let the screen sleep and suspend the app mid-develop either (the
-        // 2026-08-01 backgrounding drop; the guard used to live only here, around the CoreML draw). A
-        // standalone diagnostic call straight to this drawer (antenna /draw) runs without that guard,
-        // which is fine: it is not the user path, and the user path always comes through the worker.
+        // We deliberately do NOT keep the screen awake, not even for the long first-run compile
+        // (Mark, 2026-08-01): the app must not hijack the user's control over sleeping their phone. If
+        // the screen sleeps mid-compile the app backgrounds, the develop is abandoned at a safe boundary
+        // WITHOUT a partial save, and foregrounding re-develops the shot whole (steps are atomic). The
+        // cost is that a first-run compile interrupted by sleep is redone on the next foreground; that
+        // trade is intentional - respecting sleep wins.
 
         let started = Date()
         let availBefore = processAvailableMemoryMB()
