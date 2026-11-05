@@ -87,6 +87,22 @@ struct CameraView: View {
             if lens.isAuthorized {
                 Viewfinder(lens: lens)
                     .ignoresSafeArea()
+#if DEBUG
+                    // Screenshot still (see `AntennaUIBridge.viewfinderStill`). Under the square guide and
+                    // all chrome, exactly where the live preview sits, so the screenshot is the real screen.
+                    // GeometryReader + ignoresSafeArea so the still fills edge to edge; a bare Image
+                    // here stopped short of the top edge and let the live sensor show through.
+                    .overlay {
+                        if let still = bridge.viewfinderStill {
+                            GeometryReader { geo in
+                                Image(uiImage: still).resizable().scaledToFill()
+                                    .frame(width: geo.size.width, height: geo.size.height)
+                                    .clipped()
+                            }
+                            .ignoresSafeArea()
+                        }
+                    }
+#endif
                     // The square framing guide, only for the square-format layouts (Triptych,
                     // Separate — square). It shows the centred square the shot will be cropped
                     // to, so you frame for it — see `squareGuide`.

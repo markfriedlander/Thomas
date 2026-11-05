@@ -809,6 +809,13 @@ struct ModelLicenseSheet: View {
     /// = tapping "About Thomas" in Preferences. `PreferencesView` pushes `AboutView` onto its own nav
     /// stack, the same push the row does. Cleared when the About screen is popped.
     var tapAbout = false
+    /// A still photograph shown IN the viewfinder in place of the live sensor, for App Store screenshots
+    /// (Mark, 2026-11-05: "make us look as good as possible"). The July store shots were mockups with the
+    /// chrome redrawn by a script, and they went stale when the real buttons changed. With this, a
+    /// `devicectl` screenshot captures the app's REAL chrome, shutter and Dynamic Island over one of Mark's
+    /// own photographs (compositing a real scene is fine; inventing UI is not, per the July ruling). It only
+    /// covers the preview: pressing the shutter still captures the live sensor. Set by `POST /viewfinder`.
+    var viewfinderStill: UIImage? = nil
 }
 #endif
 

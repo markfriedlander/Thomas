@@ -327,6 +327,7 @@ extension LocalAPIServer {
         case ("POST", "/flip"):            return await handleFlip(req)
         case ("POST", "/license"):         return await handleLicense(req)
         case ("POST", "/open"):            return await handleOpen(req)
+        case ("POST", "/viewfinder"):      return await handleViewfinder(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
@@ -812,6 +813,25 @@ extension LocalAPIServer {
             return (200, json(["repo": repoID, "action": "show", "presented": true,
                                "message": "Presenting \(model.displayName)'s license sheet on the capture screen. Screenshot it, then POST /license with X-Action: accept."]))
         }
+    }
+
+    /// POST /viewfinder: show a still photograph in the viewfinder instead of the live sensor, for App
+    /// Store screenshots taken with `devicectl` (real chrome, real Dynamic Island, one of Mark's photos).
+    /// Body = image bytes (JPEG/PNG/HEIC). `X-Action: clear` (or an empty body) puts the live camera back.
+    /// The shutter is untouched: a press still captures the sensor. See `AntennaUIBridge.viewfinderStill`.
+    private func handleViewfinder(_ req: ParsedRequest) async -> (Int, String) {
+        let clear = (req.headers["x-action"] ?? "").lowercased() == "clear"
+        if clear || req.bodyData == nil {
+            AntennaUIBridge.shared.viewfinderStill = nil
+            return (200, json(["viewfinder": "live", "message": "Live camera restored."]))
+        }
+        guard let data = req.bodyData, let image = UIImage(data: data) else {
+            return (400, #"{"error":"POST image bytes (JPEG/PNG/HEIC), or X-Action: clear"}"#)
+        }
+        AntennaUIBridge.shared.viewfinderStill = image
+        return (200, json(["viewfinder": "still",
+                           "pixels": "\(Int(image.size.width * image.scale))x\(Int(image.size.height * image.scale))",
+                           "message": "Still shown in the viewfinder. Screenshot with devicectl; X-Action: clear to restore."]))
     }
 
     /// POST /open — open one of the app's interior screens the way a human's finger does, then screenshot
