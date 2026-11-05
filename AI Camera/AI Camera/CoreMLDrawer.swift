@@ -125,6 +125,7 @@ actor CoreMLDrawer {
     ///     when `startingImage` is nil.
     func draw(repoID: String, prompt: String, steps: Int,
               startingImage: CGImage? = nil, strength: Float = 1.0,
+              reportsGuess: Bool = false,
               onFirstStep: (@Sendable () -> Void)? = nil) async throws -> CGImage {
         let dir = Self.resourcesDir(for: repoID)
         guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("Unet.mlmodelc").path) else {
@@ -190,9 +191,19 @@ actor CoreMLDrawer {
             cameraLog("COREML: SILENT LOOP (image-to-image) strength=\(config.strength) prompt=\"\(prompt.prefix(60))\"")
         }
 
+        // Developer Tray: keep the engine's REAL in-progress latent from every step. Which one it
+        // reports is the shot's frozen `DevelopView`, a choice between two true things.
+        let trace = DevelopTrace.shared
+        config.useDenoisedIntermediates = reportsGuess
+        trace.begin(prompt: prompt, steps: steps, isGuess: reportsGuess, channelsLast: false,
+                    hand: ModelCatalog.model(id: repoID)?.displayName ?? repoID)
+
         let drawStarted = Date()
         var stepN = 0
-        let images = try pipeline.generateImages(configuration: config) { _ in
+        let images = try pipeline.generateImages(configuration: config) { progress in
+            if let latent = progress.currentLatentSamples.first {
+                trace.record(latent.scalars, shape: latent.shape)
+            }
             stepN += 1
             // The first step firing means load + the (one-time) Neural-Engine compile are done and the
             // image is now forming - flip the pill from "Mixing the developer" to "Developing".

@@ -592,7 +592,8 @@ enum Darkroom {
     /// Place bottom-left, date bottom-right, in the lower bar. Quiet, small, and in the
     /// margin — the way a date-back camera stamped a negative. It is not competing with
     /// the claim; it's the evidence sitting underneath it.
-    private static func drawFooter(place: String?,
+    /// Internal (not private) so the Developer Tray's keepsakes carry the same footer.
+    static func drawFooter(place: String?,
                                    date: Date,
                                    in cg: CGContext,
                                    canvas: CGSize,

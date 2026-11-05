@@ -415,6 +415,10 @@ actor DrawerLoader {
 
         var latent: MLXArray?
         var step = 0
+        // Developer Tray: this hand exposes only its working latent (no best-guess prediction), so the
+        // trace is always the working view here, and says so.
+        DevelopTrace.shared.begin(prompt: prompt, steps: parameters.steps, isGuess: false,
+                                  channelsLast: true, hand: ModelCatalog.model(id: drawing.repoID)?.displayName ?? drawing.repoID)
         var iterator: DenoiseIterator? = generator!.generateLatents(parameters: parameters)
         while let xt = iterator?.next() {
             latent = xt
@@ -422,6 +426,7 @@ actor DrawerLoader {
             // whole diffusion collapses into the final eval and every per-step number is a
             // fiction.
             eval(xt)
+            DevelopTrace.shared.record(xt.asType(.float32).asArray(Float.self), shape: xt.shape)
             step += 1
             onStep?(step, parameters.steps)
             cameraLog("DRAW: step \(step)/\(parameters.steps) at \(String(format: "%.2f", Date().timeIntervalSince(started)))s")

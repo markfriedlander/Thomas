@@ -328,6 +328,7 @@ extension LocalAPIServer {
         case ("POST", "/license"):         return await handleLicense(req)
         case ("POST", "/open"):            return await handleOpen(req)
         case ("POST", "/viewfinder"):      return await handleViewfinder(req)
+        case ("GET",  "/trace"):           return await handleGetTrace(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
@@ -638,6 +639,8 @@ extension LocalAPIServer {
             if let v = obj["upscaler"] as? String, let x = UpscaleMethod(rawValue: v) { s.upscaler = x; changed.append("upscaler=\(v)") }
             if let v = obj["decoderChoice"] as? String, let x = DecoderChoice(rawValue: v) { s.decoderChoice = x; changed.append("decoderChoice=\(v)") }
             if let v = obj["stampRawCoordinates"] as? Bool { s.stampRawCoordinates = v; changed.append("stampRawCoordinates=\(v)") }
+            if let v = (obj["developView"] as? String).flatMap(DevelopView.init) { s.developView = v; changed.append("developView=\(v.rawValue)") }
+            if let v = (obj["developmentKeepsake"] as? String).flatMap(DevelopmentKeepsake.init) { s.developmentKeepsake = v; changed.append("developmentKeepsake=\(v.rawValue)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
                 else if v == "prompt" { s.resetPromptToDefault(); changed.append("reset=prompt") }
@@ -654,6 +657,7 @@ extension LocalAPIServer {
     /// off the actor.
     private struct SettingsSnapshot: Sendable {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
+        let developView, developmentKeepsake: String
         let drawsThirdFrame: Bool
         let stampRawCoordinates: Bool
         let temperature: Double
@@ -677,6 +681,7 @@ extension LocalAPIServer {
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt,
+             "developView": developView, "developmentKeepsake": developmentKeepsake,
              "privacy": ["locked": privacyLocked,
                          "look": privacyLook,
                          "place": privacyPlace,
@@ -702,6 +707,8 @@ extension LocalAPIServer {
             frameTwoShows: s.frameTwoShows.rawValue, drawingSize: s.drawingSize.rawValue,
             upscaler: s.upscaler.rawValue, decoderChoice: s.decoderChoice.rawValue,
             systemPrompt: s.systemPrompt,
+            developView: s.developView.rawValue,
+            developmentKeepsake: s.developmentKeepsake.rawValue,
             drawsThirdFrame: s.drawsThirdFrame,
             stampRawCoordinates: s.stampRawCoordinates,
             temperature: s.temperature,
@@ -815,6 +822,31 @@ extension LocalAPIServer {
         }
     }
 
+    /// GET /trace: the Developer Tray's raw material. The most recent draw's per-step latents, each
+    /// decoded to a picture with TAESD (`DeveloperTray.decode`, the same decode the keepsakes use), in
+    /// step order, as base64 PNGs. Real data only. `mode` says which view was recorded ("working" or
+    /// "guess"); set it with POST /settings {"developView": ...}, the same switch Preferences flips.
+    /// Decodes in the model lane, so it never overlaps a shot. `X-Every: n` keeps every nth step.
+    private func handleGetTrace(_ req: ParsedRequest) async -> (Int, String) {
+        guard let t = DevelopTrace.shared.snapshot(), !t.latents.isEmpty else {
+            return (404, #"{"error":"No trace yet. Develop a shot that draws frame 3 first."}"#)
+        }
+        let every = max(1, Int(req.headers["x-every"] ?? "1") ?? 1)
+        let frames = await ModelLane.shared.run("trace") { DeveloperTray.decode(t, every: every) }
+        guard let frames else { return (500, #"{"error":"Could not decode the trace."}"#) }
+        let pngs = frames.images.compactMap { UIImage(cgImage: $0).pngData()?.base64EncodedString() }
+        return (200, json([
+            "mode": t.isGuess ? "guess" : "working",
+            "hand": t.hand,
+            "prompt": t.prompt,
+            "stepsPlanned": t.steps,
+            "stepsRecorded": t.latents.count,
+            "steps": frames.steps,
+            "latentShape": t.shape,
+            "framesBase64": pngs,
+        ]))
+    }
+
     /// POST /viewfinder: show a still photograph in the viewfinder instead of the live sensor, for App
     /// Store screenshots taken with `devicectl` (real chrome, real Dynamic Island, one of Mark's photos).
     /// Body = image bytes (JPEG/PNG/HEIC). `X-Action: clear` (or an empty body) puts the live camera back.
@@ -852,6 +884,10 @@ extension LocalAPIServer {
         let bridge = AntennaUIBridge.shared
         switch screen {
         case "preferences", "prefs":
+            // Optional X-Section: scroll to that section's id (models, eye, hand, developing, ...).
+            if let section = req.headers["x-section"], !section.isEmpty {
+                bridge.scrollPreferencesTo = section.lowercased()
+            }
             bridge.tapPreferences = true
             return (200, json(["screen": "preferences", "opened": true,
                                "message": "Opened Preferences the way the gear button does. Screenshot with devicectl."]))
@@ -1056,16 +1092,19 @@ extension LocalAPIServer {
     /// wrote to Photos, so it is the honest "look at what the user sees" for the layout audit, with
     /// no Photos read access needed. Empty until at least one shot has developed since launch.
     private func handleDeveloped() async -> (Int, String) {
-        let (frames, layout, id) = await MainActor.run { () -> ([Data], String?, String?) in
+        let (frames, layout, id, videos) = await MainActor.run { () -> ([Data], String?, String?, [Data]) in
             (DarkRoomWorker.shared.lastDevelopedFrames,
              DarkRoomWorker.shared.lastDevelopedLayout,
-             DarkRoomWorker.shared.lastDevelopedID?.uuidString)
+             DarkRoomWorker.shared.lastDevelopedID?.uuidString,
+             DarkRoomWorker.shared.lastDevelopedVideos)
         }
         return (200, json([
             "layout":       layout as Any,
             "shotID":       id as Any,
             "frameCount":   frames.count,
-            "framesBase64": frames.map { $0.base64EncodedString() }
+            "framesBase64": frames.map { $0.base64EncodedString() },
+            "videoCount":   videos.count,
+            "videosBase64": videos.map { $0.base64EncodedString() }
         ]))
     }
 

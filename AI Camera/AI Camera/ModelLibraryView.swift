@@ -816,6 +816,9 @@ struct ModelLicenseSheet: View {
     /// own photographs (compositing a real scene is fine; inventing UI is not, per the July ruling). It only
     /// covers the preview: pressing the shutter still captures the live sensor. Set by `POST /viewfinder`.
     var viewfinderStill: UIImage? = nil
+    /// = scrolling Preferences to a section (its `.id`, e.g. "developing"). Preferences scrolls itself
+    /// and clears this. Set by `POST /open` with `X-Section`.
+    var scrollPreferencesTo: String? = nil
 }
 #endif
 

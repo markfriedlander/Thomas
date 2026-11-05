@@ -38,8 +38,11 @@ enum Shot {
     /// - Returns: `true` only if the assets actually landed in Photos. The dark room queue leans
     ///   on this: a shot is deleted from the durable store ONLY when this returns `true`, so a
     ///   denied permission or a failed write leaves the shot on disk to retry rather than lost.
+    /// `videos` are temp files (the Developer Tray's flipbook), saved after the images in the same
+    /// change block and deleted from temp afterwards either way.
     @discardableResult
-    static func save(_ images: [UIImage]) async -> Bool {
+    static func save(_ images: [UIImage], videos: [URL] = []) async -> Bool {
+        defer { for url in videos { try? FileManager.default.removeItem(at: url) } }
         guard !images.isEmpty else { return false }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { return false }
@@ -49,6 +52,9 @@ enum Shot {
                 // together, in order.
                 for image in images {
                     PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
+                for url in videos {
+                    PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: url, options: nil)
                 }
             }
             return true
@@ -216,6 +222,7 @@ enum Shot {
                 // (VAE vs TAESD) is MLX-only; CoreML decodes inside its own package.
                 drawn = try await CoreMLDrawer.shared.draw(
                     repoID: drawerID, prompt: prompt, steps: steps,
+                    reportsGuess: config.effectiveDevelopView == .guess,
                     onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             }
             // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
@@ -263,6 +270,7 @@ enum Shot {
                 steps: config.effectiveDrawSteps,
                 startingImage: photograph,
                 strength: Float(config.effectiveHandStrength),
+                reportsGuess: config.effectiveDevelopView == .guess,
                 onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             let sized = Upscaler.enlarge(drawn, to: config.drawingSize, method: config.upscaler)
             return (perception, UIImage(cgImage: sized), handWords)

@@ -79,6 +79,10 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var useEye: Bool?
     var handPrompt: String?
     var handStrength: Double?
+    /// Developer Tray (2026-11-05), frozen like everything else. Optional for back-compat: a record
+    /// from before the tray has neither key, and the accessors below read it as working / off.
+    var developView: DevelopView?
+    var developmentKeepsake: DevelopmentKeepsake?
 
     /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
     /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
@@ -94,6 +98,8 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var effectiveUseEye: Bool { useEye ?? true }
     var effectiveHandPrompt: String { handPrompt ?? "" }
     var effectiveHandStrength: Double { handStrength ?? 0.6 }
+    var effectiveDevelopView: DevelopView { developView ?? .working }
+    var effectiveKeepsake: DevelopmentKeepsake { developmentKeepsake ?? .off }
 }
 
 extension ShotConfig {
@@ -124,7 +130,9 @@ extension ShotConfig {
             drawSteps: s.drawSteps(for: s.selectedDrawer),
             useEye: s.useEye,
             handPrompt: s.handPrompt,
-            handStrength: s.handStrength
+            handStrength: s.handStrength,
+            developView: s.developView,
+            developmentKeepsake: s.developmentKeepsake
         )
     }
 }
@@ -377,6 +385,9 @@ final class DarkRoomWorker {
     private(set) var lastDevelopedFrames: [Data] = []
     private(set) var lastDevelopedLayout: String? = nil
     private(set) var lastDevelopedID: UUID? = nil
+    /// The Developer Tray flipbook videos that shot also saved (MP4 bytes), read before `Shot.save`
+    /// deletes their temp files. The contact sheet rides in `lastDevelopedFrames` after the frames.
+    private(set) var lastDevelopedVideos: [Data] = []
     #endif
 
     /// True while the worker is holding a shot because the phone is too hot to develop. The worker
@@ -684,9 +695,39 @@ final class DarkRoomWorker {
         currentStage = .seeing
         let result: (perception: Perception, drawn: UIImage?, wordsForHand: String) =
             await ModelLane.shared.run("darkroom") { @MainActor in
-                await Shot.seeThenDraw(photograph, config: config,
-                                       onStage: { stage in self.currentStage = stage })
+                DevelopTrace.shared.reset()   // a shot that draws nothing must not inherit a trace
+                return await Shot.seeThenDraw(photograph, config: config,
+                                              onStage: { stage in self.currentStage = stage })
             }
+
+        // Developer Tray keepsakes, only when asked for and only when a drawing happened. Decoding the
+        // steps is model work, so it gets its own lane turn; rendering the sheet/video is cheap and
+        // stays out here. Any failure here is logged and the shot still saves: the keepsake is extra.
+        var keepsakeImages: [UIImage] = []
+        var keepsakeVideos: [URL] = []
+        let keepsake = config.effectiveKeepsake
+        if keepsake != .off, result.drawn != nil, !suspended,
+           let trace = DevelopTrace.shared.snapshot() {
+            let frames = await ModelLane.shared.run("keepsake") { DeveloperTray.decode(trace) }
+            if let frames {
+                let final = result.drawn?.cgImage
+                if keepsake.wantsSheet {
+                    keepsakeImages.append(DeveloperTray.contactSheet(frames, final: final,
+                                                                     place: shot.place, date: shot.capturedAt))
+                }
+                if keepsake.wantsFlipbook {
+                    do {
+                        keepsakeVideos.append(try await DeveloperTray.flipbook(frames, final: final,
+                                                                               place: shot.place, date: shot.capturedAt))
+                    } catch {
+                        cameraLog("KEEPSAKE: flipbook failed - \(error.localizedDescription)")
+                    }
+                }
+                cameraLog("KEEPSAKE: \(keepsake.rawValue) from \(frames.images.count) steps (\(frames.viewName))")
+            } else {
+                cameraLog("KEEPSAKE: no trace to decode, skipped")
+            }
+        }
 
         // Interrupted by a background transition while the heavy op ran? Abandon WITHOUT saving —
         // the record is untouched and still pending, so foregrounding redoes the whole shot. This
@@ -712,7 +753,10 @@ final class DarkRoomWorker {
 
         // The invariant's one exit: delete ONLY after Photos confirms the save. Any failure
         // leaves the photo + record on disk to retry.
-        guard await Shot.save(frames) else {
+        #if DEBUG
+        let videoBytes = keepsakeVideos.compactMap { try? Data(contentsOf: $0) }
+        #endif
+        guard await Shot.save(frames + keepsakeImages, videos: keepsakeVideos) else {
             cameraLog("DARKROOM: save failed for shot \(shot.id) — left in queue to retry")
             currentShotID = nil; currentStage = nil
             return false
@@ -721,7 +765,8 @@ final class DarkRoomWorker {
         #if DEBUG
         // Capture exactly what just landed in Photos, so the layout audit can look at the real
         // saved frames (antenna GET /developed) rather than a side-door recomposition.
-        lastDevelopedFrames = frames.compactMap { $0.pngData() }
+        lastDevelopedFrames = (frames + keepsakeImages).compactMap { $0.pngData() }
+        lastDevelopedVideos = videoBytes
         lastDevelopedLayout = config.layout.name
         lastDevelopedID = shot.id
         #endif

@@ -240,6 +240,16 @@ final class Settings {
     var stampRawCoordinates: Bool {
         didSet { store(stampRawCoordinates, "stampRawCoordinates") }
     }
+    /// Developer Tray: which real view of the drawing a shot records, the working image or the
+    /// engine's best guess (Mark, 2026-11-05: a switch, never both at once). Frozen per shot.
+    var developView: DevelopView {
+        didSet { store(developView.rawValue, "developView") }
+    }
+    /// Developer Tray: what a shot also saves to Photos about its own development. Default off, so a
+    /// shot does no extra work unless asked (Mark's rule: no needless processing, all options).
+    var developmentKeepsake: DevelopmentKeepsake {
+        didSet { store(developmentKeepsake.rawValue, "developmentKeepsake") }
+    }
 
     private init() {
         let d = UserDefaults.standard
@@ -259,6 +269,8 @@ final class Settings {
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
         decoderChoice = DecoderChoice(rawValue: d.string(forKey: "decoderChoice") ?? "") ?? .detailed
         stampRawCoordinates = d.bool(forKey: "stampRawCoordinates")   // default false
+        developView = DevelopView(rawValue: d.string(forKey: "developView") ?? "") ?? .working
+        developmentKeepsake = DevelopmentKeepsake(rawValue: d.string(forKey: "developmentKeepsake") ?? "") ?? .off
     }
 
     /// Keep the selected layout producible. Whenever the eye/hand availability changes (`useEye`,
@@ -330,6 +342,8 @@ final class Settings {
         upscaler = .metalFX
         decoderChoice = .detailed
         stampRawCoordinates = false
+        developView = .working
+        developmentKeepsake = .off
     }
 }
 
@@ -430,21 +444,30 @@ struct PreferencesView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
-                modelSection
-                eyeSection
-                handSection
-                silentLoopSection
-                decoderSection
-                sizeSection
-                layoutSection
-                locationSection
-                darkRoomSection
-                resetSection
-                aboutSection
+                // Each section carries an id so the antenna can scroll to it the way a finger does
+                // (`POST /open` X-Screen: preferences, X-Section: <id>). Harmless in Release.
+                modelSection.id("models")
+                eyeSection.id("eye")
+                handSection.id("hand")
+                developingSection.id("developing")
+                silentLoopSection.id("silentloop")
+                decoderSection.id("decoder")
+                sizeSection.id("size")
+                layoutSection.id("layout")
+                locationSection.id("location")
+                darkRoomSection.id("darkroom")
+                resetSection.id("reset")
+                aboutSection.id("about")
                 #if DEBUG
-                antennaSection
+                antennaSection.id("antenna")
                 #endif
+            }
+            #if DEBUG
+            .onAppear { scrollForAntenna(proxy) }
+            .onChange(of: AntennaUIBridge.shared.scrollPreferencesTo) { scrollForAntenna(proxy) }
+            #endif
             }
             .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
             #if DEBUG
@@ -827,6 +850,49 @@ struct PreferencesView: View {
         } footer: {
             Text("The hand draws the scene again from the eye's words - it never sees your photograph. When a description runs long, the same eye first shortens it to fit; frame 2 can show either the eye's full words or that shorter version. More steps mean more detail and a little more time; drawing adds several seconds to a shot.")
         }
+    }
+
+    #if DEBUG
+    /// Human parity for scrolling: the antenna names a section and Preferences scrolls there itself.
+    private func scrollForAntenna(_ proxy: ScrollViewProxy) {
+        guard let target = AntennaUIBridge.shared.scrollPreferencesTo else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)   // let the sheet finish presenting
+            withAnimation { proxy.scrollTo(target, anchor: .top) }
+            AntennaUIBridge.shared.scrollPreferencesTo = nil
+        }
+    }
+    #endif
+
+    // MARK: - Developing (the Developer Tray's settings)
+
+    /// How the drawing's development is recorded, and whether it also lands in Photos. Shown only when
+    /// a hand is drawing, because otherwise there is no development to watch or save.
+    @ViewBuilder
+    private var developingSection: some View {
+        if settings.drawsThirdFrame && DrawerLoader.isAvailable(settings.selectedDrawer) {
+            Section {
+                Picker("Watch the drawing as", selection: $settings.developView) {
+                    ForEach(DevelopView.allCases, id: \.self) { Text($0.name).tag($0) }
+                }
+                Picker("Also save to Photos", selection: $settings.developmentKeepsake) {
+                    ForEach(DevelopmentKeepsake.allCases, id: \.self) { Text($0.name).tag($0) }
+                }
+            } header: {
+                Text("Developing - watch the drawing form")
+            } footer: {
+                Text(developingFooter)
+            }
+        }
+    }
+
+    private var developingFooter: String {
+        var t = "The hand draws in steps. \"The working image\" is what it actually holds at each step: static slowly becoming a picture. \"Its best guess\" is its prediction of the finished drawing at each step: blurry at first, sharpening. Both are real; one is recorded per shot."
+        if selectedDrawerEngine == .mlx {
+            t += " \(selectedDrawerModel?.displayName ?? "This hand") only shows the working image, so that is what it records."
+        }
+        t += " A contact sheet puts every step on one page; a flipbook is a short video of them. Either is saved beside the shot. The steps are quick previews; the last frame is the finished drawing."
+        return t
     }
 
     // MARK: - Factory reset
