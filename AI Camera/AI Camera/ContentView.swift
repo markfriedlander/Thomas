@@ -89,7 +89,7 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .navigationTitle("AI Camera")
+            .navigationTitle("Thomas")
             .navigationBarTitleDisplayMode(.inline)
             #if DEBUG
             .toolbar { ToolbarItem(placement: .topBarTrailing) { antennaToggle } }

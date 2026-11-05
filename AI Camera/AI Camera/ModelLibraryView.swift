@@ -98,7 +98,7 @@ struct ModelLibraryView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Clear all family models")
                                 .foregroundColor(.red)
-                            Text("Removes every shared model for Hal, Posey, and AI Camera at once. Each app re-downloads as needed. Last resort.")
+                            Text("Removes every shared model for Hal, Posey, and Thomas at once. Each app re-downloads as needed. Last resort.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
@@ -162,7 +162,7 @@ struct ModelLibraryView: View {
             }
             Button("Cancel", role: .cancel) { showingClearFamilyAlert = false }
         } message: {
-            Text("Removes every downloaded AI model shared across Hal, Posey, and AI Camera to reclaim all model storage at once. Each app re-downloads what it needs the next time you use it. Your photos and settings are not affected.")
+            Text("Removes every downloaded AI model shared across Hal, Posey, and Thomas to reclaim all model storage at once. Each app re-downloads what it needs the next time you use it. Your photos and settings are not affected.")
         }
         // Surface the model's license before the download begins. Hangs off the stable List,
         // not a row (rows come and go as the catalog refreshes, which would tear the sheet down).
