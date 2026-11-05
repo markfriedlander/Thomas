@@ -111,14 +111,22 @@ final class Settings {
     /// choice, not a default. The latency is the film developing, but the user gets to decide
     /// how long the bath takes.
     var drawsThirdFrame: Bool {
-        didSet { store(drawsThirdFrame, "drawsThirdFrame"); snapLayoutIfNeeded() }
+        didSet {
+            store(drawsThirdFrame, "drawsThirdFrame")
+            snapLayoutIfNeeded()
+            adoptDrawingLayoutIfNeeded(couldDrawBefore: oldValue && DrawerLoader.isAvailable(selectedDrawer))
+        }
     }
     /// Which hand draws the third frame — the drawer's shared-store repo id. The counterpart to
     /// `seer` for the eye: `drawsThirdFrame` is the on/off, this is the which. Only sd-turbo
     /// exists today, so it is effectively constant until a second drawer (and a picker) arrive;
     /// it is stored now so each shot can freeze the drawer it was taken with (see `ShotConfig`).
     var selectedDrawer: String {
-        didSet { store(selectedDrawer, "selectedDrawer"); snapLayoutIfNeeded() }
+        didSet {
+            store(selectedDrawer, "selectedDrawer")
+            snapLayoutIfNeeded()
+            adoptDrawingLayoutIfNeeded(couldDrawBefore: drawsThirdFrame && DrawerLoader.isAvailable(oldValue))
+        }
     }
     /// The step knob's value **per drawer** — how many denoising steps each hand draws with.
     ///
@@ -266,6 +274,19 @@ final class Settings {
         if !layout.isAvailable(hasEye: hasEye, hasHand: hasHand) {
             layout = Layout.fallback(hasEye: hasEye, hasHand: hasHand)
         }
+    }
+
+    /// The other half of `snapLayoutIfNeeded`. Snapping moves DOWN when content disappears; this
+    /// moves UP once, at the moment drawing becomes possible (the toggle turned on, or the selected
+    /// hand became a downloaded one), if the current layout has no place for a drawing. Without it a
+    /// fresh install stays on `.superimposed` forever: the user downloads a hand, turns drawing on,
+    /// and never sees a drawing (Mark approved the fix 2026-11-05). Only on that transition, so a
+    /// user who later picks a no-drawing layout on purpose keeps it. In the model, not the screen
+    /// (Principle 7), so the antenna and the silent-loop switch get it too.
+    private func adoptDrawingLayoutIfNeeded(couldDrawBefore: Bool) {
+        let canDrawNow = drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
+        guard canDrawNow, !couldDrawBefore, !layout.usesDrawing else { return }
+        layout = Layout.drawingLayout(hasEye: useEye)
     }
 
     private func store(_ value: Any, _ key: String) {

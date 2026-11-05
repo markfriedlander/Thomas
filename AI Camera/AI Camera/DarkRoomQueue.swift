@@ -99,13 +99,21 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
 extension ShotConfig {
     /// Freeze the live settings into a config, at shutter-press. Main-actor because it reads the
     /// shared, observable `Settings`.
+    ///
+    /// The antenna's presses pass their test knobs HERE (a layout override, or "don't draw") rather
+    /// than patching the result, so the drawing rule below holds for every press, real or remote.
+    /// `allowDraw` can only turn drawing OFF: a remote press never draws when a thumb wouldn't.
     @MainActor
-    static func capture() -> ShotConfig {
+    static func capture(layout layoutOverride: Layout? = nil, allowDraw: Bool = true) -> ShotConfig {
         let s = Settings.shared
+        let layout = layoutOverride ?? s.layout
         return ShotConfig(
             seer: s.seer,
-            layout: s.layout,
-            drawsThirdFrame: s.drawsThirdFrame,
+            layout: layout,
+            // Draw only if this layout will keep the drawing (`Layout.usesDrawing`). Otherwise the
+            // hand would spend minutes and heat on a picture the compositor throws away. Frozen here,
+            // so the shot record honestly says it doesn't draw, and it never waits on a missing hand.
+            drawsThirdFrame: allowDraw && s.drawsThirdFrame && layout.usesDrawing,
             drawerRepoID: s.selectedDrawer,
             systemPrompt: s.systemPrompt,
             temperature: s.temperature,
@@ -487,9 +495,7 @@ final class DarkRoomWorker {
                  drawsThirdFrame: Bool? = nil,
                  layoutOverride: Layout? = nil,
                  kickAfter: Bool = true) async -> UUID? {
-        var config = ShotConfig.capture()
-        if let drawsThirdFrame { config.drawsThirdFrame = drawsThirdFrame }
-        if let layoutOverride { config.layout = layoutOverride }
+        let config = ShotConfig.capture(layout: layoutOverride, allowDraw: drawsThirdFrame ?? true)
         guard let photoData = ShotPhoto.encode(photograph) else {
             cameraLog("INTAKE: could not encode the frame — shot dropped")
             return nil
@@ -663,7 +669,12 @@ final class DarkRoomWorker {
             isCoolingDown = true
             try? await Task.sleep(nanoseconds: 2_000_000_000)   // re-check every 2 s
         }
-        if announcedHold { cameraLog("DARKROOM: phone cooled — resuming develop") }
+        // The hold ends two ways; say which. Logging "cooled" when the loop actually exited because
+        // the app went to the background (phone locked) sent a 2026-11-05 reading down the wrong path.
+        if announcedHold {
+            cameraLog(suspended ? "DARKROOM: hold ended by backgrounding, shot stays queued"
+                                : "DARKROOM: phone cooled, resuming develop")
+        }
         isCoolingDown = false
         if suspended { currentShotID = nil; currentStage = nil; return false }
 

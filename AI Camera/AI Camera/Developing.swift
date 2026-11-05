@@ -143,6 +143,25 @@ nonisolated enum Layout: String, CaseIterable, Sendable {
         }
     }
 
+    /// Whether this layout PUTS the drawing anywhere in what gets saved. Wider than `needsHand`: the
+    /// Separate layouts don't need a drawing, but they save one as its own file when there is one.
+    /// The layouts that are false here (words on the photo, words only, photo only, the words+photo
+    /// diptychs) would throw a drawing away, so a shot taken with one of them doesn't draw at all
+    /// (`ShotConfig.capture`). Found on release day 2026-11-05: a fresh install starts on
+    /// `.superimposed` (no hand yet), downloading + selecting a hand never moved it, and every shot
+    /// spent ~2 minutes and "serious" heat drawing a picture nobody saw.
+    var usesDrawing: Bool {
+        needsHand || self == .separateNative || self == .separateSquare
+    }
+
+    /// The layout to move to when drawing becomes possible and the current layout has no place for
+    /// it. Triptych first (the app's thesis: reality, perception, re-imagining); with the eye off,
+    /// the richest drawing layout that needs no words.
+    static func drawingLayout(hasEye: Bool) -> Layout {
+        let order: [Layout] = [.triptychVertical, .diptychDrawingLeft, .superimposedOnDrawing, .singleDrawing]
+        return order.first { $0.isAvailable(hasEye: hasEye, hasHand: true) } ?? .singleDrawing
+    }
+
     /// Can this layout actually be PRODUCED given what's switched on? The one rule the picker filters
     /// by, so no selectable layout ever conflicts with the eye/hand toggles (Mark, 2026-07-27).
     func isAvailable(hasEye: Bool, hasHand: Bool) -> Bool {

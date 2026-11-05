@@ -365,16 +365,17 @@ extension LocalAPIServer {
         }
 
         let drawThird = (req.headers["x-draw"] ?? "true") != "false"
-        // A /press is a real press: freeze the live config, honoring the x-draw header override.
-        let config = await MainActor.run { () -> ShotConfig in
-            var c = ShotConfig.capture()
-            c.drawsThirdFrame = drawThird
-            return c
-        }
         // Optional layout override, so a session can exercise every layout without reaching
         // the app's UI — the raw case name, e.g. `X-Layout: separate`. Absent → whatever the
         // app is set to.
         let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
+        // A /press is a real press: freeze the live config through the same `capture` the shutter
+        // uses. `X-Draw: false` can turn drawing off; nothing here can turn it ON when a thumb
+        // wouldn't draw (drawing off in Settings, or a layout with no place for it). Before
+        // 2026-11-05 this overwrote the flag and drew by default, a parity gap.
+        let config = await MainActor.run {
+            ShotConfig.capture(layout: layoutOverride, allowDraw: drawThird)
+        }
 
         let availBefore = processAvailableMemoryMB()
         let started = Date()
@@ -489,13 +490,18 @@ extension LocalAPIServer {
         let (seerName, layoutName) = await MainActor.run {
             (seerWire(Settings.shared.seer), (layoutOverride ?? Settings.shared.layout).name)
         }
-        let pending = await DarkRoomStore.shared.pending().count
+        let queued = await DarkRoomStore.shared.pending()
+        let pending = queued.count
+        // Report what the stored shot WILL do, read back from its frozen config, not the header we
+        // sent: the drawing rule (`ShotConfig.capture`) can turn drawing off, and echoing the request
+        // made this reply claim a drawing the shot was never going to make (caught 2026-11-05).
+        let drawsThird = queued.first { $0.id == id }?.config.drawsThirdFrame
         return (200, json([
             "captured":     true,
             "held":         hold,
             "id":           id.uuidString,
             "seer":         seerName,
-            "drawsThird":   drawThird,
+            "drawsThird":   drawsThird as Any,
             "layout":       layoutName,
             "place":        place as Any,
             "pendingCount": pending

@@ -291,6 +291,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Thomas";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Thomas uses the camera to take your photographs.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Stamps each shot with where it was taken, the way a date-back camera does.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Finished shots are saved to your photo library. That is where they develop.";
@@ -328,6 +329,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Thomas";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Thomas uses the camera to take your photographs.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Stamps each shot with where it was taken, the way a date-back camera does.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Finished shots are saved to your photo library. That is where they develop.";
