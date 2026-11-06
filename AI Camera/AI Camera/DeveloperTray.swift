@@ -78,6 +78,8 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         let shape: [Int]
         let latents: [[Float]]     // one per completed step, in order
         let final: CGImage?        // the finished drawing at the model's own size, once drawn
+        let eye: EyeWorkings?      // the eye's numbers and gaze, when the eye can show them (EyeWorkings.swift)
+        let eyeName: String?       // which eye looked, so the tray can say why there are no workings
     }
 
     private var version = 0
@@ -93,6 +95,9 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
     private var shape: [Int] = []
     private var latents: [[Float]] = []
     private var final: CGImage?
+    private var eye: EyeWorkings?
+    private var eyeName: String?
+    private var eyeOpen = false
 
     /// A new shot begins developing: forget everything from the last one, so a shot that draws
     /// nothing can never inherit another shot's steps.
@@ -100,12 +105,46 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         lock.withLock {
             shotID = id; self.photo = photo; eyeWords = nil; wordsFromEye = true; prompt = ""; steps = 0
             isGuess = false; channelsLast = false; hand = ""; shape = []; latents = []; final = nil
+            eye = nil; eyeName = nil; eyeOpen = id != nil
             version += 1
         }
     }
 
     func noteEyeWords(_ words: String, fromEye: Bool = true) {
-        lock.withLock { eyeWords = words; wordsFromEye = fromEye; version += 1 }
+        lock.withLock { eyeWords = words; wordsFromEye = fromEye; eyeOpen = false; version += 1 }
+    }
+
+    /// Which eye is about to look at this shot (any eye, including Apple's, which shows no workings).
+    func noteEyeName(_ name: String) {
+        lock.withLock { if eyeOpen { eyeName = name; version += 1 } }
+    }
+
+    // The eye's workings (EyeRecorder). Recording is allowed exactly once per shot, for the look
+    // that comes between `startShot` and the shot's words, so no other use of the eye (the condense
+    // call, an antenna /look) can ever write into a shot's trace.
+    func openEyeRecording(model: String) -> Bool {
+        lock.withLock {
+            guard eyeOpen, eye == nil else { return false }
+            eye = EyeWorkings(model: model); eyeName = model; version += 1
+            return true
+        }
+    }
+
+    func noteEyeNumbers(_ features: [Float], width: Int, rows: Int, cols: Int) {
+        lock.withLock {
+            eye?.features = features; eye?.width = width; eye?.rows = rows; eye?.cols = cols; version += 1
+        }
+    }
+
+    func appendEyePiece(_ piece: EyeWorkings.Piece) {
+        lock.withLock { eye?.pieces.append(piece); version += 1 }
+    }
+
+    func finishEyeRecording(recorderMS: Double, layers: Int, heads: Int) {
+        lock.withLock {
+            eye?.done = true; eye?.recorderMS = recorderMS; eye?.layers = layers; eye?.heads = heads
+            version += 1
+        }
     }
 
     /// The drawing starts (called by the engine once it is loaded).
@@ -133,7 +172,8 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
             guard shotID != nil || !latents.isEmpty else { return nil }
             return Snapshot(version: version, shotID: shotID, photo: photo, eyeWords: eyeWords,
                             wordsFromEye: wordsFromEye, prompt: prompt, steps: steps, isGuess: isGuess, channelsLast: channelsLast,
-                            hand: hand, shape: shape, latents: latents, final: final)
+                            hand: hand, shape: shape, latents: latents, final: final,
+                            eye: eye, eyeName: eyeName)
         }
     }
 }
@@ -341,9 +381,55 @@ extension DeveloperTray {
 // ==== LEGO START: 38 The Developer Tray Screen (Watch It Develop) ====
 
 /// One moment on the tray's timeline, in true order. Only moments that really happened appear:
-/// no eye stage when the eye was off, no drawing stages when the hand did not draw.
+/// no eye stage when the eye was off, no drawing stages when the hand did not draw, and no numbers
+/// or gaze unless the eye could show them (Qwen 3.5, through `EyeRecorder`).
 nonisolated enum TrayFrame: Hashable, Sendable {
-    case reality, words, mixing, step(Int), finished
+    case reality, numbers, gaze(Int), words, mixing, step(Int), finished
+}
+
+/// One word as the tray shows it, built from the eye's word pieces ("bl" + "inding" + "ly"). Its
+/// gaze is the average of its letter pieces' gaze; punctuation rides along in the text but adds
+/// nothing to where the word looked.
+nonisolated struct TrayWord: Identifiable, Sendable {
+    let id: Int
+    let text: String
+    let gaze: [Float]
+    let imageShare: Float
+
+    static func words(from pieces: [EyeWorkings.Piece]) -> [TrayWord] {
+        var texts: [String] = []
+        var gazes: [[[Float]]] = []
+        var shares: [[Float]] = []
+        for p in pieces {
+            let trimmed = p.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let hasLetters = trimmed.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+            let startsWord = p.text.first?.isWhitespace ?? false
+            if texts.isEmpty || (startsWord && hasLetters) {
+                texts.append(trimmed); gazes.append([]); shares.append([])
+            } else {
+                texts[texts.count - 1] += trimmed
+            }
+            if hasLetters { gazes[gazes.count - 1].append(p.gaze); shares[shares.count - 1].append(p.imageShare) }
+        }
+        return texts.indices.compactMap { (i: Int) -> TrayWord? in
+            guard let first = gazes[i].first else { return nil }   // punctuation alone is not a word
+            var sum = [Float](repeating: 0, count: first.count)
+            for g in gazes[i] where g.count == sum.count { for j in sum.indices { sum[j] += g[j] } }
+            let n = Float(gazes[i].count)
+            return TrayWord(id: i, text: texts[i], gaze: sum.map { $0 / n },
+                            imageShare: shares[i].reduce(0, +) / Float(shares[i].count))
+        }
+        .enumerated().map { TrayWord(id: $0.offset, text: $0.element.text, gaze: $0.element.gaze, imageShare: $0.element.imageShare) }
+    }
+}
+
+/// How the numbers frame shows the photograph: the colours over it, the colours alone, or the
+/// photograph alone (tap the stage's toggle to cycle).
+nonisolated enum NumbersLook: String, CaseIterable, Sendable {
+    case blend, colours, photo
+    var next: NumbersLook { self == .blend ? .colours : self == .colours ? .photo : .blend }
+    var label: String { self == .blend ? "Both" : self == .colours ? "Colours" : "Photo" }
 }
 
 /// Turns recorded steps into pictures for the screen, one at a time, only while the tray is open.
@@ -394,6 +480,15 @@ final class TrayModel {
     private var playTask: Task<Void, Never>?
     private let decoder = TrayPreviewDecoder()
 
+    // The eye's workings (EyeWorkings.swift), when this shot's eye could show them.
+    private(set) var eyeWords: [TrayWord] = []
+    private var piecesSeen = -1
+    private(set) var summary: EyeNumbersSummary?
+    private var summaryRequested = false
+    var numbersLook: NumbersLook = .blend
+    /// The square whose raw numbers are open in a sheet.
+    var openSquare: Int?
+
     #if DEBUG
     /// The open tray, so the antenna can read and scrub it (human parity).
     static weak var current: TrayModel?
@@ -433,6 +528,22 @@ final class TrayModel {
             trace = snap
         }
         guard let t = trace, isMine else { rebuild(nil, mixingNow: mixingNow); return }
+        if let e = t.eye {
+            if e.pieces.count != piecesSeen {
+                piecesSeen = e.pieces.count
+                eyeWords = TrayWord.words(from: e.pieces)
+            }
+            // The colour summary needs only the numbers, which exist before the first word.
+            if summary == nil, !summaryRequested, e.squares > 0, e.features.count == e.squares * e.width {
+                summaryRequested = true
+                Task {
+                    let started = Date()
+                    let made = await Task.detached(priority: .userInitiated) { EyeNumbersSummary(e) }.value
+                    self.summary = made
+                    cameraLog("TRAY: numbers summary in \(Int(Date().timeIntervalSince(started) * 1000)) ms, explains \(Int((made?.explained ?? 0) * 100))%")
+                }
+            }
+        }
         rebuild(t, mixingNow: mixingNow)
         if following && !playing { index = frames.count - 1 }
         requestPreview(for: current)
@@ -441,6 +552,10 @@ final class TrayModel {
 
     private func rebuild(_ t: DevelopTrace.Snapshot?, mixingNow: Bool) {
         var f: [TrayFrame] = [.reality]
+        if let e = t?.eye, e.squares > 0 {
+            f.append(.numbers)
+            for i in eyeWords.indices { f.append(.gaze(i)) }
+        }
         if let w = t?.eyeWords, !w.isEmpty { f.append(.words) }
         if mixingNow || (t?.steps ?? 0) > 0 { f.append(.mixing) }
         for k in 0..<(t?.latents.count ?? 0) { f.append(.step(k + 1)) }
@@ -507,7 +622,14 @@ final class TrayModel {
         index = 0
         playTask = Task { [weak self] in
             while let self, !Task.isCancelled, self.index < self.frames.count - 1 {
-                let hold: UInt64 = { if case .step = self.current { return 300_000_000 }; return 1_200_000_000 }()
+                let hold: UInt64 = {
+                    switch self.current {
+                    case .step: return 300_000_000
+                    case .gaze: return 330_000_000
+                    case .numbers: return 2_500_000_000
+                    default: return 1_200_000_000
+                    }
+                }()
                 try? await Task.sleep(nanoseconds: hold)
                 if Task.isCancelled { break }
                 self.index += 1
@@ -518,6 +640,17 @@ final class TrayModel {
     }
 
     func pause() { playTask?.cancel(); playing = false }
+
+    /// Tap a word: jump to the moment the eye chose it.
+    func jump(toWord i: Int) {
+        if let at = frames.firstIndex(of: .gaze(i)) { scrub(to: at) }
+    }
+
+    /// The word on screen, on a gaze frame.
+    var currentWord: TrayWord? {
+        if case .gaze(let i) = current, eyeWords.indices.contains(i) { return eyeWords[i] }
+        return nil
+    }
 
     /// The step actually on screen for step `k`: itself if decoded, else the newest decoded step
     /// before it (so the screen never sits on a spinner while a preview is on its way).
@@ -532,6 +665,12 @@ final class TrayModel {
         let total = trace?.latents.count ?? 0
         switch current {
         case .reality: return "Reality: your photograph"
+        case .numbers:
+            guard let e = trace?.eye else { return "The numbers" }
+            return "The numbers: \(e.squares) squares, \(e.width.formatted()) numbers each, made before any word"
+        case .gaze(let i):
+            guard eyeWords.indices.contains(i) else { return "Where it looked" }
+            return "\u{201C}\(eyeWords[i].text)\u{201D}: where it looked as it chose this word"
         case .words:   return (trace?.wordsFromEye ?? true) ? "What the eye said" : "Your instruction to the hand"
         case .mixing:  return "Mixing the developer"
         case .step(let k):
@@ -547,6 +686,28 @@ final class TrayModel {
         case .finished: return "The finished drawing"
         }
     }
+
+    /// The second line under the caption: how to read the frame, and what it is a summary of.
+    var detail: String? {
+        switch current {
+        case .numbers:
+            guard let s = summary else { return "Summarizing them as colours…" }
+            return "Colours summarize the numbers: squares the eye thinks alike come out alike (3 colours carry \(Int((s.explained * 100).rounded()))% of the variation). Tap a square to see its real numbers."
+        case .gaze(let i):
+            guard eyeWords.indices.contains(i), let e = trace?.eye else { return nil }
+            let share = Int((eyeWords[i].imageShare * 100).rounded())
+            let how = e.layers > 0 && e.heads > 0
+                ? "measured in \(e.layers) attention layers, averaged over \(e.heads) heads"
+                : "measured in its attention layers"
+            return "Brightest squares got the most attention; \(share)% of its attention was on the picture, the rest on words (\(how)). Tap a word to jump to it."
+        case .words:
+            guard trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true else { return nil }
+            if name == Seer.apple.name { return "Apple's eye doesn't show its workings; choose Qwen as the eye to see them." }
+            return "\(name) doesn't show its workings here yet."
+        default:
+            return nil
+        }
+    }
 }
 
 /// The Developer Tray: watch one shot develop, live, and scrub back through every real moment.
@@ -557,6 +718,9 @@ struct DeveloperTrayView: View {
     init(shotID: UUID) { _model = State(initialValue: TrayModel(shotID: shotID)) }
 
     var body: some View {
+        // Scrolls, so the stage always gets the full width: the eye stages add a caption line and the
+        // sentence, and in a fixed column they squeezed the picture to a thumbnail (device, 2026-11-05).
+        ScrollView {
         VStack(spacing: 14) {
             Text(stageLine)
                 .font(.headline)
@@ -572,6 +736,14 @@ struct DeveloperTrayView: View {
             Text(model.caption)
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let detail = model.detail {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if showsWordStrip { wordStrip }
 
             scrubber
 
@@ -591,22 +763,40 @@ struct DeveloperTrayView: View {
                 }
             }
 
-            Spacer(minLength: 0)
-
-            Text("Everything here is real: your photograph, the eye's own words, and the drawing engine's actual state at each step. The step pictures are quick previews made with a small decoder; the finished drawing is the real one.")
+            Text("Everything here is real: your photograph, the numbers the eye made of it, where it looked as it chose each word, its own words, and the drawing engine's actual state at each step. The colours and the step pictures are summaries and quick previews, and say so; the finished drawing is the real one.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding()
+        }
         .navigationTitle("The Developer Tray")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
+        .sheet(item: Binding(get: { model.openSquare.map(SquareRef.init) },
+                             set: { model.openSquare = $0?.id })) { ref in
+            if let e = model.trace?.eye {
+                SquareNumbersSheet(eye: e, square: ref.id, photo: model.trace?.photo)
+            }
+        }
         #if DEBUG
         .onChange(of: AntennaUIBridge.shared.trayScrubTo) { _, v in
             guard let v else { return }
             if v == -2 { model.play() } else if v < 0 { model.goLive() } else { model.scrub(to: v) }
             AntennaUIBridge.shared.trayScrubTo = nil
+        }
+        .onChange(of: AntennaUIBridge.shared.trayTap) { _, tap in
+            guard let tap else { return }
+            let parts = tap.split(separator: ":")
+            switch (parts.first, parts.count > 1 ? Int(parts[1]) : nil) {
+            case ("word"?, let i?): model.jump(toWord: i)
+            case ("square"?, let n?): model.openSquare = n
+            case ("close"?, _): model.openSquare = nil
+            case ("look"?, _): model.numbersLook = model.numbersLook.next
+            default: break
+            }
+            AntennaUIBridge.shared.trayTap = nil
         }
         #endif
     }
@@ -627,6 +817,40 @@ struct DeveloperTrayView: View {
         }
     }
 
+    private var showsWordStrip: Bool {
+        guard !model.eyeWords.isEmpty else { return false }
+        switch model.current {
+        case .numbers, .gaze: return true
+        default: return false
+        }
+    }
+
+    /// The eye's sentence, word by word; the word on screen is lit, and every word is a button.
+    private var wordStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                WordFlow(spacing: 4) {
+                    ForEach(model.eyeWords) { w in
+                        let lit = model.currentWord?.id == w.id
+                        Button { model.jump(toWord: w.id) } label: {
+                            Text(w.text)
+                                .font(.callout.weight(lit ? .bold : .regular))
+                                .padding(.horizontal, 3)
+                                .background(lit ? Color.yellow.opacity(0.35) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                        .id(w.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 96)
+            .onChange(of: model.currentWord?.id) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            }
+        }
+    }
+
     @ViewBuilder
     private var frameView: some View {
         switch model.current {
@@ -635,6 +859,35 @@ struct DeveloperTrayView: View {
                 Image(uiImage: UIImage(cgImage: photo)).resizable().scaledToFit()
             } else {
                 card("Waiting for the photograph…")
+            }
+        case .numbers:
+            if let photo = model.trace?.photo, let e = model.trace?.eye {
+                let s = model.summary
+                let opacity: Double = model.numbersLook == .blend ? 0.72 : model.numbersLook == .colours ? 1 : 0
+                EyeGridPhoto(photo: photo, rows: e.rows, cols: e.cols, tint: { i in
+                    guard let s, i < s.colors.count, opacity > 0 else { return .clear }
+                    let c = s.colors[i]
+                    return Color(red: Double(c.0), green: Double(c.1), blue: Double(c.2)).opacity(opacity)
+                }, onTap: { model.openSquare = $0 })
+                .overlay(alignment: .bottomTrailing) {
+                    Button { model.numbersLook = model.numbersLook.next } label: {
+                        Text(model.numbersLook.label).font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                }
+            }
+        case .gaze(let i):
+            if let photo = model.trace?.photo, let e = model.trace?.eye, model.eyeWords.indices.contains(i) {
+                let g = model.eyeWords[i].gaze
+                let top = max(g.max() ?? 0, .leastNonzeroMagnitude)
+                // Darken by how little attention each square got, scaled to this word's strongest.
+                EyeGridPhoto(photo: photo, rows: e.rows, cols: e.cols, tint: { j in
+                    guard j < g.count else { return .clear }
+                    return Color.black.opacity(0.78 * Double(1 - g[j] / top))
+                })
             }
         case .words:
             ScrollView {
@@ -674,6 +927,8 @@ struct DeveloperTrayView: View {
         }
     }
 
+    private struct SquareRef: Identifiable { let id: Int }
+
     private func card(_ text: String) -> some View {
         Text(text)
             .font(.callout)
@@ -694,6 +949,123 @@ struct DeveloperTrayView: View {
                 Spacer()
                 Text(model.drawingDone ? "Finished" : "Now").font(.caption2).foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// The photograph with one colour laid over each of the eye's squares (rows x cols, the grid the
+/// vision encoder made). Optional tap: which square was touched.
+struct EyeGridPhoto: View {
+    let photo: CGImage
+    let rows: Int
+    let cols: Int
+    let tint: (Int) -> Color
+    var onTap: ((Int) -> Void)? = nil
+
+    var body: some View {
+        Image(uiImage: UIImage(cgImage: photo)).resizable().scaledToFit()
+            .overlay {
+                GeometryReader { geo in
+                    Canvas { ctx, size in
+                        guard rows > 0, cols > 0 else { return }
+                        let w = size.width / CGFloat(cols), h = size.height / CGFloat(rows)
+                        for r in 0..<rows {
+                            for c in 0..<cols {
+                                let rect = CGRect(x: CGFloat(c) * w, y: CGFloat(r) * h, width: w + 0.5, height: h + 0.5)
+                                ctx.fill(Path(rect), with: .color(tint(r * cols + c)))
+                            }
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { loc in
+                        guard let onTap, rows > 0, cols > 0, geo.size.width > 0, geo.size.height > 0 else { return }
+                        let c = min(cols - 1, max(0, Int(loc.x / geo.size.width * CGFloat(cols))))
+                        let r = min(rows - 1, max(0, Int(loc.y / geo.size.height * CGFloat(rows))))
+                        onTap(r * cols + c)
+                    }
+                }
+            }
+    }
+}
+
+/// One square's real numbers: all of them (2,048 for Qwen3.5-2B), exactly as the vision encoder made
+/// them, beside the patch of photograph they describe.
+struct SquareNumbersSheet: View {
+    let eye: EyeWorkings
+    let square: Int
+    let photo: CGImage?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let numbers = Array(eye.numbers(ofSquare: square))
+        let row = eye.cols > 0 ? square / eye.cols : 0, col = eye.cols > 0 ? square % eye.cols : 0
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .top, spacing: 14) {
+                        if let crop = patch(row: row, col: col) {
+                            Image(uiImage: UIImage(cgImage: crop)).resizable().interpolation(.none)
+                                .scaledToFit().frame(width: 96, height: 96)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Row \(row + 1), column \(col + 1) of \(eye.rows) x \(eye.cols)").font(.headline)
+                            if let lo = numbers.min(), let hi = numbers.max() {
+                                Text("\(numbers.count.formatted()) numbers, from \(fmt(lo)) to \(fmt(hi))")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Text("This is how \(eye.model)'s eye holds this part of the photograph, before it has a single word for it: a list of numbers, straight out of its vision encoder. They are shown to 3 decimal places; nothing else is changed.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), alignment: .trailing, spacing: 4) {
+                        ForEach(numbers.indices, id: \.self) { j in
+                            Text(fmt(numbers[j])).font(.caption.monospacedDigit())
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("One square's numbers")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private func fmt(_ v: Float) -> String { String(format: "%.3f", v) }
+
+    private func patch(row: Int, col: Int) -> CGImage? {
+        guard let photo, eye.rows > 0, eye.cols > 0 else { return nil }
+        let w = CGFloat(photo.width) / CGFloat(eye.cols), h = CGFloat(photo.height) / CGFloat(eye.rows)
+        return photo.cropping(to: CGRect(x: CGFloat(col) * w, y: CGFloat(row) * h, width: w, height: h).integral)
+    }
+}
+
+/// Lays words out like a paragraph: left to right, wrapping to the next line.
+struct WordFlow: SwiftUI.Layout {   // qualified: the app has its own `Layout` (Developing.swift)
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let size = v.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width { x = 0; y += line + spacing; line = 0 }
+            x += size.width + spacing
+            line = max(line, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + line)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, line: CGFloat = 0
+        for v in subviews {
+            let size = v.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX { x = bounds.minX; y += line + spacing; line = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            line = max(line, size.height)
         }
     }
 }

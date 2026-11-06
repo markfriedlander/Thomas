@@ -823,6 +823,10 @@ struct ModelLicenseSheet: View {
     var tapWatch = false
     /// = dragging the Developer Tray's scrubber to a frame index (-1 = tapping Live, -2 = tapping Play).
     var trayScrubTo: Int? = nil
+    /// A tap inside the Developer Tray, as a human would make it: "word:i" (tap a word),
+    /// "square:n" (tap a square on the numbers), "close" (dismiss the numbers sheet), "look" (the
+    /// Both / Colours / Photo toggle).
+    var trayTap: String? = nil
 }
 #endif
 

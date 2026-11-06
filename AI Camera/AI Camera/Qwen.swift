@@ -72,6 +72,16 @@ nonisolated struct MLXVLMEye: Sendable {
 
             let ci = CIImage(cgImage: image)
 
+            // The Developer Tray's recorder: only Thomas's instrumented Qwen 3.5 can be watched,
+            // and only a developing shot's look is recorded (EyeRecorder.beginLook decides).
+            let (watchable, tokenizer) = await container.perform { ctx in (ctx.model is TQwen35, ctx.tokenizer) }
+            if watchable {
+                EyeRecorder.shared.beginLook(model: ModelCatalog.model(id: repoID)?.displayName ?? repoID,
+                                             tokenizer: tokenizer)
+            }
+            let lookStarted = Date()
+            defer { EyeRecorder.shared.endLook(lookSeconds: Date().timeIntervalSince(lookStarted)) }
+
             let session = ChatSession(
                 container,
                 // Layer 1 (locked brevity) + Layer 2 (the user's prompt). Same as the Apple
@@ -300,6 +310,10 @@ actor MLXEyeLoader {
             // don't have. Taking the directory form means we never name a downloader here.
             // By this point the weights are already on disk either way (the library fetches
             // them through `MLXModelDownloader`); loading is not downloading.
+            // Thomas's own copy of the Qwen 3.5 recipe (Vendor/QwenVLM), so the Developer
+            // Tray can show where the eye looked. Same code as the library's; it only also
+            // records. Registered before every load: overwriting the entry is idempotent.
+            await registerInstrumentedQwen()
             return try await VLMModelFactory.shared.loadContainer(
                 from: directory,
                 using: #huggingFaceTokenizerLoader()
@@ -355,6 +369,19 @@ actor MLXEyeLoader {
         let after = MLX.Memory.snapshot()
         let availAfter = processAvailableMemoryMB()
         cameraLog("MEMORY: unload EXIT  active=\(mb(after.activeMemory)) cache=\(mb(after.cacheMemory)) peak=\(mb(after.peakMemory)) iosAvailMB=\(formatMB(availAfter)) | ΔiosAvailMB=\(formatMB(availAfter - availBefore))")
+    }
+}
+
+/// Point the library's "qwen3_5" model type at Thomas's vendored copy (`TQwen35`, in
+/// Vendor/QwenVLM) instead of its own. The copy is the same recipe, line for line, plus the
+/// recorders the Developer Tray reads (`EyeTrace`): the vision encoder's numbers and where
+/// each word looked. The weights are untouched and still come from the shared store, so Hal
+/// and every other tenant see no difference. Only the qwen3_5 entry changes; SmolVLM and any
+/// other family keep the library's own code.
+nonisolated func registerInstrumentedQwen() async {
+    await VLMTypeRegistry.shared.registerModelType("qwen3_5") { data in
+        let config = try JSONDecoder.json5().decode(TQwen35Configuration.self, from: data)
+        return TQwen35(config)
     }
 }
 

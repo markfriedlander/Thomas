@@ -107,6 +107,7 @@ enum Shot {
 
         // ── Frame 2. The eye reads the world and says what it sees. ──
         onStage?(.seeing)
+        DevelopTrace.shared.noteEyeName(seer.name)   // the tray says which eye looked, and whether it can show how
         let perception = await seer.look(at: photograph,
                                          systemPrompt: config.systemPrompt,
                                          temperature: config.temperature)

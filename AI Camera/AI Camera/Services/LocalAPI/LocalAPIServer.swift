@@ -329,6 +329,7 @@ extension LocalAPIServer {
         case ("POST", "/open"):            return await handleOpen(req)
         case ("POST", "/viewfinder"):      return await handleViewfinder(req)
         case ("GET",  "/trace"):           return await handleGetTrace(req)
+        case ("GET",  "/eye"):             return handleGetEye(req)
         case ("GET",  "/tray"):            return handleGetTray()
         case ("POST", "/tray"):            return handleScrubTray(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
@@ -849,6 +850,46 @@ extension LocalAPIServer {
         ]))
     }
 
+    /// GET /eye: the eye's workings for the most recent shot (EyeWorkings.swift), as the tray reads
+    /// them. Real data: per word piece, its share of attention on the picture and its five most-looked-at
+    /// squares (index = row * cols + col); the grid; the recorder's own cost; and the summary's
+    /// variance. `X-Square: n` adds that square's full raw numbers; `X-Full: 1` adds every piece's whole
+    /// gaze map. 404 when the last shot's eye could not be watched (Apple's eye, SmolVLM, no shot yet).
+    private func handleGetEye(_ req: ParsedRequest) -> (Int, String) {
+        guard let t = DevelopTrace.shared.snapshot() else {
+            return (404, #"{"error":"No shot yet."}"#)
+        }
+        guard let e = t.eye else {
+            return (404, json(["error": "This shot's eye did not record its workings.",
+                               "eye": t.eyeName ?? "none"]))
+        }
+        let full = req.headers["x-full"] == "1"
+        let pieces: [[String: Any]] = e.pieces.map { p in
+            let top = p.gaze.enumerated().sorted { $0.element > $1.element }.prefix(5)
+            var d: [String: Any] = [
+                "text": p.text,
+                "imageShare": p.imageShare,
+                "top": top.map { ["square": $0.offset, "value": $0.element] },
+            ]
+            if full { d["gaze"] = p.gaze }
+            return d
+        }
+        var out: [String: Any] = [
+            "shotID": t.shotID?.uuidString ?? "",
+            "model": e.model,
+            "rows": e.rows, "cols": e.cols, "width": e.width,
+            "squares": e.squares,
+            "done": e.done,
+            "recorderMS": e.recorderMS,
+            "pieceCount": e.pieces.count,
+            "text": e.pieces.map(\.text).joined(),
+            "pieces": pieces,
+        ]
+        if e.done, let summary = EyeNumbersSummary(e) { out["summaryExplained"] = summary.explained }
+        if let n = req.headers["x-square"].flatMap(Int.init) { out["square"] = ["index": n, "numbers": Array(e.numbers(ofSquare: n))] }
+        return (200, json(out))
+    }
+
     /// GET /tray: what the open Developer Tray is showing (instrument, don't infer): the timeline, the
     /// frame on screen, its caption, live-follow state, and how many step previews are decoded.
     private func handleGetTray() -> (Int, String) {
@@ -858,6 +899,8 @@ extension LocalAPIServer {
         let names = m.frames.map { f -> String in
             switch f {
             case .reality: return "reality"
+            case .numbers: return "numbers"
+            case .gaze(let i): return "gaze\(i)"
             case .words: return "words"
             case .mixing: return "mixing"
             case .step(let k): return "step\(k)"
@@ -873,12 +916,30 @@ extension LocalAPIServer {
             "playing": m.playing,
             "previewsDecoded": m.previews.count,
             "drawingDone": m.drawingDone,
+            "detail": m.detail ?? "",
+            "word": m.currentWord?.text ?? "",
+            "words": m.eyeWords.map(\.text),
+            "numbersLook": m.numbersLook.rawValue,
+            "openSquare": m.openSquare ?? -1,
+            "summaryExplained": m.summary?.explained ?? -1,
         ]))
     }
 
     /// POST /tray  X-Index: n (drag the scrubber to frame n), live (tap Live), or play (tap Play).
+    /// Taps, for human parity: `X-Word: i` (tap word i in the sentence), `X-Square: n` (tap square n on
+    /// the numbers; `close` dismisses its sheet), `X-Look: next` (the Both / Colours / Photo toggle).
     private func handleScrubTray(_ req: ParsedRequest) -> (Int, String) {
         guard TrayModel.current != nil else { return (404, #"{"error":"The Developer Tray is not open."}"#) }
+        if let w = req.headers["x-word"].flatMap(Int.init) {
+            AntennaUIBridge.shared.trayTap = "word:\(w)"; return (200, json(["tapped": "word \(w)"]))
+        }
+        if let sq = req.headers["x-square"] {
+            AntennaUIBridge.shared.trayTap = sq.lowercased() == "close" ? "close" : "square:\(Int(sq) ?? 0)"
+            return (200, json(["tapped": "square \(sq)"]))
+        }
+        if req.headers["x-look"] != nil {
+            AntennaUIBridge.shared.trayTap = "look"; return (200, json(["tapped": "look toggle"]))
+        }
         let raw = (req.headers["x-index"] ?? "").lowercased()
         if raw == "live" { AntennaUIBridge.shared.trayScrubTo = -1 }
         else if raw == "play" { AntennaUIBridge.shared.trayScrubTo = -2 }

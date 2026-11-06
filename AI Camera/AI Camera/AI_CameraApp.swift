@@ -102,6 +102,9 @@
 //   37  The Developer Tray (Trace, Contact Sheet, Flipbook)
 //   38  The Developer Tray Screen (Watch It Develop)
 //
+//  EyeWorkings.swift
+//   39  The Eye's Workings (The Numbers, And Where Each Word Looked)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 
