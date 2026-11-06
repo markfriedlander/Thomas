@@ -491,6 +491,10 @@ final class TrayModel {
     var numbersLook: NumbersLook = .blend
     /// The square whose raw numbers are open in a sheet.
     var openSquare: Int?
+    /// Full-screen tray: whether the pills are showing (tap the picture to toggle), and whether the
+    /// "?" explanation is open.
+    var chromeVisible = true
+    var helpOpen = false
 
     #if DEBUG
     /// The open tray, so the antenna can read and scrub it (human parity).
@@ -699,6 +703,40 @@ final class TrayModel {
         }
     }
 
+    /// The stage pill's few words: what this moment is.
+    var title: String {
+        switch current {
+        case .reality: return "Your photograph"
+        case .numbers: return "The numbers"
+        case .gaze(let i): return eyeWords.indices.contains(i) ? "\u{201C}\(eyeWords[i].text)\u{201D}" : "Where it looked"
+        case .words: return (trace?.wordsFromEye ?? true) ? "What the eye said" : "Your instruction"
+        case .mixing: return "Mixing the developer"
+        case .step(let k): return "Step \(k) of \(max(trace?.latents.count ?? 0, trace?.steps ?? 0))"
+        case .finished: return "The finished drawing"
+        }
+    }
+
+    /// One short line of fact for the moment on screen; everything longer lives behind "?".
+    var fact: String? {
+        switch current {
+        case .numbers:
+            guard let s = summary else { return "Summarizing the numbers…" }
+            return "3 colours carry \(Int((s.explained * 100).rounded()))% · tap a square"
+        case .gaze(let i):
+            guard eyeWords.indices.contains(i) else { return nil }
+            return "\(Int((eyeWords[i].imageShare * 100).rounded()))% of its attention on the picture"
+        case .words:
+            guard trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true else { return nil }
+            return name == Seer.apple.name ? "Apple's eye doesn't show its workings" : "\(name) doesn't show its workings here yet"
+        case .step(let k):
+            guard let shown = shownStep(for: k) else { return "Preview on its way" }
+            let view = (trace?.isGuess ?? false) ? "best guess" : "working image"
+            return shown == k ? "Quick preview · \(view)" : "Showing step \(shown) · step \(k) on its way"
+        default:
+            return nil
+        }
+    }
+
     /// The second line under the caption: how to read the frame, and what it is a summary of.
     var detail: String? {
         switch current {
@@ -723,67 +761,38 @@ final class TrayModel {
 }
 
 /// The Developer Tray: watch one shot develop, live, and scrub back through every real moment.
+///
+/// Full screen, like the viewfinder (Mark, 2026-11-05; mockup screenshots-draft/tray-fullscreen-mockup.jpg,
+/// touchstone Underworld's "Everything, Everything" cover): the picture is the whole canvas and the
+/// controls are small translucent pills laid across it. The picture is never cropped, because hiding part
+/// of it would hide data the eye really looked at; the space it does not fill is a blurred, darkened copy
+/// of itself. Tap the picture to hide or show the pills. It follows the phone's orientation: upright suits
+/// the square drawing, sideways suits a wide photograph. The explanations live behind "?", not on screen.
 struct DeveloperTrayView: View {
     @State private var model: TrayModel
     @State private var worker = DarkRoomWorker.shared
+    @Environment(\.dismiss) private var dismiss
 
     init(shotID: UUID) { _model = State(initialValue: TrayModel(shotID: shotID)) }
 
     var body: some View {
-        // Scrolls, so the stage always gets the full width: the eye stages add a caption line and the
-        // sentence, and in a fixed column they squeezed the picture to a thumbnail (device, 2026-11-05).
-        ScrollView {
-        VStack(spacing: 14) {
-            Text(stageLine)
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            // A square stage. The black square sets the size; the frame sits on it. (Sizing the content
-            // itself collapsed to the height of a spinner on the first device test, 2026-11-05.)
-            Color.black
-                .aspectRatio(1, contentMode: .fit)
-                .overlay { frameView }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            Text(model.caption)
-                .font(.subheadline.weight(.medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let detail = model.detail {
-                Text(detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        GeometryReader { geo in
+            let wide = geo.size.width > geo.size.height
+            ZStack {
+                backdrop
+                stage
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                if model.chromeVisible { chrome(wide: wide).transition(.opacity) }
+                if model.helpOpen { helpCard(wide: wide).transition(.opacity) }
             }
-
-            if showsWordStrip { wordStrip }
-
-            scrubber
-
-            HStack {
-                Button { model.playing ? model.pause() : model.play() } label: {
-                    Label(model.playing ? "Pause" : "Play", systemImage: model.playing ? "pause.fill" : "play.fill")
-                }
-                .buttonStyle(.bordered)
-                .disabled(model.frames.count < 2)
-                Spacer()
-                if isDeveloping {
-                    Button { model.goLive() } label: {
-                        Label("Live", systemImage: "dot.radiowaves.left.and.right")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(model.following ? .red : .accentColor)
-                }
-            }
-
-            Text("Everything here is real: your photograph, the numbers the eye made of it, where it looked as it chose each word, its own words, and the drawing engine's actual state at each step. The colours and the step pictures are summaries and quick previews, and say so; the finished drawing is the real one.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .padding()
-        }
-        .navigationTitle("The Developer Tray")
-        .navigationBarTitleDisplayMode(.inline)
+        .background(Color.black.ignoresSafeArea())
+        .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: model.helpOpen)
+        .statusBarHidden(!model.chromeVisible)
+        .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         .sheet(item: Binding(get: { model.openSquare.map(SquareRef.init) },
@@ -806,6 +815,9 @@ struct DeveloperTrayView: View {
             case ("square"?, let n?): model.openSquare = n
             case ("close"?, _): model.openSquare = nil
             case ("look"?, _): model.numbersLook = model.numbersLook.next
+            case ("picture"?, _): model.chromeVisible.toggle()
+            case ("help"?, _): model.helpOpen.toggle()
+            case ("dismiss"?, _): dismiss()
             default: break
             }
             AntennaUIBridge.shared.trayTap = nil
@@ -815,81 +827,57 @@ struct DeveloperTrayView: View {
 
     private var isDeveloping: Bool { worker.currentShotID == model.shotID }
 
-    private var stageLine: String {
-        guard isDeveloping else { return model.drawingDone ? "Developed" : "Finished" }
-        switch worker.currentStage {
-        case .seeing?: return "Seeing…"
-        case .mixing?: return "Mixing the developer…"
-        case .drawing?:
-            let n = model.trace?.latents.count ?? 0
-            let total = model.trace?.steps ?? 0
-            return n == 0 ? "Developing…" : "Developing · step \(n) of \(max(n, total))"
-        case .saving?: return "Saving to Photos…"
-        case .none: return "Developing…"
-        }
-    }
+    // MARK: The canvas
 
-    private var showsWordStrip: Bool {
-        guard !model.eyeWords.isEmpty else { return false }
+    /// The picture on screen right now (also what the blurred backdrop is made of).
+    private var currentPicture: CGImage? {
         switch model.current {
-        case .numbers, .gaze: return true
-        default: return false
+        case .step(let k):
+            if let shown = model.shownStep(for: k), let img = model.previews[shown]?.cgImage { return img }
+            return model.trace?.photo
+        case .finished: return model.trace?.final ?? model.trace?.photo
+        default: return model.trace?.photo
         }
     }
 
-    /// The eye's sentence, word by word; the word on screen is lit, and every word is a button.
-    private var wordStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                WordFlow(spacing: 4) {
-                    ForEach(model.eyeWords) { w in
-                        let lit = model.currentWord?.id == w.id
-                        Button { model.jump(toWord: w.id) } label: {
-                            Text(w.text)
-                                .font(.callout.weight(lit ? .bold : .regular))
-                                .padding(.horizontal, 3)
-                                .background(lit ? Color.yellow.opacity(0.35) : .clear, in: RoundedRectangle(cornerRadius: 4))
-                        }
-                        .buttonStyle(.plain)
-                        .id(w.id)
-                    }
+    /// The leftover space: a blurred, darkened copy of the picture itself, edge to edge.
+    /// Drawn as an overlay on plain black so a fill-scaled image can never widen the layout (first device
+    /// test, 2026-11-05: as a ZStack child it did, and pushed the picture and pills off the right edge).
+    private var backdrop: some View {
+        Color.black
+            .overlay {
+                if let pic = currentPicture {
+                    Image(uiImage: UIImage(cgImage: pic)).resizable().scaledToFill()
+                        .blur(radius: 34)
+                        .brightness(-0.35)
+                        .saturation(1.2)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 96)
-            .onChange(of: model.currentWord?.id) { _, id in
-                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
-            }
-        }
+            .clipped()
+            .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { model.chromeVisible.toggle() }
     }
 
     @ViewBuilder
-    private var frameView: some View {
+    private var stage: some View {
         switch model.current {
-        case .reality:
+        case .reality, .words, .mixing:
             if let photo = model.trace?.photo {
-                Image(uiImage: UIImage(cgImage: photo)).resizable().scaledToFit()
+                picture(photo).opacity(model.current == .reality ? 1 : 0.45)
             } else {
-                card("Waiting for the photograph…")
+                ProgressView().tint(.white)
             }
         case .numbers:
             if let photo = model.trace?.photo, let e = model.trace?.eye {
                 let s = model.summary
                 let opacity: Double = model.numbersLook == .blend ? 0.72 : model.numbersLook == .colours ? 1 : 0
+                // A tap on a square opens its numbers; a tap on the blur around it hides the pills.
                 EyeGridPhoto(photo: photo, rows: e.rows, cols: e.cols, tint: { i in
                     guard let s, i < s.colors.count, opacity > 0 else { return .clear }
                     let c = s.colors[i]
                     return Color(red: Double(c.0), green: Double(c.1), blue: Double(c.2)).opacity(opacity)
                 }, onTap: { model.openSquare = $0 })
-                .overlay(alignment: .bottomTrailing) {
-                    Button { model.numbersLook = model.numbersLook.next } label: {
-                        Text(model.numbersLook.label).font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(10)
-                }
             }
         case .gaze(let i):
             if let photo = model.trace?.photo, let e = model.trace?.eye, model.eyeWords.indices.contains(i) {
@@ -900,67 +888,220 @@ struct DeveloperTrayView: View {
                     guard j < g.count else { return .clear }
                     return Color.black.opacity(0.78 * Double(1 - g[j] / top))
                 })
-            }
-        case .words:
-            ScrollView {
-                Text(model.trace?.eyeWords ?? "")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
-                if let t = model.trace, let w = t.eyeWords, !t.prompt.isEmpty, t.prompt != w {
-                    Text("The hand received a shorter version: \"\(t.prompt)\"")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 20)
-                }
-            }
-        case .mixing:
-            VStack(spacing: 12) {
-                if isDeveloping && worker.currentStage == .mixing { ProgressView().tint(.white) }
-                Text("Loading the drawing model\((model.trace?.channelsLast ?? false) ? "" : " onto the Neural Engine"). The first time after installing or updating takes a couple of minutes; after that, a second or two.")
-                    .font(.callout)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .padding(24)
+                .onTapGesture { model.chromeVisible.toggle() }
             }
         case .step(let k):
-            if let shown = model.shownStep(for: k), let img = model.previews[shown] {
-                Image(uiImage: img).resizable().scaledToFit()
-            } else if let t = model.trace, t.channelsLast, t.final == nil {
-                card("\(t.hand) is using the graphics chip; its step previews appear when the drawing finishes.")
+            if let shown = model.shownStep(for: k), let img = model.previews[shown]?.cgImage {
+                picture(img)
             } else {
                 ProgressView().tint(.white)
             }
         case .finished:
-            if let f = model.trace?.final {
-                Image(uiImage: UIImage(cgImage: f)).resizable().scaledToFit()
+            if let f = model.trace?.final { picture(f) }
+        }
+    }
+
+    private func picture(_ image: CGImage) -> some View {
+        Image(uiImage: UIImage(cgImage: image)).resizable().scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { model.chromeVisible.toggle() }
+    }
+
+    // MARK: The pills
+
+    private func chrome(wide: Bool) -> some View {
+        VStack(spacing: 10) {
+            // Top: close, what this moment is, and "?".
+            HStack(alignment: .top) {
+                roundPill("xmark") { dismiss() }
+                Spacer(minLength: 12)
+                VStack(spacing: 8) {
+                    pill { Text(model.title).font(.subheadline.weight(.semibold)) }
+                    if isDeveloping, let live = liveLine {
+                        pill { Label(live, systemImage: "circle.fill").font(.caption.weight(.semibold)).labelStyle(LiveDot()) }
+                    }
+                }
+                Spacer(minLength: 12)
+                roundPill("questionmark") { model.helpOpen.toggle() }
+            }
+
+            Spacer(minLength: 0)
+
+            // The moment's own words: the sentence (lit word, tap to jump), the words in full, or a card.
+            Group {
+                switch model.current {
+                case .numbers, .gaze: if !model.eyeWords.isEmpty { sentenceBand(wide: wide) }
+                case .words: wordsCard(wide: wide)
+                case .mixing: textCard(mixingText)
+                default: EmptyView()
+                }
+            }
+            .frame(maxWidth: wide ? 640 : .infinity)
+
+            HStack(alignment: .center, spacing: 10) {
+                if let fact = model.fact { pill { Text(fact).font(.caption.weight(.medium)) } }
+                Spacer(minLength: 0)
+                if model.current == .numbers {
+                    Button { model.numbersLook = model.numbersLook.next } label: {
+                        pill { Text(model.numbersLook.label).font(.caption.weight(.semibold)) }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: wide ? 640 : .infinity)
+
+            // Bottom: Play, the scrubber, Live.
+            HStack(spacing: 12) {
+                Button { model.playing ? model.pause() : model.play() } label: {
+                    pill { Image(systemName: model.playing ? "pause.fill" : "play.fill").font(.callout.weight(.semibold)) }
+                }
+                .buttonStyle(.plain)
+                .disabled(model.frames.count < 2)
+                Slider(value: Binding(get: { Double(model.index) },
+                                      set: { model.scrub(to: Int($0.rounded())) }),
+                       in: 0...Double(max(1, model.frames.count - 1)), step: 1)
+                    .tint(.white)
+                    .disabled(model.frames.count < 2)
+                if isDeveloping {
+                    Button { model.goLive() } label: {
+                        pill { Text("Live").font(.caption.weight(.bold)).foregroundStyle(model.following ? .red : .white) }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: wide ? 760 : .infinity)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    /// While this shot is still developing: where it is, in a few words.
+    private var liveLine: String? {
+        switch worker.currentStage {
+        case .seeing?: return "Seeing"
+        case .mixing?: return "Mixing the developer"
+        case .drawing?:
+            let n = model.trace?.latents.count ?? 0, total = model.trace?.steps ?? 0
+            return n == 0 ? "Drawing" : "Drawing · step \(n) of \(max(n, total))"
+        case .saving?: return "Saving to Photos"
+        case .none: return "Developing"
+        }
+    }
+
+    /// The eye's sentence as a translucent band; the word on screen is lit, every word is a button.
+    private func sentenceBand(wide: Bool) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                WordFlow(spacing: 5) {
+                    ForEach(model.eyeWords) { w in
+                        let lit = model.currentWord?.id == w.id
+                        Button { model.jump(toWord: w.id) } label: {
+                            Text(w.text)
+                                .font(.callout.weight(lit ? .bold : .regular))
+                                .foregroundStyle(lit ? Color.black : Color.white)
+                                .padding(.horizontal, 4)
+                                .background(lit ? Color.yellow.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+                        .id(w.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+            }
+            .frame(maxHeight: wide ? 70 : 104)
+            .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+            .environment(\.colorScheme, .dark)
+            .onChange(of: model.currentWord?.id) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
     }
 
-    private struct SquareRef: Identifiable { let id: Int }
-
-    private func card(_ text: String) -> some View {
-        Text(text)
-            .font(.callout)
-            .foregroundStyle(.white.opacity(0.8))
-            .multilineTextAlignment(.center)
-            .padding(24)
+    /// The eye's words in full. Height-capped (and scrolling) so a long description can never push the
+    /// top pills off screen; sideways the cap is lower (device, 2026-11-05).
+    private func wordsCard(wide: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(model.trace?.eyeWords ?? "").font(.title3.weight(.semibold))
+                if let t = model.trace, let w = t.eyeWords, !t.prompt.isEmpty, t.prompt != w {
+                    Text("The hand received a shorter version: \"\(t.prompt)\"").font(.footnote).opacity(0.75)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxHeight: wide ? 190 : 320)
+        .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+        .environment(\.colorScheme, .dark)
     }
 
-    private var scrubber: some View {
-        VStack(spacing: 4) {
-            Slider(value: Binding(
-                get: { Double(model.index) },
-                set: { model.scrub(to: Int($0.rounded())) }
-            ), in: 0...Double(max(1, model.frames.count - 1)), step: 1)
-            .disabled(model.frames.count < 2)
-            HStack {
-                Text("Photo").font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                Text(model.drawingDone ? "Finished" : "Now").font(.caption2).foregroundStyle(.secondary)
+    private var mixingText: String {
+        "Loading the drawing model\((model.trace?.channelsLast ?? false) ? "" : " onto the Neural Engine"). The first time after installing or updating takes a couple of minutes; after that, a second or two."
+    }
+
+    private func textCard(_ text: String) -> some View {
+        Text(text).font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+            .environment(\.colorScheme, .dark)
+    }
+
+    /// Behind "?": what this moment is and how to read it, plus the tray's honesty note.
+    private func helpCard(wide: Bool) -> some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea().onTapGesture { model.helpOpen = false }
+            VStack(alignment: .leading, spacing: 12) {
+                Text(model.caption).font(.headline)
+                if let d = model.detail { Text(d).font(.subheadline) }
+                Text("Everything here is real: your photograph, the numbers the eye made of it, where it looked as it chose each word, its own words, and the drawing engine's actual state at each step. The colours and the step pictures are summaries and quick previews, and say so; the finished drawing is the real one.")
+                    .font(.footnote).opacity(0.75)
+                Button("Done") { model.helpOpen = false }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .foregroundStyle(.white)
+            .padding(18)
+            .frame(maxWidth: wide ? 560 : .infinity)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
+            .environment(\.colorScheme, .dark)
+            .padding(20)
+        }
+    }
+
+    private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        content()
+            .lineLimit(1)
+            .padding(.horizontal, 13).padding(.vertical, 8)
+            .background(.ultraThinMaterial.opacity(0.85), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            .environment(\.colorScheme, .dark)
+    }
+
+    private func roundPill(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial.opacity(0.85), in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+                .environment(\.colorScheme, .dark)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private struct SquareRef: Identifiable { let id: Int }
+}
+
+/// A small red dot before the text, for the "still developing" pill.
+private struct LiveDot: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon.foregroundStyle(.red).font(.system(size: 7))
+            configuration.title
         }
     }
 }

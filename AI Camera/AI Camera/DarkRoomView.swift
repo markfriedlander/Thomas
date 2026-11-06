@@ -49,7 +49,8 @@ struct DarkRoomView: View {
                 ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty || !negatives.isEmpty { EditButton() } }
             }
             .safeAreaInset(edge: .bottom) { loadBar }
-            .navigationDestination(item: $watching) { target in DeveloperTrayView(shotID: target.id) }
+            // Full screen, not pushed inside this sheet: the tray's picture is the whole canvas.
+            .fullScreenCover(item: $watching) { target in DeveloperTrayView(shotID: target.id) }
         }
         .task { await reload() }
         // Reload the list whenever a shot is added (count changes) or one lands in Photos

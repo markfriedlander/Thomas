@@ -950,6 +950,10 @@ extension LocalAPIServer {
             "previewsDecoded": m.previews.count,
             "drawingDone": m.drawingDone,
             "detail": m.detail ?? "",
+            "title": m.title,
+            "fact": m.fact ?? "",
+            "chromeVisible": m.chromeVisible,
+            "helpOpen": m.helpOpen,
             "word": m.currentWord?.text ?? "",
             "words": m.eyeWords.map(\.text),
             "numbersLook": m.numbersLook.rawValue,
@@ -972,6 +976,12 @@ extension LocalAPIServer {
         }
         if req.headers["x-look"] != nil {
             AntennaUIBridge.shared.trayTap = "look"; return (200, json(["tapped": "look toggle"]))
+        }
+        // X-Tap: picture (show/hide the pills) | help (the "?" pill) | close (the close pill)
+        if let tap = req.headers["x-tap"]?.lowercased() {
+            let map = ["picture": "picture", "help": "help", "close": "dismiss"]
+            guard let t = map[tap] else { return (400, #"{"error":"X-Tap: picture | help | close"}"#) }
+            AntennaUIBridge.shared.trayTap = t; return (200, json(["tapped": tap]))
         }
         let raw = (req.headers["x-index"] ?? "").lowercased()
         if raw == "live" { AntennaUIBridge.shared.trayScrubTo = -1 }
