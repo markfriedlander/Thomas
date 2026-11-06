@@ -329,6 +329,8 @@ extension LocalAPIServer {
         case ("POST", "/open"):            return await handleOpen(req)
         case ("POST", "/viewfinder"):      return await handleViewfinder(req)
         case ("GET",  "/trace"):           return await handleGetTrace(req)
+        case ("GET",  "/tray"):            return handleGetTray()
+        case ("POST", "/tray"):            return handleScrubTray(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
         default: return (404, #"{"error":"Not found"}"#)
         }
@@ -847,6 +849,44 @@ extension LocalAPIServer {
         ]))
     }
 
+    /// GET /tray: what the open Developer Tray is showing (instrument, don't infer): the timeline, the
+    /// frame on screen, its caption, live-follow state, and how many step previews are decoded.
+    private func handleGetTray() -> (Int, String) {
+        guard let m = TrayModel.current else {
+            return (404, #"{"error":"The Developer Tray is not open."}"#)
+        }
+        let names = m.frames.map { f -> String in
+            switch f {
+            case .reality: return "reality"
+            case .words: return "words"
+            case .mixing: return "mixing"
+            case .step(let k): return "step\(k)"
+            case .finished: return "finished"
+            }
+        }
+        return (200, json([
+            "shotID": m.shotID.uuidString,
+            "frames": names,
+            "index": m.index,
+            "caption": m.caption,
+            "following": m.following,
+            "playing": m.playing,
+            "previewsDecoded": m.previews.count,
+            "drawingDone": m.drawingDone,
+        ]))
+    }
+
+    /// POST /tray  X-Index: n (drag the scrubber to frame n), live (tap Live), or play (tap Play).
+    private func handleScrubTray(_ req: ParsedRequest) -> (Int, String) {
+        guard TrayModel.current != nil else { return (404, #"{"error":"The Developer Tray is not open."}"#) }
+        let raw = (req.headers["x-index"] ?? "").lowercased()
+        if raw == "live" { AntennaUIBridge.shared.trayScrubTo = -1 }
+        else if raw == "play" { AntennaUIBridge.shared.trayScrubTo = -2 }
+        else if let n = Int(raw) { AntennaUIBridge.shared.trayScrubTo = n }
+        else { return (400, #"{"error":"X-Index: <frame number> | live | play"}"#) }
+        return (200, json(["scrubbed": raw]))
+    }
+
     /// POST /viewfinder: show a still photograph in the viewfinder instead of the live sensor, for App
     /// Store screenshots taken with `devicectl` (real chrome, real Dynamic Island, one of Mark's photos).
     /// Body = image bytes (JPEG/PNG/HEIC). `X-Action: clear` (or an empty body) puts the live camera back.
@@ -891,6 +931,15 @@ extension LocalAPIServer {
             bridge.tapPreferences = true
             return (200, json(["screen": "preferences", "opened": true,
                                "message": "Opened Preferences the way the gear button does. Screenshot with devicectl."]))
+        case "tray", "watch":
+            // Open the Dark Room and tap the developing shot's Watch button, as a finger would.
+            guard DarkRoomWorker.shared.currentShotID != nil else {
+                return (409, #"{"error":"No shot is developing, so there is no Watch button to tap."}"#)
+            }
+            bridge.tapWatch = true
+            bridge.tapDarkRoom = true
+            return (200, json(["screen": "tray", "opened": true,
+                               "message": "Opened the Dark Room and tapped Watch on the developing shot."]))
         case "darkroom", "dark-room", "dark":
             bridge.tapDarkRoom = true
             return (200, json(["screen": "darkroom", "opened": true,

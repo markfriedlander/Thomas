@@ -114,6 +114,7 @@ enum Shot {
         // The full perception — always what frame 2 shows by default, and the fallback for
         // `wordsForHand` in every early return below.
         let fullWords = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
+        DevelopTrace.shared.noteEyeWords(fullWords)   // the Developer Tray shows them as soon as they exist
 
         guard config.drawsThirdFrame else { return (perception, nil, fullWords) }
 
@@ -227,6 +228,7 @@ enum Shot {
             }
             // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
             // returns the model's own resolution (512²) unchanged.
+            DevelopTrace.shared.finish(drawing: drawn)
             let sized = Upscaler.enlarge(drawn, to: size, method: method)
             return (perception, UIImage(cgImage: sized), wordsForHand)
         } catch {
@@ -250,6 +252,7 @@ enum Shot {
                                    onStage: ((DevelopStage) -> Void)?) async -> (perception: Perception, drawn: UIImage?, wordsForHand: String) {
         let handWords = config.effectiveHandPrompt
         let perception = Perception.spoke(text: handWords, tokens: nil)
+        if !handWords.isEmpty { DevelopTrace.shared.noteEyeWords(handWords, fromEye: false) }
 
         guard config.drawsThirdFrame else { return (perception, nil, handWords) }
 
@@ -272,6 +275,7 @@ enum Shot {
                 strength: Float(config.effectiveHandStrength),
                 reportsGuess: config.effectiveDevelopView == .guess,
                 onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
+            DevelopTrace.shared.finish(drawing: drawn)
             let sized = Upscaler.enlarge(drawn, to: config.drawingSize, method: config.upscaler)
             return (perception, UIImage(cgImage: sized), handWords)
         } catch {

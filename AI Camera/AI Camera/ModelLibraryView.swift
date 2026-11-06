@@ -819,6 +819,10 @@ struct ModelLicenseSheet: View {
     /// = scrolling Preferences to a section (its `.id`, e.g. "developing"). Preferences scrolls itself
     /// and clears this. Set by `POST /open` with `X-Section`.
     var scrollPreferencesTo: String? = nil
+    /// = tapping the developing shot's Watch button in the Dark Room (opens the Developer Tray).
+    var tapWatch = false
+    /// = dragging the Developer Tray's scrubber to a frame index (-1 = tapping Live, -2 = tapping Play).
+    var trayScrubTo: Int? = nil
 }
 #endif
 

@@ -30,6 +30,8 @@ struct DarkRoomView: View {
     @State private var thumbnails: [UUID: Image] = [:]
     @State private var pickerItem: PhotosPickerItem?
     @State private var confirmingPurgeAll = false
+    /// The shot whose development the Developer Tray is showing (pushed by its row's Watch button).
+    @State private var watching: WatchTarget?
 
     var body: some View {
         NavigationStack {
@@ -45,6 +47,7 @@ struct DarkRoomView: View {
                 ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty { EditButton() } }
             }
             .safeAreaInset(edge: .bottom) { loadBar }
+            .navigationDestination(item: $watching) { target in DeveloperTrayView(shotID: target.id) }
         }
         .task { await reload() }
         // Reload the list whenever a shot is added (count changes) or one lands in Photos
@@ -53,6 +56,20 @@ struct DarkRoomView: View {
         .onChange(of: worker.developingCount) { _, _ in Task { await reload() } }
         .onChange(of: worker.arrivals) { _, _ in Task { await reload() } }
         .onChange(of: pickerItem) { _, item in load(item) }
+        #if DEBUG
+        // Human parity: the antenna taps the developing shot's Watch button (`POST /open` X-Screen: tray).
+        .onChange(of: AntennaUIBridge.shared.tapWatch) { _, tap in
+            guard tap else { return }
+            if let id = worker.currentShotID { watching = WatchTarget(id: id) }
+            AntennaUIBridge.shared.tapWatch = false
+        }
+        .onAppear {
+            if AntennaUIBridge.shared.tapWatch, let id = worker.currentShotID {
+                watching = WatchTarget(id: id)
+                AntennaUIBridge.shared.tapWatch = false
+            }
+        }
+        #endif
         .confirmationDialog("Purge the whole queue? This permanently deletes every shot still waiting to develop.",
                             isPresented: $confirmingPurgeAll, titleVisibility: .visible) {
             Button("Purge All", role: .destructive) { purgeAll() }
@@ -108,7 +125,8 @@ struct DarkRoomView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(records) { record in
-                    DarkRoomRow(record: record, worker: worker, thumbnail: thumbnails[record.id])
+                    DarkRoomRow(record: record, worker: worker, thumbnail: thumbnails[record.id],
+                                onWatch: { watching = WatchTarget(id: record.id) })
                 }
                 .onDelete { delete($0) }
                 .onMove { move($0, $1) }
@@ -192,6 +210,8 @@ private struct DarkRoomRow: View {
     /// is `@Observable`, so reading `currentShotID` / `currentStage` here tracks their changes.
     let worker: DarkRoomWorker
     let thumbnail: Image?
+    /// Opens the Developer Tray for this shot. Offered only on the shot that is developing now.
+    let onWatch: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -207,7 +227,11 @@ private struct DarkRoomRow: View {
                 }
             }
             Spacer()
-            if isDeveloping { ProgressView() }
+            if isDeveloping {
+                Button("Watch", action: onWatch)
+                    .buttonStyle(.bordered)
+                    .font(.subheadline.weight(.semibold))
+            }
         }
         .padding(.vertical, 4)
     }
@@ -255,5 +279,8 @@ private struct DarkRoomRow: View {
         return parts.joined(separator: " · ")
     }
 }
+
+/// A shot to watch in the Developer Tray (`navigationDestination(item:)` needs Identifiable + Hashable).
+private struct WatchTarget: Identifiable, Hashable { let id: UUID }
 
 // ==== LEGO END: 35 The Dark Room Screen (The Developing Queue) ====

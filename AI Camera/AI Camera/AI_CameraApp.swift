@@ -100,6 +100,7 @@
 //   36  The CoreML Hand (Frame 3 On The Neural Engine)
 //  DeveloperTray.swift
 //   37  The Developer Tray (Trace, Contact Sheet, Flipbook)
+//   38  The Developer Tray Screen (Watch It Develop)
 //
 //  Created by Mark Friedlander on 7/14/26.
 //

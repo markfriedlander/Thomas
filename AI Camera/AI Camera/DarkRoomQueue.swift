@@ -695,7 +695,9 @@ final class DarkRoomWorker {
         currentStage = .seeing
         let result: (perception: Perception, drawn: UIImage?, wordsForHand: String) =
             await ModelLane.shared.run("darkroom") { @MainActor in
-                DevelopTrace.shared.reset()   // a shot that draws nothing must not inherit a trace
+                // A fresh trace for this shot (the Developer Tray watches it live); a shot that draws
+                // nothing must never inherit another shot's steps.
+                DevelopTrace.shared.startShot(id: shot.id, photo: photograph)
                 return await Shot.seeThenDraw(photograph, config: config,
                                               onStage: { stage in self.currentStage = stage })
             }
