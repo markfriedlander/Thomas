@@ -250,6 +250,16 @@ final class Settings {
     var developmentKeepsake: DevelopmentKeepsake {
         didSet { store(developmentKeepsake.rawValue, "developmentKeepsake") }
     }
+    /// The Dark Room's negatives: how many recent shots keep their workings for the Developer Tray
+    /// (NegativeStore). Mark, 2026-11-05: 20 by default, people may keep more. Lowering it prunes.
+    var negativesToKeep: Int {
+        didSet {
+            store(negativesToKeep, "negativesToKeep")
+            let n = negativesToKeep
+            Task { await NegativeStore.shared.prune(to: n) }
+        }
+    }
+    static let negativeChoices = [20, 50, 100, 200]
 
     private init() {
         let d = UserDefaults.standard
@@ -271,6 +281,7 @@ final class Settings {
         stampRawCoordinates = d.bool(forKey: "stampRawCoordinates")   // default false
         developView = DevelopView(rawValue: d.string(forKey: "developView") ?? "") ?? .working
         developmentKeepsake = DevelopmentKeepsake(rawValue: d.string(forKey: "developmentKeepsake") ?? "") ?? .off
+        negativesToKeep = (d.object(forKey: "negativesToKeep") as? Int) ?? 20
     }
 
     /// Keep the selected layout producible. Whenever the eye/hand availability changes (`useEye`,
@@ -344,6 +355,7 @@ final class Settings {
         stampRawCoordinates = false
         developView = .working
         developmentKeepsake = .off
+        negativesToKeep = 20
     }
 }
 
@@ -435,6 +447,8 @@ struct PreferencesView: View {
     @State private var confirmingReset = false
     @State private var showingLayerOneInfo = false
     @State private var showingDarkRoom = false
+    @State private var confirmingClearNegatives = false
+    @State private var negativesBytes = 0
     @FocusState private var promptFocused: Bool
     #if DEBUG
     /// Which antenna field last flashed "copied" (nil = none). Drives the copy-button
@@ -565,9 +579,21 @@ struct PreferencesView: View {
             } label: {
                 Label("Enter the Dark Room", systemImage: "tray.full")
             }
+            Picker("Keep negatives for", selection: $settings.negativesToKeep) {
+                ForEach(Settings.negativeChoices, id: \.self) { Text("the last \($0) shots").tag($0) }
+            }
+            Button("Clear kept negatives", role: .destructive) { confirmingClearNegatives = true }
+                .confirmationDialog("Clear every kept negative? The Developer Tray can no longer open those shots. Their photos, words and drawings stay in Photos.",
+                                    isPresented: $confirmingClearNegatives, titleVisibility: .visible) {
+                    Button("Clear Negatives", role: .destructive) {
+                        Task { await NegativeStore.shared.removeAll(); negativesBytes = 0 }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                }
         } footer: {
-            Text("Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load a picture to develop.")
+            Text("Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load a picture to develop.\n\nAfter a shot lands in Photos, the dark room keeps its negative: the machine's workings (the eye's numbers, where it looked, the drawing's steps) so you can open it in the Developer Tray again. The oldest are removed as new ones arrive. They stay on this phone and are not backed up. Now using \(NegativeStore.formatBytes(negativesBytes)).")
         }
+        .task { negativesBytes = await NegativeStore.shared.totalBytes() }
     }
 
     // MARK: - Which machine is looking

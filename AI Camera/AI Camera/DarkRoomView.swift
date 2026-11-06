@@ -28,6 +28,8 @@ struct DarkRoomView: View {
     @State private var worker = DarkRoomWorker.shared
     @State private var records: [ShotRecord] = []
     @State private var thumbnails: [UUID: Image] = [:]
+    /// Developed shots whose negatives the dark room still keeps (NegativeStore), newest first.
+    @State private var negatives: [NegativeMeta] = []
     @State private var pickerItem: PhotosPickerItem?
     @State private var confirmingPurgeAll = false
     /// The shot whose development the Developer Tray is showing (pushed by its row's Watch button).
@@ -44,7 +46,7 @@ struct DarkRoomView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty { EditButton() } }
+                ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty || !negatives.isEmpty { EditButton() } }
             }
             .safeAreaInset(edge: .bottom) { loadBar }
             .navigationDestination(item: $watching) { target in DeveloperTrayView(shotID: target.id) }
@@ -68,6 +70,15 @@ struct DarkRoomView: View {
                 watching = WatchTarget(id: id)
                 AntennaUIBridge.shared.tapWatch = false
             }
+            if let id = AntennaUIBridge.shared.tapWatchShot {
+                watching = WatchTarget(id: id)
+                AntennaUIBridge.shared.tapWatchShot = nil
+            }
+        }
+        .onChange(of: AntennaUIBridge.shared.tapWatchShot) { _, id in
+            guard let id else { return }
+            watching = WatchTarget(id: id)
+            AntennaUIBridge.shared.tapWatchShot = nil
         }
         #endif
         .confirmationDialog("Purge the whole queue? This permanently deletes every shot still waiting to develop.",
@@ -102,7 +113,7 @@ struct DarkRoomView: View {
     // MARK: - The list (or the empty state)
 
     @ViewBuilder private var content: some View {
-        if records.isEmpty {
+        if records.isEmpty && negatives.isEmpty {
             ContentUnavailableView {
                 Label("The dark room is empty", systemImage: "tray")
             } description: {
@@ -130,6 +141,20 @@ struct DarkRoomView: View {
                 }
                 .onDelete { delete($0) }
                 .onMove { move($0, $1) }
+
+                // Developed: the prints are in Photos; the negatives hang here for a while so the
+                // Developer Tray can open them again. Swiping one away deletes only the negative.
+                if !negatives.isEmpty {
+                    Section {
+                        ForEach(negatives) { n in
+                            NegativeRow(negative: n, thumbnail: thumbnails[n.id],
+                                        onWatch: { watching = WatchTarget(id: n.id) })
+                        }
+                        .onDelete { deleteNegatives($0) }
+                    } header: {
+                        Text("Developed - in Photos; negatives kept here")
+                    }
+                }
             }
             .listStyle(.plain)
         }
@@ -152,14 +177,30 @@ struct DarkRoomView: View {
 
     private func reload() async {
         let recs = await DarkRoomStore.shared.pending()
+        let negs = await NegativeStore.shared.list()
         var thumbs: [UUID: Image] = [:]
         for r in recs {
             if let cg = await DarkRoomStore.shared.thumbnail(for: r, maxPixel: 160) {
                 thumbs[r.id] = Image(uiImage: UIImage(cgImage: cg))
             }
         }
+        for n in negs where thumbs[n.id] == nil {
+            if let cg = await NegativeStore.shared.thumbnail(n.id, maxPixel: 160) {
+                thumbs[n.id] = Image(uiImage: UIImage(cgImage: cg))
+            }
+        }
         records = recs
+        negatives = negs
         thumbnails = thumbs
+    }
+
+    private func deleteNegatives(_ offsets: IndexSet) {
+        let ids = offsets.map { negatives[$0].id }
+        negatives.remove(atOffsets: offsets)
+        Task {
+            for id in ids { await NegativeStore.shared.remove(id) }
+            await reload()
+        }
     }
 
     private func delete(_ offsets: IndexSet) {
@@ -277,6 +318,38 @@ private struct DarkRoomRow: View {
         if let place = record.place { parts.append(place) }
         parts.append(record.capturedAt.formatted(date: .abbreviated, time: .shortened))
         return parts.joined(separator: " · ")
+    }
+}
+
+/// One developed shot whose negative is kept: its photograph, the start of its words, when it was
+/// taken, and Watch, which opens it in the Developer Tray.
+private struct NegativeRow: View {
+    let negative: NegativeMeta
+    let thumbnail: Image?
+    let onWatch: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Color.gray.opacity(0.2)
+                if let thumbnail { thumbnail.resizable().scaledToFill() }
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(negative.firstWords)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                Text(negative.capturedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Watch", action: onWatch)
+                .buttonStyle(.bordered)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.vertical, 2)
     }
 }
 

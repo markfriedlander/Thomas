@@ -764,6 +764,12 @@ final class DarkRoomWorker {
             return false
         }
         await DarkRoomStore.shared.remove(shot)
+        // The negative: the machine's workings for this shot stay in the Dark Room for a while so the
+        // Developer Tray can open it again (NegativeStore). The prints are already safe in Photos.
+        if let trace = DevelopTrace.shared.snapshot(), trace.shotID == shot.id {
+            await NegativeStore.shared.keep(trace, id: shot.id, capturedAt: shot.capturedAt,
+                                            place: shot.place, limit: Settings.shared.negativesToKeep)
+        }
         #if DEBUG
         // Capture exactly what just landed in Photos, so the layout audit can look at the real
         // saved frames (antenna GET /developed) rather than a side-door recomposition.

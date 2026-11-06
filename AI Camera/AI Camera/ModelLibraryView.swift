@@ -821,6 +821,8 @@ struct ModelLicenseSheet: View {
     var scrollPreferencesTo: String? = nil
     /// = tapping the developing shot's Watch button in the Dark Room (opens the Developer Tray).
     var tapWatch = false
+    /// = tapping Watch on a developed shot's row (its kept negative) in the Dark Room.
+    var tapWatchShot: UUID? = nil
     /// = dragging the Developer Tray's scrubber to a frame index (-1 = tapping Live, -2 = tapping Play).
     var trayScrubTo: Int? = nil
     /// A tap inside the Developer Tray, as a human would make it: "word:i" (tap a word),

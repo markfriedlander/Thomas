@@ -330,6 +330,8 @@ extension LocalAPIServer {
         case ("POST", "/viewfinder"):      return await handleViewfinder(req)
         case ("GET",  "/trace"):           return await handleGetTrace(req)
         case ("GET",  "/eye"):             return handleGetEye(req)
+        case ("GET",  "/negatives"):       return await handleGetNegatives()
+        case ("POST", "/negatives"):       return await handlePostNegatives(req)
         case ("GET",  "/tray"):            return handleGetTray()
         case ("POST", "/tray"):            return handleScrubTray(req)
         case ("POST", "/cancel-download"): return await handleCancelDownload(req)
@@ -644,6 +646,7 @@ extension LocalAPIServer {
             if let v = obj["stampRawCoordinates"] as? Bool { s.stampRawCoordinates = v; changed.append("stampRawCoordinates=\(v)") }
             if let v = (obj["developView"] as? String).flatMap(DevelopView.init) { s.developView = v; changed.append("developView=\(v.rawValue)") }
             if let v = (obj["developmentKeepsake"] as? String).flatMap(DevelopmentKeepsake.init) { s.developmentKeepsake = v; changed.append("developmentKeepsake=\(v.rawValue)") }
+            if let v = obj["negativesToKeep"] as? Int, v > 0 { s.negativesToKeep = v; changed.append("negativesToKeep=\(v)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
                 else if v == "prompt" { s.resetPromptToDefault(); changed.append("reset=prompt") }
@@ -661,6 +664,7 @@ extension LocalAPIServer {
     private struct SettingsSnapshot: Sendable {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let developView, developmentKeepsake: String
+        let negativesToKeep: Int
         let drawsThirdFrame: Bool
         let stampRawCoordinates: Bool
         let temperature: Double
@@ -685,6 +689,7 @@ extension LocalAPIServer {
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt,
              "developView": developView, "developmentKeepsake": developmentKeepsake,
+             "negativesToKeep": negativesToKeep,
              "privacy": ["locked": privacyLocked,
                          "look": privacyLook,
                          "place": privacyPlace,
@@ -712,6 +717,7 @@ extension LocalAPIServer {
             systemPrompt: s.systemPrompt,
             developView: s.developView.rawValue,
             developmentKeepsake: s.developmentKeepsake.rawValue,
+            negativesToKeep: s.negativesToKeep,
             drawsThirdFrame: s.drawsThirdFrame,
             stampRawCoordinates: s.stampRawCoordinates,
             temperature: s.temperature,
@@ -890,6 +896,33 @@ extension LocalAPIServer {
         return (200, json(out))
     }
 
+    /// GET /negatives: the Dark Room's kept negatives (NegativeStore), newest first, with their size.
+    private func handleGetNegatives() async -> (Int, String) {
+        let list = await NegativeStore.shared.list()
+        let bytes = await NegativeStore.shared.totalBytes()
+        let rows: [[String: Any]] = list.map { n in
+            ["id": n.id.uuidString, "capturedAt": ISO8601DateFormatter().string(from: n.capturedAt),
+             "words": n.firstWords, "eye": n.eyeName ?? "", "hasWorkings": n.eye != nil,
+             "steps": n.latentCount, "hasDrawing": n.hasDrawing]
+        }
+        return (200, json(["count": list.count, "keep": Settings.shared.negativesToKeep,
+                           "bytes": bytes, "negatives": rows]))
+    }
+
+    /// POST /negatives  X-Delete: <id> (swipe one away) | X-Action: clear (Preferences' Clear button).
+    /// Only negatives: the prints in Photos are never touched.
+    private func handlePostNegatives(_ req: ParsedRequest) async -> (Int, String) {
+        if let raw = req.headers["x-delete"], let id = UUID(uuidString: raw) {
+            await NegativeStore.shared.remove(id)
+            return (200, json(["deleted": raw]))
+        }
+        if (req.headers["x-action"] ?? "").lowercased() == "clear" {
+            await NegativeStore.shared.removeAll()
+            return (200, json(["cleared": true]))
+        }
+        return (400, #"{"error":"X-Delete: <id> or X-Action: clear"}"#)
+    }
+
     /// GET /tray: what the open Developer Tray is showing (instrument, don't infer): the timeline, the
     /// frame on screen, its caption, live-follow state, and how many step previews are decoded.
     private func handleGetTray() -> (Int, String) {
@@ -993,6 +1026,13 @@ extension LocalAPIServer {
             return (200, json(["screen": "preferences", "opened": true,
                                "message": "Opened Preferences the way the gear button does. Screenshot with devicectl."]))
         case "tray", "watch":
+            // X-Shot: <id> = tap Watch on that developed shot's row (its kept negative).
+            if let raw = req.headers["x-shot"], let id = UUID(uuidString: raw) {
+                bridge.tapWatchShot = id
+                bridge.tapDarkRoom = true
+                return (200, json(["screen": "tray", "opened": true, "shot": raw,
+                                   "message": "Opened the Dark Room and tapped Watch on that developed shot."]))
+            }
             // Open the Dark Room and tap the developing shot's Watch button, as a finger would.
             guard DarkRoomWorker.shared.currentShotID != nil else {
                 return (409, #"{"error":"No shot is developing, so there is no Watch button to tap."}"#)

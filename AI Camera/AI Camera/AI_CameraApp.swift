@@ -105,6 +105,9 @@
 //  EyeWorkings.swift
 //   39  The Eye's Workings (The Numbers, And Where Each Word Looked)
 //
+//  NegativeStore.swift
+//   40  The Negatives (Recent Shots, Kept For The Tray)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

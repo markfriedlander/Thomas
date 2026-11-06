@@ -478,6 +478,9 @@ final class TrayModel {
     private var lastVersion = -1
     private var pollTask: Task<Void, Never>?
     private var playTask: Task<Void, Never>?
+    /// Set once the tray has looked for this shot's kept negative (a shot that is no longer the one
+    /// developing live is opened from the Dark Room's negatives).
+    private var negativeRequested = false
     private let decoder = TrayPreviewDecoder()
 
     // The eye's workings (EyeWorkings.swift), when this shot's eye could show them.
@@ -526,6 +529,15 @@ final class TrayModel {
         if v != lastVersion, let snap = DevelopTrace.shared.snapshot(), snap.shotID == shotID {
             lastVersion = v
             trace = snap
+        }
+        // Not the shot in the live trace: open its negative instead (NegativeStore), once.
+        if trace == nil, !developing, !negativeRequested {
+            negativeRequested = true
+            let id = shotID
+            Task {
+                if let kept = await NegativeStore.shared.load(id) { self.trace = kept }
+                cameraLog("TRAY: opened \(id.uuidString.prefix(8)) from its negative: \(self.trace == nil ? "none kept" : "ok")")
+            }
         }
         guard let t = trace, isMine else { rebuild(nil, mixingNow: mixingNow); return }
         if let e = t.eye {
