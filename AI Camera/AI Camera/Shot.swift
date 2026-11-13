@@ -145,7 +145,11 @@ enum Shot {
         var wordsForHand = fullWords
         if PromptBudget.exceedsDrawerBudget(fullWords) {
             let recurse = (config.seer.modelID == ModelCatalog.smolVLM2.id)
-            let maxPasses = recurse ? 5 : 1
+            // Every eye may take a second round when the first isn't short enough (Mark, 2026-11-13:
+            // Qwen went 80 -> 57 words in one pass, still over the hand's ~50, so the end would have
+            // been cut off. "Eye rounds are pretty fast... I'm more concerned about something getting
+            // hacked off.") Smol, which shortens slowly, keeps its five.
+            let maxPasses = recurse ? 5 : 2
             var current = fullWords
             var passes = 0
             // Log the FULL text of each rung of the compression, not just its size — watching the
@@ -177,6 +181,7 @@ enum Shot {
         // changes what the drawer perceives the eye to have seen. Parked in NEXT as an opt-in
         // mode, clearly outside the pure chain.
         let prompt = wordsForHand
+        DevelopTrace.shared.noteHandWords(prompt)   // the tray shows what the hand will receive, before it loads
 
         // Frame 2 is over. Let the eye go before either hand arrives — both engines load into a
         // freed device (Mark's rule: no overhead carried between frames).

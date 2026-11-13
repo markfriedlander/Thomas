@@ -8,6 +8,7 @@
 
 import CoreML
 import Foundation
+import MachO
 import SwiftUI
 
 // ==== LEGO START: 41 Preparing The Hand (Download, Then Prepare) ====
@@ -55,10 +56,31 @@ final class HandPreparation {
 
     /// This build of the app. Core ML's cache does not survive an install or update, so a
     /// preparation counts only for the build that made it.
+    ///
+    /// The version alone was not enough (2026-11-13): a test install keeps the same version number, so
+    /// the after-launch preparation never ran and the next shot paid for it mid-shot (91 s, 1.1 GB
+    /// written). The compiled code's own identity (its LC_UUID, new with every build) is added, so any
+    /// new build is recognized; an App Store update changes both anyway.
     nonisolated static var currentBuild: String {
         let i = Bundle.main.infoDictionary
-        return "\(i?["CFBundleShortVersionString"] as? String ?? "?") (\(i?["CFBundleVersion"] as? String ?? "?"))"
+        return "\(i?["CFBundleShortVersionString"] as? String ?? "?") (\(i?["CFBundleVersion"] as? String ?? "?")) \(binaryID.prefix(8))"
     }
+
+    /// The UUID the linker stamped on the code this function lives in (`#dsohandle` is that image's
+    /// header, which in a Debug build is the app's debug library rather than its small launcher).
+    nonisolated private static let binaryID: String = {
+        let base = UnsafeRawPointer(#dsohandle)
+        let header = base.load(as: mach_header_64.self)
+        var cursor = base.advanced(by: MemoryLayout<mach_header_64>.size)
+        for _ in 0..<header.ncmds {
+            let command = cursor.load(as: load_command.self)
+            if command.cmd == UInt32(LC_UUID) {
+                return UUID(uuid: cursor.load(as: uuid_command.self).uuid).uuidString
+            }
+            cursor = cursor.advanced(by: Int(command.cmdsize))
+        }
+        return "unknown"
+    }()
 
     nonisolated static func isPrepared(_ repoID: String) -> Bool {
         UserDefaults.standard.string(forKey: "handPreparedFor.\(repoID)") == currentBuild

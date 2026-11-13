@@ -151,6 +151,12 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         }
     }
 
+    /// The words the hand will receive, as soon as they are decided (before the hand loads, so the tray's
+    /// "Mixing the developer" moment can show them).
+    func noteHandWords(_ words: String) {
+        lock.withLock { prompt = words; version += 1 }
+    }
+
     /// The drawing starts (called by the engine once it is loaded).
     func begin(prompt: String, steps: Int, isGuess: Bool, channelsLast: Bool, hand: String) {
         lock.withLock {
@@ -602,6 +608,13 @@ final class TrayModel {
     /// looked at the picture leaves it dim (design pass 2026-11-12; before, each word was scaled to its
     /// own brightest square, which made a 32% look as bright as a 60% one).
     private(set) var lightScale: Float = 0
+    /// While the shot is still developing: whether it is, and roughly how many moments are still to
+    /// come, for the slider's faint track (Mark, 2026-11-13: mid-development the slider looked finished).
+    private(set) var developing = false
+    private(set) var upcoming = 0
+    /// Where the hand will begin on that faint track, before it has begun.
+    private(set) var upcomingHandStart: Int?
+
     /// The square the eye looked at most over the whole description: where the numbers moment opens.
     private(set) var mostLookedSquare: Int?
     @ObservationIgnored private var lookCache: [Int: TrayLook?] = [:]
@@ -684,9 +697,29 @@ final class TrayModel {
             }
         }
         rebuild(t, mixingNow: mixingNow)
+        self.developing = developing
+        updateUpcoming(t)
         if following { index = frames.count - 1 }
         requestPreview(for: current)
         if t.final != nil { prefetchAll() }   // done: decode the rest so stepping and scrubbing are smooth
+    }
+
+    /// Counts only what can be known: the words moment, the mixing, the hand's passes (set when the
+    /// drawing starts; before that, the Core ML hand's usual 21) and the finished drawing. The eye's
+    /// remaining words can't be known ahead, so they are not counted.
+    private func updateUpcoming(_ t: DevelopTrace.Snapshot?) {
+        guard developing else { upcoming = 0; upcomingHandStart = nil; return }
+        var n = frames.contains(.words) ? 0 : 1
+        var handStart: Int?
+        if Settings.shared.drawsThirdFrame {
+            if !has(.hand) { handStart = frames.count + n }
+            if !frames.contains(.mixing) { n += 1 }
+            let passes = (t?.steps ?? 0) > 0 ? (t?.steps ?? 0) : 21
+            n += max(0, passes - (t?.latents.count ?? 0))
+            if t?.final == nil { n += 1 }
+        }
+        if upcoming != n { upcoming = n }
+        if upcomingHandStart != handStart { upcomingHandStart = handStart }
     }
 
     private static func lightScale(_ e: EyeWorkings) -> Float {
@@ -931,7 +964,9 @@ final class TrayModel {
             let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
             let waiting = (drawingDone && hot) ? "waits for the phone to cool" : "is on its way"
             guard let shown = shownStep(for: k) else { return "This preview \(waiting)" }
-            if shown == k { return nil }
+            // Watching live, the picture trails the engine by about a step on purpose; saying so on
+            // every step was noise (2026-11-13).
+            if shown == k || (developing && following) { return nil }
             return "Showing step \(shown) \u{00B7} step \(k) \(waiting)"
         default:
             return nil
@@ -1006,7 +1041,8 @@ final class TrayModel {
             let kind = (trace?.isGuess ?? false)
                 ? "These previews show the engine's best guess at the finished picture after each step."
                 : "These previews show the engine's working image after each step."
-            return "The hand never sees your photograph. It starts from random noise and, over \(of) steps, refines it toward the eye's words. This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
+            let extra = (trace?.channelsLast ?? true) ? "" : " (Its method takes one extra pass at the start, so \(of - 1) steps make \(of) passes.)"
+            return "The hand never sees your photograph. It starts from random noise and, over \(of) passes, refines it toward the eye's words.\(extra) This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
         case .finished:
             return "Thomas's hand never saw your photograph. It drew from the eye's words, filling in the rest from what it knows. This is what Thomas saw, as far as it could carry it in words.\n\nThis is the finished drawing itself, not a preview; it's saved to Photos."
         }
@@ -1391,13 +1427,16 @@ struct DeveloperTrayView: View {
     /// Bottom: the moment, then ‹ the slider › (and Live while the shot is still developing).
     private var bottomBar: some View {
         VStack(spacing: 8) {
-            if isDeveloping, let live = liveLine {
-                pill { Label(live, systemImage: "circle.fill").font(.caption.weight(.semibold)).labelStyle(LiveDot()) }
+            // One pill: the moment. While developing, a red dot marks that it is the newest moment.
+            if isDeveloping && model.following {
+                pill { Label(model.title, systemImage: "circle.fill").font(.subheadline.weight(.semibold)).labelStyle(LiveDot()) }
+            } else {
+                pill { Text(model.title).font(.subheadline.weight(.semibold)) }
             }
-            pill { Text(model.title).font(.subheadline.weight(.semibold)) }
             HStack(spacing: 6) {
                 TrayStepButton(symbol: "chevron.left", label: "Back", enabled: model.index > 0) { model.step(-1) }
-                TrayScrubber(count: model.frames.count, index: model.index, spans: model.chapterSpans) {
+                TrayScrubber(count: model.frames.count, index: model.index, spans: model.chapterSpans,
+                             upcoming: model.upcoming, upcomingHandStart: model.upcomingHandStart) {
                     model.scrub(to: $0)
                 }
                 TrayStepButton(symbol: "chevron.right", label: "Forward", enabled: model.index < model.frames.count - 1) { model.step(1) }
@@ -1411,19 +1450,6 @@ struct DeveloperTrayView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 4)
-    }
-
-    /// While this shot is still developing: where it is, in a few words.
-    private var liveLine: String? {
-        switch worker.currentStage {
-        case .seeing?: return "Seeing"
-        case .mixing?: return "Mixing the developer"
-        case .drawing?:
-            let n = model.trace?.latents.count ?? 0, total = model.trace?.steps ?? 0
-            return n == 0 ? "Drawing" : "Drawing \u{00B7} step \(n) of \(max(n, total))"
-        case .saving?: return "Saving to Photos"
-        case .none: return "Developing"
-        }
     }
 
     /// Behind "?": this moment, explained.
@@ -1552,24 +1578,49 @@ struct TraySplitBar: View {
     }
 }
 
-/// The timeline slider, with a mark where each chapter begins and the chapter names under it.
+/// The timeline slider, with a mark where each chapter begins and the chapter names under it. While
+/// the shot is still developing, the moments still to come are a faint dotted track that breathes, so
+/// a pause reads as "working", never as "done" or "stuck" (Mark, 2026-11-13).
 struct TrayScrubber: View {
     let count: Int
     let index: Int
     let spans: [TrayChapterSpan]
+    var upcoming = 0
+    var upcomingHandStart: Int?
     let onScrub: (Int) -> Void
 
     var body: some View {
         GeometryReader { geo in
             let inset: CGFloat = 11
             let w = max(1, geo.size.width - inset * 2)
-            let x: (Double) -> CGFloat = { i in inset + (count > 1 ? CGFloat(i / Double(count - 1)) : 0) * w }
+            let total = count + upcoming
+            let x: (Double) -> CGFloat = { i in inset + (total > 1 ? CGFloat(i / Double(total - 1)) : 0) * w }
+            let edge = x(Double(max(0, count - 1)))
             ZStack(alignment: .topLeading) {
-                Capsule().fill(.white.opacity(0.25)).frame(width: w, height: 4).offset(x: inset, y: 13)
+                Capsule().fill(.white.opacity(0.25)).frame(width: max(0, edge - inset), height: 4).offset(x: inset, y: 13)
+                if upcoming > 0 {
+                    TimelineView(.animation) { tl in
+                        let breath = 0.3 + 0.25 * sin(tl.date.timeIntervalSinceReferenceDate * 2.4)
+                        Path { p in
+                            p.move(to: CGPoint(x: edge, y: 15))
+                            p.addLine(to: CGPoint(x: inset + w, y: 15))
+                        }
+                        .stroke(.white.opacity(breath), style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: [1, 6]))
+                    }
+                }
                 Capsule().fill(.white).frame(width: max(4, x(Double(index)) - inset), height: 4).offset(x: inset, y: 13)
                 ForEach(spans.dropFirst()) { s in
                     Capsule().fill(.white.opacity(0.75)).frame(width: 2, height: 14)
                         .offset(x: x(Double(s.first) - 0.5) - 1, y: 8)
+                }
+                if let h = upcomingHandStart {
+                    Capsule().fill(.white.opacity(0.35)).frame(width: 2, height: 14)
+                        .offset(x: x(Double(h) - 0.5) - 1, y: 8)
+                    if x(Double(total - 1)) - x(Double(h)) >= 30 {
+                        Text(TrayChapter.hand.rawValue).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.35))
+                            .fixedSize()
+                            .position(x: (x(Double(h)) + x(Double(total - 1))) / 2, y: 38)
+                    }
                 }
                 Circle().fill(.white).frame(width: 22, height: 22).shadow(radius: 2)
                     .offset(x: x(Double(index)) - 11, y: 4)
@@ -1583,12 +1634,13 @@ struct TrayScrubber: View {
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                guard count > 1 else { return }
+                guard count > 1, total > 1 else { return }
                 let f = (v.location.x - inset) / w
-                onScrub(min(count - 1, max(0, Int((f * CGFloat(count - 1)).rounded()))))
+                onScrub(min(count - 1, max(0, Int((f * CGFloat(total - 1)).rounded()))))
             })
         }
         .frame(height: 46)
+        .animation(.smooth(duration: 0.4), value: count + upcoming)
     }
 }
 

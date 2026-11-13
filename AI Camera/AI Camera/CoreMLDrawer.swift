@@ -186,6 +186,11 @@ actor CoreMLDrawer {
 
         let started = Date()
         let availBefore = processAvailableMemoryMB()
+        // Which prepared copies exist before this load: if the load turns out to be a preparation, the
+        // older copies are an earlier build's and are removed afterwards (HandPreparation). Before
+        // 2026-11-13 only the after-launch preparation cleaned up, so preparations that happened inside
+        // a shot left a ~100 MB copy each (six found on Mark's phone).
+        let bundlesBefore = e5rtFinishedBundles()
 
         // `.cpuAndNeuralEngine` — the whole reason this hand exists. Do not soften it.
         let mlConfig = MLModelConfiguration()
@@ -206,7 +211,9 @@ actor CoreMLDrawer {
         let availLoaded = processAvailableMemoryMB()
         // A load this slow was Core ML preparing the hand (first run after an install or update);
         // either way, this build's hand is now prepared (HandPreparation).
-        HandPreparation.markPrepared(repoID, seconds: Date().timeIntervalSince(started))
+        let loadSeconds = Date().timeIntervalSince(started)
+        HandPreparation.markPrepared(repoID, seconds: loadSeconds)
+        reapStalePreparations(existingBefore: bundlesBefore, preparedSeconds: loadSeconds)
         cameraLog("COREML: loaded \(repoID) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s — drawing \(steps) steps | availMB \(formatMB(availBefore)) → \(formatMB(availLoaded)) \(writesLine())")
 
         var config = StableDiffusionPipeline.Configuration(prompt: prompt)
@@ -239,7 +246,10 @@ actor CoreMLDrawer {
         // reports is the shot's frozen `DevelopView`, a choice between two true things.
         let trace = DevelopTrace.shared
         config.useDenoisedIntermediates = reportsGuess
-        trace.begin(prompt: prompt, steps: steps, isGuess: reportsGuess, channelsLast: false,
+        // The engine's default method (PNDM) runs one extra pass at the start: 20 steps are 21 passes
+        // of the drawing model, measured 2026-11-13 (21 progress calls). The tray counts what really runs.
+        let passes = config.schedulerType == .pndmScheduler ? steps + 1 : steps
+        trace.begin(prompt: prompt, steps: passes, isGuess: reportsGuess, channelsLast: false,
                     hand: ModelCatalog.model(id: repoID)?.displayName ?? repoID)
 
         let drawStarted = Date()
