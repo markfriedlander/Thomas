@@ -1079,6 +1079,10 @@ struct DeveloperTrayView: View {
     @Environment(\.horizontalSizeClass) private var widthClass
     /// A regular-width window (iPad, the Duo's inner screen) gets larger type.
     private var roomy: Bool { widthClass == .regular }
+    @Environment(\.verticalSizeClass) private var heightClass
+    /// A short window: a phone held sideways, about 430 points tall (Mark, 2026-11-13: "too crushed").
+    /// The pills and controls are packed tighter so the words get the height.
+    private var short: Bool { heightClass == .compact }
 
     init(shotID: UUID) { _model = State(initialValue: TrayModel(shotID: shotID)) }
 
@@ -1211,7 +1215,7 @@ struct DeveloperTrayView: View {
                     Color.clear
                     if model.chromeVisible {
                         columnContent
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, short ? 8 : 16)
                             .transition(.opacity)
                     }
                 }
@@ -1408,7 +1412,7 @@ struct DeveloperTrayView: View {
                 Text(model.eyeWords.isEmpty
                      ? "Lit: squares whose numbers are like square \(s + 1)'s. Tap square \(s + 1) to see its numbers."
                      : "Lit: squares whose numbers are like square \(s + 1)'s, and the words that looked there. Tap square \(s + 1) to see its numbers.")
-                    .font(.footnote).foregroundStyle(.white.opacity(0.75))
+                    .font(short ? .caption : .footnote).foregroundStyle(.white.opacity(0.75))
                 if model.selectedSquare != nil, let w = model.currentWord {
                     Button { model.selectedSquare = nil } label: {
                         pill { Text("Back to \u{201C}\(w.bare)\u{201D}").font(.caption.weight(.semibold)) }
@@ -1417,7 +1421,7 @@ struct DeveloperTrayView: View {
                 }
             }
         } else if let look = model.currentLook {
-            TraySplitBar(look: look)
+            TraySplitBar(look: look, oneLine: short)
         } else if let fact = model.fact {
             Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.75))
         } else if model.current == .numbers, let e = model.trace?.eye {
@@ -1443,7 +1447,7 @@ struct DeveloperTrayView: View {
                 Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
             }
             Text(text)
-                .font((roomy ? Font.title : Font.title3).weight(.medium))
+                .font((roomy ? Font.title : (short ? Font.body : Font.title3)).weight(.medium))
                 .id(text)
                 .transition(.opacity)
             if let fact = model.fact { Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.7)) }
@@ -1473,9 +1477,10 @@ struct DeveloperTrayView: View {
                     let on = model.current.chapter == c
                     let has = model.has(c)
                     Button { model.jump(to: c) } label: {
-                        Text(c.label).font(.caption.weight(.bold)).tracking(0.6)
+                        Text(c.label).font(.caption.weight(.bold)).tracking(short ? 0.2 : 0.6)
+                            .lineLimit(1).fixedSize()
                             .foregroundStyle(on ? Color.black : Color.white.opacity(has ? 0.8 : 0.3))
-                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .padding(.horizontal, short ? 9 : 14).padding(.vertical, 7)
                             .background(on ? Color.white : Color.clear, in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -1489,23 +1494,23 @@ struct DeveloperTrayView: View {
             Spacer(minLength: 8)
             roundPill("questionmark") { model.helpOpen.toggle() }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, short ? 8 : 16)
     }
 
     /// Bottom: the moment, then ‹ the slider › (and Live while the shot is still developing).
     private var bottomBar: some View {
         VStack(spacing: 8) {
-            // One pill: the moment. While developing, a red dot marks that it is the newest moment.
-            if isDeveloping && model.following {
-                pill { Label(model.title, systemImage: "circle.fill").font(.subheadline.weight(.semibold)).labelStyle(LiveDot()) }
-            } else {
-                pill { Text(model.title).font(.subheadline.weight(.semibold)) }
-            }
+            // One name for the moment. While developing, a red dot marks that it is the newest moment.
+            if !short { pill { momentName(.subheadline) } }
             HStack(spacing: 6) {
                 TrayStepButton(symbol: "chevron.left", label: "Back", enabled: model.index > 0) { model.step(-1) }
-                TrayScrubber(count: model.frames.count, index: model.index, spans: model.chapterSpans,
-                             upcoming: model.upcoming, upcomingHandStart: model.upcomingHandStart) {
-                    model.scrub(to: $0)
+                VStack(spacing: 0) {
+                    // Short windows: the name rides just above the slider, no pill, to give the words the height.
+                    if short { momentName(.caption).padding(.bottom, -2) }
+                    TrayScrubber(count: model.frames.count, index: model.index, spans: model.chapterSpans,
+                                 upcoming: model.upcoming, upcomingHandStart: model.upcomingHandStart) {
+                        model.scrub(to: $0)
+                    }
                 }
                 TrayStepButton(symbol: "chevron.right", label: "Forward", enabled: model.index < model.frames.count - 1) { model.step(1) }
                 if isDeveloping {
@@ -1516,8 +1521,22 @@ struct DeveloperTrayView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, short ? 8 : 16)
         .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func momentName(_ font: Font) -> some View {
+        Group {
+            if isDeveloping && model.following {
+                Label(model.title, systemImage: "circle.fill").labelStyle(LiveDot())
+            } else {
+                Text(model.title)
+            }
+        }
+        .font(font.weight(.semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
     }
 
     /// Behind "?": this moment, explained.
@@ -1615,6 +1634,8 @@ struct TrayWordLabel: View {
 /// Where one word's whole attention went: the picture, its instructions, what it had already said.
 struct TraySplitBar: View {
     let look: TrayLook
+    /// Short windows: the three labels on one line under the bar.
+    var oneLine = false
 
     private var parts: [(String, Float, Color)] {
         [("picture", look.picture, Color(red: 1, green: 0.84, blue: 0.55)),
@@ -1633,7 +1654,17 @@ struct TraySplitBar: View {
                     }
                 }
             }
-            .frame(height: 8)
+            .frame(height: oneLine ? 6 : 8)
+            if oneLine {
+                HStack(spacing: 10) {
+                    ForEach(parts.indices, id: \.self) { i in
+                        (Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)
+                         + Text(" " + ["picture", "instructions", "already said"][i]).font(.caption).foregroundColor(.white.opacity(0.7)))
+                            .lineLimit(1)
+                    }
+                }
+                .minimumScaleFactor(0.75)
+            } else {
             HStack(alignment: .top, spacing: 0) {
                 ForEach(parts.indices, id: \.self) { i in
                     VStack(alignment: .leading, spacing: 1) {
@@ -1642,6 +1673,7 @@ struct TraySplitBar: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
             }
         }
     }
