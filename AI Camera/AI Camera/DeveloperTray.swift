@@ -558,6 +558,11 @@ actor TrayPreviewDecoder {
     struct Picture: @unchecked Sendable { let image: CGImage }
 
     func decode(_ values: [Float], shape: [Int], channelsLast: Bool) -> Picture? {
+        // MLX cannot create its GPU device in the Simulator and aborts the app (found 2026-11-13 testing
+        // the tray's iPad layout there). The Simulator only checks layouts, so it shows no previews.
+        #if targetEnvironment(simulator)
+        return nil
+        #endif
         if taesd == nil { taesd = try? TAESDDecoder.bundled() }
         guard let taesd, shape.count == 4 else { return nil }
         var z = MLXArray(values, shape)
@@ -569,7 +574,9 @@ actor TrayPreviewDecoder {
 
     func release() {
         taesd = nil
+        #if !targetEnvironment(simulator)
         MLX.Memory.clearCache()
+        #endif
     }
 }
 
@@ -1069,15 +1076,22 @@ struct DeveloperTrayView: View {
     @State private var worker = DarkRoomWorker.shared
     @Environment(\.dismiss) private var dismiss
     @Namespace private var canvas
+    @Environment(\.horizontalSizeClass) private var widthClass
+    /// A regular-width window (iPad, the Duo's inner screen) gets larger type.
+    private var roomy: Bool { widthClass == .regular }
 
     init(shotID: UUID) { _model = State(initialValue: TrayModel(shotID: shotID)) }
 
     var body: some View {
         GeometryReader { geo in
-            let wide = geo.size.width > geo.size.height
+            // Side by side whenever the window is wider than tall and roomy enough for a picture plus a
+            // column of words. Decided by the window's own shape, never by device or orientation: an
+            // iPad window can be any size, and the Duo's inner screen ignores orientation (Apple,
+            // "Prepare your app for iPhone Duo", 2026). Safe areas are respected per edge by SwiftUI.
+            let wide = geo.size.width > geo.size.height && geo.size.width >= 640
             ZStack {
                 backdrop
-                if wide { wideLayout } else { tallLayout(geo.size) }
+                if wide { sideLayout(geo.size) } else { tallLayout(geo.size) }
                 if model.helpOpen { helpCard(wide: wide).transition(.opacity) }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -1143,7 +1157,7 @@ struct DeveloperTrayView: View {
                 .allowsHitTesting(model.chromeVisible)
             ZStack(alignment: .top) {
                 if phase == .words {
-                    wordsPanel(wide: false)
+                    wordsPanel(centered: false)
                         .matchedGeometryEffect(id: "words", in: canvas)
                         .padding(.horizontal, 16)
                         .transition(.opacity)
@@ -1170,32 +1184,78 @@ struct DeveloperTrayView: View {
         .animation(.smooth(duration: 0.55), value: open)
     }
 
-    /// Sideways: the picture fills the screen; the pills lie across it.
-    private var wideLayout: some View {
-        ZStack {
-            if model.current.phase == .words {
-                wordsPanel(wide: true)
-                    .frame(maxWidth: 640)
-                    .padding(.vertical, 70)
-                    .transition(.opacity)
-            } else {
-                stage
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-            }
-            if model.chromeVisible {
-                VStack(spacing: 10) {
-                    topBar
-                    Spacer(minLength: 0)
-                    if model.current.phase == .picture { momentContent(wide: true).frame(maxWidth: 640) }
-                    bottomBar.frame(maxWidth: 760)
+    /// Side by side (2026-11-13 design pass, mockup screenshots-draft/design-pass-2026-11-13): the picture
+    /// on the left at full height, and a column on the right with the pills, the moment's words and the
+    /// controls, so nothing ever covers the squares that light up. On the words moments the words take the
+    /// picture's place; on the hand's moments the column keeps the words the drawing is made from, beside it.
+    private func sideLayout(_ size: CGSize) -> some View {
+        let column = min(max(size.width * 0.36, 300), 440)
+        let phase = model.current.phase
+        return HStack(spacing: 16) {
+            ZStack {
+                if phase == .words {
+                    wordsPanel(centered: true)
+                        .matchedGeometryEffect(id: "words", in: canvas)
+                        .padding(.horizontal, 12)
+                        .transition(.opacity)
+                } else {
+                    stage.transition(.opacity)
                 }
-                .padding(.vertical, 8)
-                .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 12) {
+                topBar.opacity(model.chromeVisible ? 1 : 0).allowsHitTesting(model.chromeVisible)
+                // The middle always takes the space, even when this moment has nothing to put there, so
+                // the pills stay at the top and the controls at the bottom (iPad simulator, 2026-11-13).
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+                    if model.chromeVisible {
+                        columnContent
+                            .padding(.horizontal, 16)
+                            .transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                bottomBar.opacity(model.chromeVisible ? 1 : 0).allowsHitTesting(model.chromeVisible)
+            }
+            .frame(width: column)
+            .padding(.vertical, 6)
+        }
+        .animation(.smooth(duration: 0.55), value: phase)
+    }
+
+    /// The column's words for the moment on screen.
+    @ViewBuilder
+    private var columnContent: some View {
+        switch model.current.phase {
+        case .picture:
+            if model.current != .reality {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !model.eyeWords.isEmpty {
+                        sentence(wide: false).matchedGeometryEffect(id: "words", in: canvas)
+                    }
+                    eyeFacts
+                }
+                .environment(\.colorScheme, .dark)
+            }
+        case .words:
+            EmptyView()
+        case .drawing:
+            if !model.handWords.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text((model.trace?.wordsFromEye ?? true)
+                         ? (model.wasShortened ? "Drawing from these words (shortened)" : "Drawing from these words")
+                         : "Drawing from your instruction")
+                        .font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                    ScrollView {
+                        Text(model.handWords).font(roomy ? .title3 : .callout)
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                }
             }
         }
-        .animation(.smooth(duration: 0.55), value: model.current.phase)
     }
 
     // MARK: The canvas
@@ -1309,26 +1369,35 @@ struct DeveloperTrayView: View {
     /// earlier words glow by how much attention the word on screen paid them. With a square picked,
     /// every word glows by how much it looked at that square. Every word is a button.
     private func sentence(wide: Bool) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                WordFlow(spacing: 3) {
-                    ForEach(model.eyeWords) { w in
-                        Button { model.jump(toWord: w.id) } label: {
-                            TrayWordLabel(text: w.text, state: model.wordState(w.id))
-                        }
-                        .buttonStyle(.plain)
-                        .id(w.id)
+        // Only as tall as the words need, so what follows sits right under them; it scrolls only when
+        // the description is too long for the space (iPad simulator, 2026-11-13: a greedy scroll view
+        // left a big empty gap between the sentence and its split bar on a tall screen).
+        ViewThatFits(in: .vertical) {
+            sentenceFlow
+            ScrollViewReader { proxy in
+                ScrollView { sentenceFlow }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .onChange(of: model.currentWord?.id) { _, id in
+                        if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: wide ? 84 : .infinity)
-            .onChange(of: model.currentWord?.id) { _, id in
-                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                    .onAppear { if let id = model.currentWord?.id { proxy.scrollTo(id, anchor: .center) } }
             }
         }
+        .frame(maxHeight: wide ? 84 : nil, alignment: .top)
+    }
+
+    private var sentenceFlow: some View {
+        WordFlow(spacing: 3) {
+            ForEach(model.eyeWords) { w in
+                Button { model.jump(toWord: w.id) } label: {
+                    TrayWordLabel(text: w.text, state: model.wordState(w.id), large: roomy)
+                }
+                .buttonStyle(.plain)
+                .id(w.id)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     /// Under the sentence: where the whole look went, or what the lit squares mean.
@@ -1360,7 +1429,7 @@ struct DeveloperTrayView: View {
     /// The words moments: the eye's words where the picture was, then the words the hand received
     /// (the same, or shortened to fit). The text the hand gets is what the drawing grows from, so the
     /// first step's noise fades in as these fade out.
-    private func wordsPanel(wide: Bool) -> some View {
+    private func wordsPanel(centered: Bool) -> some View {
         let handing = model.current == .mixing
         let text = handing ? model.handWords : (model.trace?.eyeWords ?? "")
         let label: String? = {
@@ -1369,25 +1438,26 @@ struct DeveloperTrayView: View {
             let kept = PromptBudget.wordCount(model.handWords), said = PromptBudget.wordCount(model.trace?.eyeWords ?? "")
             return "Shortened for the hand \u{00B7} \(kept) of \(said) words"
         }()
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let label {
-                    Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
-                }
-                Text(text)
-                    .font(.title3.weight(.medium))
-                    .id(text)
-                    .transition(.opacity)
-                if let fact = model.fact { Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.7)) }
+        let words = VStack(alignment: .leading, spacing: 12) {
+            if let label {
+                Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(wide ? 18 : 4)
-            .animation(.easeInOut(duration: 0.45), value: text)
+            Text(text)
+                .font((roomy ? Font.title : Font.title3).weight(.medium))
+                .id(text)
+                .transition(.opacity)
+            if let fact = model.fact { Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.7)) }
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background {
-            if wide { RoundedRectangle(cornerRadius: 22).fill(.ultraThinMaterial.opacity(0.9)) }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(4)
+        .animation(.easeInOut(duration: 0.45), value: text)
+        // Upright the words sit where the picture was, from the top; side by side they sit centered in the
+        // picture's place, as the pictures do. They scroll only when they don't fit.
+        return ViewThatFits(in: .vertical) {
+            words
+            ScrollView { words }.scrollBounceBehavior(.basedOnSize)
         }
+        .frame(maxHeight: .infinity, alignment: centered ? .center : .top)
         .environment(\.colorScheme, .dark)
     }
 
@@ -1512,12 +1582,13 @@ private struct LiveDot: LabelStyle {
 struct TrayWordLabel: View {
     let text: String
     let state: TrayWordState
+    var large = false
 
     var body: some View {
         let level: Double = { if case .lit(let l) = state { return Double(l) } else { return 0 } }()
         let isCurrent = state == .current
         Text(text)
-            .font(.callout.weight(isCurrent ? .bold : .regular))
+            .font((large ? Font.title3 : Font.callout).weight(isCurrent ? .bold : .regular))
             .foregroundStyle(color(level))
             .padding(.horizontal, 2).padding(.vertical, 1)
             .background {

@@ -87,8 +87,12 @@ actor ModelLane {
     /// than trusting a fixed delay. Bounded, because a settle that never ends is worse than a
     /// settle that's a little early.
     private static func settle(after label: String) async {
+        // MLX cannot create its GPU device in the Simulator and aborts the app; the Simulator is only
+        // used to check layouts (2026-11-13), and runs no MLX model, so there is nothing to drain.
+        #if !targetEnvironment(simulator)
         MLX.Stream.gpu.synchronize()
         MLX.Memory.clearCache()
+        #endif
         let start = Date()
         let deadline = start.addingTimeInterval(2.0)
         var last = processAvailableMemoryMB()

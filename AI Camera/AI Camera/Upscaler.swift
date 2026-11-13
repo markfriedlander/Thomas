@@ -22,7 +22,12 @@ import CoreGraphics
 import CoreImage
 import Foundation
 import Metal
+// The Simulator has no MetalFX (2026-11-13, building for the iPad simulator to test the tray's
+// bigger-screen layouts). Where it is missing, Thomas reports it unsupported and uses Core Image,
+// the same fallback a device without MetalFX already takes. Devices are unaffected.
+#if canImport(MetalFX)
 import MetalFX
+#endif
 
 // ==== LEGO START: 28 The Upscaler (Making The Drawing Bigger) ====
 
@@ -111,8 +116,12 @@ nonisolated enum Upscaler {
 
     /// Whether this device supports MetalFX spatial scaling. Asked, never assumed.
     static func metalFXSupported() -> Bool {
+        #if canImport(MetalFX)
         guard let device = MTLCreateSystemDefaultDevice() else { return false }
         return MTLFXSpatialScalerDescriptor.supportsDevice(device)
+        #else
+        return false
+        #endif
     }
 
     // MARK: - Core Image (always available)
@@ -134,6 +143,9 @@ nonisolated enum Upscaler {
     // MARK: - MetalFX (GPU, A13+)
 
     private static func metalFX(_ image: CGImage, width: Int, height: Int) -> CGImage? {
+        #if !canImport(MetalFX)
+        return nil
+        #else
         guard let device = MTLCreateSystemDefaultDevice(),
               MTLFXSpatialScalerDescriptor.supportsDevice(device),
               let queue = device.makeCommandQueue() else { return nil }
@@ -178,6 +190,7 @@ nonisolated enum Upscaler {
         cmd.waitUntilCompleted()
 
         return cgImage(from: outTex, width: width, height: height)
+        #endif
     }
 
     // MARK: - CGImage ↔ bytes
