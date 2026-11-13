@@ -61,6 +61,47 @@ actor CoreMLDrawer {
         return prefix.isEmpty ? modelDir : modelDir.appendingPathComponent(prefix, isDirectory: true)
     }
 
+    nonisolated static func isInstalled(_ repoID: String) -> Bool {
+        FileManager.default.fileExists(atPath: resourcesDir(for: repoID).appendingPathComponent("Unet.mlmodelc").path)
+    }
+
+    /// The hand's pieces in the order a shot uses them, with plain names for the preparation card.
+    /// Only pieces actually present are prepared (the safety checker is never used: Principle 3).
+    nonisolated static let preparedPieces: [(file: String, name: String)] = [
+        ("TextEncoder", "the part that reads the words"),
+        ("Unet", "the part that draws"),
+        ("UnetChunk1", "the part that draws (first half)"),
+        ("UnetChunk2", "the part that draws (second half)"),
+        ("VAEDecoder", "the part that makes the picture"),
+        ("VAEEncoder", "the part that reads a photograph (the silent loop)"),
+    ]
+
+    /// Prepare every piece of the hand for the Neural Engine by loading each one, exactly as a shot
+    /// would (same compute units), then letting it go. Core ML caches what it prepares, so the next
+    /// real shot loads in about a second. Reports each stage as it starts. Returns the seconds taken.
+    /// See `HandPreparation` for why this exists.
+    func prepare(repoID: String, onStage: @Sendable (Int, Int, String) -> Void) async throws -> Double {
+        let dir = Self.resourcesDir(for: repoID)
+        guard Self.isInstalled(repoID) else { throw CoreMLDrawError.notInstalled(repoID) }
+        busy = true
+        defer { busy = false }
+        let pieces = Self.preparedPieces.filter {
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("\($0.file).mlmodelc").path)
+        }
+        let config = MLModelConfiguration()
+        config.computeUnits = .cpuAndNeuralEngine
+        let started = Date()
+        for (i, piece) in pieces.enumerated() {
+            onStage(i + 1, pieces.count, piece.name)
+            let t = Date()
+            let url = dir.appendingPathComponent("\(piece.file).mlmodelc")
+            _ = try await MLModel.load(contentsOf: url, configuration: config)
+            cameraLog("PREPARE: \(piece.file) ready in \(String(format: "%.1f", Date().timeIntervalSince(t)))s availMB=\(formatMB(processAvailableMemoryMB())) \(writesLine())")
+        }
+        prewarmedThisLaunch = true
+        return Date().timeIntervalSince(started)
+    }
+
     /// True while a load+draw is in flight, so a pre-warm and a real shot can't both try to load
     /// at once. (The actor already serializes calls; this just lets `prewarm` bow out early instead
     /// of queueing behind a real draw that's already doing the warming for it.)
@@ -163,6 +204,9 @@ actor CoreMLDrawer {
         defer { pipeline.unloadResources() }
 
         let availLoaded = processAvailableMemoryMB()
+        // A load this slow was Core ML preparing the hand (first run after an install or update);
+        // either way, this build's hand is now prepared (HandPreparation).
+        HandPreparation.markPrepared(repoID, seconds: Date().timeIntervalSince(started))
         cameraLog("COREML: loaded \(repoID) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s — drawing \(steps) steps | availMB \(formatMB(availBefore)) → \(formatMB(availLoaded)) \(writesLine())")
 
         var config = StableDiffusionPipeline.Configuration(prompt: prompt)

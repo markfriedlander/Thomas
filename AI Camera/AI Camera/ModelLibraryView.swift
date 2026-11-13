@@ -316,8 +316,11 @@ private struct ModelLibraryRow: View {
     let onDelete: () -> Void
 
     @State private var isExpanded = false
+    @State private var prep = HandPreparation.shared
 
     private var state: MLXModelDownloader.DownloadState? { downloader.downloadStates[model.id] }
+    /// The download's second half: Core ML preparing this hand (HandPreparation).
+    private var isPreparing: Bool { prep.isPreparing && prep.repoID == model.id }
     private var isDownloading: Bool { state?.isDownloading == true }
 
     var body: some View {
@@ -343,7 +346,10 @@ private struct ModelLibraryRow: View {
             }
             .buttonStyle(.plain)
 
-            if isExpanded {
+            if isPreparing {
+                Divider().padding(.vertical, 8)
+                HandPreparationCard(repoID: model.id)
+            } else if isExpanded {
                 Divider().padding(.vertical, 8)
                 if isDownloading, let state {
                     progress(state)

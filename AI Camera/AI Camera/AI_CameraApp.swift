@@ -108,6 +108,9 @@
 //  NegativeStore.swift
 //   40  The Negatives (Recent Shots, Kept For The Tray)
 //
+//  HandPreparation.swift
+//   41  Preparing The Hand (Download, Then Prepare)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 
@@ -210,6 +213,19 @@ struct AI_CameraApp: App {
         // this deletes its orphaned model so it doesn't sit on the phone wasting space. A no-op once
         // it's gone, and on any device that never ran the spike.
         Task.detached { reapCoreMLSpikeLeftovers() }
+        // Clear any half-finished preparation an interruption left in Caches, before any model loads
+        // (HandPreparation.swift). Then: when the Core ML hand finishes downloading, prepare it right
+        // away as the second half of the download (Mark, 2026-11-12), instead of in the middle of a
+        // shot. Not at launch itself: see the PRE-WARM note above; the download completes long after.
+        Task.detached { reapInterruptedPreparations() }
+        NotificationCenter.default.addObserver(forName: .mlxModelDidDownload, object: nil, queue: .main) { note in
+            guard let id = note.userInfo?["modelID"] as? String else { return }
+            Task { @MainActor in
+                guard let model = ModelCatalog.all.first(where: { sharedStoreKey(forRepoID: $0.id) == id || $0.id == id }),
+                      model.engine == .coreML else { return }
+                await HandPreparation.shared.prepare(model.id, reason: "just downloaded")
+            }
+        }
         // Instantiate the shared model catalog at launch so its `.mlxModelDidDownload` observer is
         // live before any background download can complete, and the download state is honest from the
         // first read (Hal instantiates ModelCatalogService the same way). MainActor hop: App.init is

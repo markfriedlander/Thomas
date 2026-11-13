@@ -331,6 +331,9 @@ extension LocalAPIServer {
         case ("GET",  "/trace"):           return await handleGetTrace(req)
         case ("GET",  "/eye"):             return handleGetEye(req)
         case ("GET",  "/negatives"):       return await handleGetNegatives()
+        case ("GET",  "/prepare"):         return handleGetPrepare()
+        case ("POST", "/prepare"):         return handlePostPrepare(req)
+        case ("GET",  "/caches"):          return handleGetCaches()
         case ("POST", "/negatives"):       return await handlePostNegatives(req)
         case ("GET",  "/tray"):            return handleGetTray()
         case ("POST", "/tray"):            return handleScrubTray(req)
@@ -894,6 +897,58 @@ extension LocalAPIServer {
         if e.done, let summary = EyeNumbersSummary(e) { out["summaryExplained"] = summary.explained }
         if let n = req.headers["x-square"].flatMap(Int.init) { out["square"] = ["index": n, "numbers": Array(e.numbers(ofSquare: n))] }
         return (200, json(out))
+    }
+
+    /// GET /prepare: the hand preparation (HandPreparation) as the card and pill show it.
+    private func handleGetPrepare() -> (Int, String) {
+        let p = HandPreparation.shared
+        let repo = Settings.shared.selectedDrawer
+        let phase: String = { switch p.phase {
+            case .idle: return "idle"; case .preparing: return "preparing"; case .done: return "done"
+            case .failed(let m): return "failed: \(m)" } }()
+        return (200, json(["phase": phase, "repo": p.repoID ?? "", "reason": p.reason,
+                           "stage": p.stage, "stageCount": p.stageCount, "stageName": p.stageName,
+                           "elapsed": Int(p.elapsed), "selectedDrawer": repo,
+                           "preparedForThisBuild": HandPreparation.isPrepared(repo),
+                           "build": HandPreparation.currentBuild,
+                           "lastSeconds": HandPreparation.lastSeconds(repo) ?? -1,
+                           "pill": StatusFeed.shared.messages.first { $0.kind == .hand }?.text ?? ""]))
+    }
+
+    /// POST /prepare  X-Action: start (what finishing the download does) | forget (pretend this build
+    /// was never prepared, to exercise the after-update path) | afterlaunch (run the camera's check).
+    private func handlePostPrepare(_ req: ParsedRequest) -> (Int, String) {
+        let repo = req.headers["x-repo"] ?? Settings.shared.selectedDrawer
+        switch (req.headers["x-action"] ?? "").lowercased() {
+        case "start": Task { await HandPreparation.shared.prepare(repo, reason: "antenna") }
+        case "forget": HandPreparation.forget(repo)
+        case "afterlaunch": Task { await HandPreparation.shared.prepareAfterLaunchIfNeeded() }
+        // The exact signal the downloader posts when the last file lands (MLXModelDownloader), so the
+        // download-then-prepare path is exercised without re-downloading 1.1 GB.
+        case "downloaded": NotificationCenter.default.post(name: .mlxModelDidDownload, object: nil, userInfo: ["modelID": repo])
+        default: return (400, #"{"error":"X-Action: start | forget | afterlaunch | downloaded"}"#)
+        }
+        return (200, json(["ok": true, "repo": repo]))
+    }
+
+    /// GET /caches: every file under Library/Caches with its size (where Core ML keeps the prepared
+    /// hand), largest first, so an interrupted preparation's leftovers can be seen, not guessed.
+    private func handleGetCaches() -> (Int, String) {
+        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        var rows: [(String, Int)] = []
+        if let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey]) {
+            for case let u as URL in e {
+                let v = try? u.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
+                if v?.isDirectory == true {
+                    if u.lastPathComponent.hasSuffix(".bundle") { rows.append((u.path.replacingOccurrences(of: root.path, with: "") + "/", NegativeStore.size(of: u))) }
+                    continue
+                }
+                rows.append((u.path.replacingOccurrences(of: root.path, with: ""), v?.fileSize ?? 0))
+            }
+        }
+        rows.sort { $0.1 > $1.1 }
+        return (200, json(["totalMB": NegativeStore.size(of: root) / 1_048_576,
+                           "entries": rows.prefix(40).map { ["path": $0.0, "bytes": $0.1] }]))
     }
 
     /// GET /negatives: the Dark Room's kept negatives (NegativeStore), newest first, with their size.

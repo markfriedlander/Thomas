@@ -45,7 +45,7 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
     /// 2026-07-21): a single pill speaks for the whole condition of the dark room, in five states —
     /// cooling down, paused, developing N, N blocked, or (nothing to report) gone. The worker decides
     /// which by precedence; see `DarkRoomWorker.syncStatusFeed`.
-    enum Kind: Int, CaseIterable { case privacy = 0, darkRoom = 1 }
+    enum Kind: Int, CaseIterable { case privacy = 0, darkRoom = 1, hand = 2 }
 
     /// What a tap does. An enum, not a closure, so the message stays a value; the renderer maps
     /// each case to a behavior (present the privacy explanation, or open the Dark Room).

@@ -154,6 +154,9 @@ struct CameraView: View {
         .task {
             await lens.start()
             place.start()
+            // After an install or update, prepare the Core ML hand once the camera has settled, so
+            // the wait is announced up front rather than met mid-shot (HandPreparation).
+            Task { await HandPreparation.shared.prepareAfterLaunchIfNeeded() }
         }
         .onDisappear { lens.stop(); place.stop() }
         .statusBarHidden()
