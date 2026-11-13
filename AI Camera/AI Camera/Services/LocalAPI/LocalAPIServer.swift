@@ -880,7 +880,7 @@ extension LocalAPIServer {
                 "imageShare": p.imageShare,
                 "top": top.map { ["square": $0.offset, "value": $0.element] },
             ]
-            if full { d["gaze"] = p.gaze }
+            if full { d["gaze"] = p.gaze; d["context"] = p.context }
             return d
         }
         var out: [String: Any] = [
@@ -895,6 +895,7 @@ extension LocalAPIServer {
             "pieces": pieces,
         ]
         if e.done, let summary = EyeNumbersSummary(e) { out["summaryExplained"] = summary.explained }
+        if full { out["promptPieces"] = e.promptPieces; out["promptImagePositions"] = e.promptImagePositions }
         if let n = req.headers["x-square"].flatMap(Int.init) { out["square"] = ["index": n, "numbers": Array(e.numbers(ofSquare: n))] }
         return (200, json(out))
     }

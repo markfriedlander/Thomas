@@ -34,6 +34,12 @@ nonisolated struct EyeWorkings: Sendable {
         let text: String       // the word piece exactly as the tokenizer spells it
         let gaze: [Float]      // one value per square, rows then columns; sums to imageShare
         let imageShare: Float
+        /// The whole attention row this word was chosen with: one value per position before it, in
+        /// order (the prompt, whose image squares sit at `promptImagePositions`, then every earlier
+        /// word piece). Sums to 1. The part that is not `gaze` is the attention that went to words:
+        /// its instructions and what it had already said. Empty when not recorded (shots kept
+        /// before 2026-11-12 recorded only the picture's part).
+        var context: [Float] = []
     }
 
     let model: String
@@ -42,6 +48,10 @@ nonisolated struct EyeWorkings: Sendable {
     var rows = 0                 // the grid after the encoder's 2x2 merge
     var cols = 0
     var pieces: [Piece] = []
+    /// The prompt the eye was given, one entry per token as the tokenizer spells it (image
+    /// squares are ""), and where in it the squares sit. Lets `Piece.context` be read as words.
+    var promptPieces: [String] = []
+    var promptImagePositions: [Int] = []
     var done = false
     /// Wall time spent inside the recorder on the model's thread, for the whole look. Mostly time
     /// spent waiting for GPU work the look does anyway; the real added cost is measured by comparing
@@ -88,8 +98,9 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
     private var imagePositions: MLXArray?
     private var layerGaze: [MLXArray] = []
     private var layerShare: [MLXArray] = []
-    private var pending: (gaze: MLXArray, share: MLXArray)?
-    private var unread: [(token: MLXArray, gaze: MLXArray, share: MLXArray)] = []
+    private var layerRow: [MLXArray] = []
+    private var pending: (gaze: MLXArray, share: MLXArray, row: MLXArray)?
+    private var unread: [(token: MLXArray, gaze: MLXArray, share: MLXArray, row: MLXArray)] = []
     private var spent: Double = 0
     private var pieceCount = 0
     private var layersSeen = 0
@@ -106,7 +117,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             recording = true
             self.tokenizer = tokenizer
             imagePositions = nil
-            layerGaze = []; layerShare = []
+            layerGaze = []; layerShare = []; layerRow = []
             pending = nil; unread = []
             spent = 0; pieceCount = 0; layersSeen = 0; headsSeen = 0
         }
@@ -124,7 +135,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             recording = false
             tokenizer = nil
             imagePositions = nil
-            layerGaze = []; layerShare = []
+            layerGaze = []; layerShare = []; layerRow = []
             pending = nil; unread = []
             spent += CFAbsoluteTimeGetCurrent() - started
             return (spent * 1000, layersSeen, headsSeen)
@@ -137,7 +148,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
 
     /// A new prompt is being prepared: its image positions are not the last prompt's.
     func newPrompt() {
-        lock.withLock { imagePositions = nil; layerGaze = []; layerShare = []; pending = nil }
+        lock.withLock { imagePositions = nil; layerGaze = []; layerShare = []; layerRow = []; pending = nil }
     }
 
     /// The vision encoder has turned the photograph into numbers. `grid` is (t, h, w) in
@@ -155,6 +166,12 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
         let usable = shape.count == 2 && rows * cols == shape[0] && positions.count == shape[0]
         if usable {
             DevelopTrace.shared.noteEyeNumbers(f32.asArray(Float.self), width: shape[1], rows: rows, cols: cols)
+            let tok = lock.withLock { tokenizer }
+            let image = Set(positions.map(Int.init))
+            let spelled = ids.enumerated().map { i, id in
+                image.contains(i) ? "" : (tok?.decode(tokenIds: [Int(id)], skipSpecialTokens: false) ?? "")
+            }
+            DevelopTrace.shared.noteEyePrompt(spelled, imagePositions: positions.map(Int.init))
         } else {
             cameraLog("EYE TRACE: shapes disagree (features \(shape), grid \(grid), image tokens \(positions.count)); not recording this look")
         }
@@ -180,8 +197,9 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
         let onImage = take(scores, positions, axis: 1)              // [H, squares]
         let gaze = onImage.mean(axis: 0)                            // [squares]
         let share = onImage.sum(axis: 1).mean()                     // scalar
+        let row = scores.mean(axis: 0)                              // [T]: everything, words included
         lock.withLock {
-            layerGaze.append(gaze); layerShare.append(share)
+            layerGaze.append(gaze); layerShare.append(share); layerRow.append(row)
             headsSeen = heads
             spent += CFAbsoluteTimeGetCurrent() - started
         }
@@ -194,24 +212,25 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
         let started = CFAbsoluteTimeGetCurrent()
         drain()   // last step's pieces: finished on the GPU long ago, so this never waits
         lock.withLock {
-            var current: (gaze: MLXArray, share: MLXArray)?
+            var current: (gaze: MLXArray, share: MLXArray, row: MLXArray)?
             if !layerGaze.isEmpty {
                 layersSeen = layerGaze.count
                 let g = stacked(layerGaze).mean(axis: 0)
                 let s = stacked(layerShare).mean()
-                asyncEval(g, s)
-                current = (g, s)
+                let r = stacked(layerRow).mean(axis: 0)
+                asyncEval(g, s, r)
+                current = (g, s, r)
             }
-            if let inputToken, let pending { unread.append((inputToken, pending.gaze, pending.share)) }
+            if let inputToken, let pending { unread.append((inputToken, pending.gaze, pending.share, pending.row)) }
             pending = current
-            layerGaze = []; layerShare = []
+            layerGaze = []; layerShare = []; layerRow = []
             spent += CFAbsoluteTimeGetCurrent() - started
         }
     }
 
     /// Turn finished pieces into values and file them.
     private func drain() {
-        let (batch, tok) = lock.withLock { () -> ([(token: MLXArray, gaze: MLXArray, share: MLXArray)], (any Tokenizer)?) in
+        let (batch, tok) = lock.withLock { () -> ([(token: MLXArray, gaze: MLXArray, share: MLXArray, row: MLXArray)], (any Tokenizer)?) in
             let b = unread; unread = []; return (b, tokenizer)
         }
         guard !batch.isEmpty, let tok else { return }
@@ -219,7 +238,8 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             let id = Int(entry.token.flattened()[0].item(Int32.self))
             let text = tok.decode(tokenIds: [id], skipSpecialTokens: true)
             DevelopTrace.shared.appendEyePiece(.init(text: text, gaze: entry.gaze.asArray(Float.self),
-                                                     imageShare: entry.share.item(Float.self)))
+                                                     imageShare: entry.share.item(Float.self),
+                                                     context: entry.row.asArray(Float.self)))
             lock.withLock { pieceCount += 1 }
         }
     }

@@ -136,6 +136,10 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         }
     }
 
+    func noteEyePrompt(_ pieces: [String], imagePositions: [Int]) {
+        lock.withLock { eye?.promptPieces = pieces; eye?.promptImagePositions = imagePositions; version += 1 }
+    }
+
     func appendEyePiece(_ piece: EyeWorkings.Piece) {
         lock.withLock { eye?.pieces.append(piece); version += 1 }
     }
