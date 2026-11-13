@@ -963,11 +963,9 @@ final class TrayModel {
             // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
             let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
             let waiting = (drawingDone && hot) ? "waits for the phone to cool" : "is on its way"
-            guard let shown = shownStep(for: k) else { return "This preview \(waiting)" }
-            // Watching live, the picture trails the engine by about a step on purpose; saying so on
-            // every step was noise (2026-11-13).
-            if shown == k || (developing && following) { return nil }
-            return "Showing step \(shown) \u{00B7} step \(k) \(waiting)"
+            // Only when there is no picture at all: then the wait needs a reason. When an earlier step
+            // is showing, no note (Mark, 2026-11-13: the pill already says which step this is).
+            return shownStep(for: k) == nil ? "This preview \(waiting)" : nil
         default:
             return nil
         }
