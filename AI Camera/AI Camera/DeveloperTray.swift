@@ -389,51 +389,144 @@ extension DeveloperTray {
 /// or gaze unless the eye could show them (Qwen 3.5, through `EyeRecorder`).
 nonisolated enum TrayFrame: Hashable, Sendable {
     case reality, numbers, gaze(Int), words, mixing, step(Int), finished
+
+    /// Which of the shot's three chapters this moment belongs to.
+    var chapter: TrayChapter {
+        switch self {
+        case .reality: return .lens
+        case .numbers, .gaze, .words: return .eye
+        case .mixing, .step, .finished: return .hand
+        }
+    }
+}
+
+/// Every shot's three chapters, the tray's top pill (Mark, 2026-11-12 design pass): what the lens saw,
+/// what the eye made of it, what the hand drew from the eye's words.
+nonisolated enum TrayChapter: String, CaseIterable, Sendable {
+    case lens, eye, hand
+    var label: String { rawValue.uppercased() }
+}
+
+/// Where a chapter sits on the timeline, for the scrubber's marks.
+nonisolated struct TrayChapterSpan: Identifiable, Sendable {
+    let chapter: TrayChapter
+    let first: Int
+    let last: Int
+    var id: TrayChapter { chapter }
 }
 
 /// One word as the tray shows it, built from the eye's word pieces ("bl" + "inding" + "ly"). Its
 /// gaze is the average of its letter pieces' gaze; punctuation rides along in the text but adds
-/// nothing to where the word looked.
+/// nothing to where the word looked. A dash between words ("object\u{2014}the sun\u{2014}is") ends a
+/// word even without a space.
 nonisolated struct TrayWord: Identifiable, Sendable {
     let id: Int
     let text: String
     let gaze: [Float]
     let imageShare: Float
+    /// Every word piece in this word (punctuation included), and the ones whose looks make it up.
+    let pieces: [Int]
+    let letterPieces: [Int]
+
+    /// The word without its punctuation, for the moment pill.
+    var bare: String {
+        let t = text.trimmingCharacters(in: .punctuationCharacters)
+        return t.isEmpty ? text : t
+    }
 
     static func words(from pieces: [EyeWorkings.Piece]) -> [TrayWord] {
         var texts: [String] = []
-        var gazes: [[[Float]]] = []
-        var shares: [[Float]] = []
-        for p in pieces {
+        var all: [[Int]] = []
+        var letters: [[Int]] = []
+        for (i, p) in pieces.enumerated() {
             let trimmed = p.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             let hasLetters = trimmed.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
             let startsWord = p.text.first?.isWhitespace ?? false
-            if texts.isEmpty || (startsWord && hasLetters) {
-                texts.append(trimmed); gazes.append([]); shares.append([])
+            let afterDash = texts.last?.hasSuffix("\u{2014}") ?? false
+            if texts.isEmpty || (hasLetters && (startsWord || afterDash || trimmed.hasPrefix("\u{2014}"))) {
+                texts.append(trimmed); all.append([]); letters.append([])
             } else {
                 texts[texts.count - 1] += trimmed
             }
-            if hasLetters { gazes[gazes.count - 1].append(p.gaze); shares[shares.count - 1].append(p.imageShare) }
+            all[all.count - 1].append(i)
+            if hasLetters { letters[letters.count - 1].append(i) }
         }
-        return texts.indices.compactMap { (i: Int) -> TrayWord? in
-            guard let first = gazes[i].first else { return nil }   // punctuation alone is not a word
-            var sum = [Float](repeating: 0, count: first.count)
-            for g in gazes[i] where g.count == sum.count { for j in sum.indices { sum[j] += g[j] } }
-            let n = Float(gazes[i].count)
-            return TrayWord(id: i, text: texts[i], gaze: sum.map { $0 / n },
-                            imageShare: shares[i].reduce(0, +) / Float(shares[i].count))
+        var out: [TrayWord] = []
+        for k in texts.indices {
+            guard let first = letters[k].first else { continue }   // punctuation alone is not a word
+            let n = pieces[first].gaze.count
+            var sum = [Float](repeating: 0, count: n)
+            var share: Float = 0
+            var counted: Float = 0
+            for j in letters[k] where pieces[j].gaze.count == n {
+                for s in 0..<n { sum[s] += pieces[j].gaze[s] }
+                share += pieces[j].imageShare
+                counted += 1
+            }
+            guard counted > 0 else { continue }
+            out.append(TrayWord(id: out.count, text: texts[k], gaze: sum.map { $0 / counted },
+                                imageShare: share / counted, pieces: all[k], letterPieces: letters[k]))
         }
-        .enumerated().map { TrayWord(id: $0.offset, text: $0.element.text, gaze: $0.element.gaze, imageShare: $0.element.imageShare) }
+        return out
     }
 }
 
-/// How the numbers frame shows the photograph: the colours over it, the colours alone, or the
-/// photograph alone (tap the stage's toggle to cycle).
-nonisolated enum NumbersLook: String, CaseIterable, Sendable {
-    case blend, colours, photo
-    var next: NumbersLook { self == .blend ? .colours : self == .colours ? .photo : .blend }
-    var label: String { self == .blend ? "Both" : self == .colours ? "Colours" : "Photo" }
+/// Where ALL of one word's attention went (Mark, 2026-11-12: "We need to think about a way to show
+/// the other 68%"): to the picture, to its instructions, and to what it had already said, plus how
+/// much landed on each earlier word. Read from the word's whole attention rows
+/// (`EyeWorkings.Piece.context`), averaged over its letter pieces exactly as its gaze is. Nil when the
+/// shot recorded only the picture's part (shots kept before 2026-11-12).
+nonisolated struct TrayLook: Sendable {
+    let picture: Float
+    let instructions: Float
+    let said: Float
+    /// Of the instructions' share, the part that landed on the invisible markers between their parts
+    /// (role markers such as <|im_start|>, and line breaks) rather than on their words.
+    let markers: Float
+    /// Attention on each earlier word, by word index.
+    let onWords: [Float]
+
+    init?(word: TrayWord, words: [TrayWord], eye: EyeWorkings) {
+        let p = eye.promptPieces.count
+        guard p > 0, !word.letterPieces.isEmpty,
+              word.letterPieces.allSatisfy({ $0 < eye.pieces.count && eye.pieces[$0].context.count == p + $0 })
+        else { return nil }
+        let image = eye.promptImagePositions.filter { $0 < p }
+        let imageSet = Set(image)
+        let markerPositions = (0..<p).filter { i in
+            guard !imageSet.contains(i) else { return false }
+            let t = eye.promptPieces[i]
+            return (t.hasPrefix("<") && t.hasSuffix(">")) || t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        var pic: Float = 0, ins: Float = 0, said: Float = 0, mk: Float = 0
+        var on = [Float](repeating: 0, count: word.id)
+        for j in word.letterPieces {
+            let row = eye.pieces[j].context
+            let img = image.reduce(Float(0)) { $0 + row[$1] }
+            let prompt = row[0..<p].reduce(Float(0), +)
+            pic += img
+            ins += prompt - img
+            said += row[p...].reduce(Float(0), +)
+            mk += markerPositions.reduce(Float(0)) { $0 + row[$1] }
+            for v in 0..<word.id {
+                for q in words[v].pieces where p + q < row.count { on[v] += row[p + q] }
+            }
+        }
+        let n = Float(word.letterPieces.count)
+        picture = pic / n
+        instructions = ins / n
+        self.said = said / n
+        markers = ins > 0 ? mk / ins : 0
+        onWords = on.map { $0 / n }
+    }
+}
+
+/// How a word in the sentence is lit.
+nonisolated enum TrayWordState: Equatable, Sendable {
+    case current            // the word being chosen
+    case lit(Float)         // 0...1 on the shot's one scale of light
+    case future             // not said yet at this moment
 }
 
 /// Turns recorded steps into pictures for the screen, one at a time, only while the tray is open.
@@ -461,6 +554,7 @@ actor TrayPreviewDecoder {
     }
 }
 
+
 /// The tray's state for one shot: what has happened so far (from `DevelopTrace`), which moment is
 /// on screen, and whether it follows the development live.
 @MainActor @Observable
@@ -469,10 +563,9 @@ final class TrayModel {
     private(set) var trace: DevelopTrace.Snapshot?
     private(set) var frames: [TrayFrame] = [.reality]
     var index = 0
-    /// True: the screen jumps to each new moment as it happens. Scrubbing turns it off; Live turns
-    /// it back on.
+    /// True: the screen jumps to each new moment as it happens. Stepping, scrubbing or tapping a
+    /// square turns it off; Live turns it back on.
     var following = true
-    private(set) var playing = false
     private(set) var previews: [Int: UIImage] = [:]   // step (1-based) -> quick preview
     private var requested: Set<Int> = []
     /// Live mode keeps at most one preview decoding at a time. A preview takes about as long as the
@@ -481,7 +574,6 @@ final class TrayModel {
     private var liveInFlight = false
     private var lastVersion = -1
     private var pollTask: Task<Void, Never>?
-    private var playTask: Task<Void, Never>?
     /// Set once the tray has looked for this shot's kept negative (a shot that is no longer the one
     /// developing live is opened from the Dark Room's negatives).
     private var negativeRequested = false
@@ -490,18 +582,29 @@ final class TrayModel {
     // The eye's workings (EyeWorkings.swift), when this shot's eye could show them.
     private(set) var eyeWords: [TrayWord] = []
     private var piecesSeen = -1
-    private(set) var summary: EyeNumbersSummary?
-    private var summaryRequested = false
-    var numbersLook: NumbersLook = .blend
+    private(set) var likeness: EyeLikeness?
+    private var likenessRequested = false
+    /// One unit of light for the whole shot: the strongest attention any word piece paid to any single
+    /// square or earlier word piece. Picture and words are lit on this same scale, so a word that barely
+    /// looked at the picture leaves it dim (design pass 2026-11-12; before, each word was scaled to its
+    /// own brightest square, which made a 32% look as bright as a 60% one).
+    private(set) var lightScale: Float = 0
+    /// The square the eye looked at most over the whole description: where the numbers moment opens.
+    private(set) var mostLookedSquare: Int?
+    @ObservationIgnored private var lookCache: [Int: TrayLook?] = [:]
+    @ObservationIgnored private var alikeCache: (square: Int, values: [Float])?
+
+    /// The square the person tapped: every square then lights by how alike its numbers are, and the
+    /// words by how much they looked there. Cleared when the moment changes.
+    var selectedSquare: Int?
     /// The square whose raw numbers are open in a sheet.
     var openSquare: Int?
-    /// Full-screen tray: whether the pills are showing (tap the picture to toggle), and whether the
-    /// "?" explanation is open.
+    /// Whether the pills are showing (tap the backdrop to toggle), and whether "?" is open.
     var chromeVisible = true
     var helpOpen = false
 
     #if DEBUG
-    /// The open tray, so the antenna can read and scrub it (human parity).
+    /// The open tray, so the antenna can read and drive it (human parity).
     static weak var current: TrayModel?
     #endif
 
@@ -525,7 +628,7 @@ final class TrayModel {
     }
 
     func stop() {
-        pollTask?.cancel(); playTask?.cancel()
+        pollTask?.cancel()
         Task { await decoder.release() }
     }
 
@@ -552,22 +655,42 @@ final class TrayModel {
             if e.pieces.count != piecesSeen {
                 piecesSeen = e.pieces.count
                 eyeWords = TrayWord.words(from: e.pieces)
+                lookCache = [:]
+                lightScale = Self.lightScale(e)
+                mostLookedSquare = Self.mostLooked(eyeWords, squares: e.squares)
             }
-            // The colour summary needs only the numbers, which exist before the first word.
-            if summary == nil, !summaryRequested, e.squares > 0, e.features.count == e.squares * e.width {
-                summaryRequested = true
+            // The comparison needs only the numbers, which exist before the first word.
+            if likeness == nil, !likenessRequested, e.squares > 0, e.features.count == e.squares * e.width {
+                likenessRequested = true
                 Task {
                     let started = Date()
-                    let made = await Task.detached(priority: .userInitiated) { EyeNumbersSummary(e) }.value
-                    self.summary = made
-                    cameraLog("TRAY: numbers summary in \(Int(Date().timeIntervalSince(started) * 1000)) ms, explains \(Int((made?.explained ?? 0) * 100))%")
+                    let made = await Task.detached(priority: .userInitiated) { EyeLikeness(e) }.value
+                    self.likeness = made
+                    cameraLog("TRAY: likeness ready in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 }
             }
         }
         rebuild(t, mixingNow: mixingNow)
-        if following && !playing { index = frames.count - 1 }
+        if following { index = frames.count - 1 }
         requestPreview(for: current)
-        if t.final != nil { prefetchAll() }   // done: decode the rest so play and scrub are smooth
+        if t.final != nil { prefetchAll() }   // done: decode the rest so stepping and scrubbing are smooth
+    }
+
+    private static func lightScale(_ e: EyeWorkings) -> Float {
+        let p = e.promptPieces.count
+        var top: Float = 0
+        for piece in e.pieces {
+            top = max(top, piece.gaze.max() ?? 0)
+            if p > 0, piece.context.count > p { top = max(top, piece.context[p...].max() ?? 0) }
+        }
+        return top
+    }
+
+    private static func mostLooked(_ words: [TrayWord], squares: Int) -> Int? {
+        guard squares > 0, !words.isEmpty else { return nil }
+        var sum = [Float](repeating: 0, count: squares)
+        for w in words where w.gaze.count == squares { for s in 0..<squares { sum[s] += w.gaze[s] } }
+        return sum.indices.max { sum[$0] < sum[$1] }
     }
 
     private func rebuild(_ t: DevelopTrace.Snapshot?, mixingNow: Bool) {
@@ -591,7 +714,7 @@ final class TrayModel {
               let t = trace, k <= t.latents.count else { return }
         if t.channelsLast && t.final == nil { return }
         // Live: only the newest step is worth decoding; older ones would arrive already stale. The
-        // gaps are filled once the drawing is done (`prefetchAll`), for scrubbing and replay.
+        // gaps are filled once the drawing is done (`prefetchAll`), for stepping and scrubbing.
         let live = following && t.final == nil
         if live && (k < t.latents.count || liveInFlight) { return }
         if live { liveInFlight = true }
@@ -621,98 +744,134 @@ final class TrayModel {
         for k in 1...max(1, t.latents.count) where previews[k] == nil { requestPreview(for: .step(k)) }
     }
 
+    // MARK: Moving through the moments
+
+    /// Go to moment `i` (the scrubber). A new moment starts fresh, with no square picked.
     func scrub(to i: Int) {
-        playTask?.cancel(); playing = false
         following = false
-        index = min(max(i, 0), frames.count - 1)
+        let n = min(max(i, 0), frames.count - 1)
+        if n != index { selectedSquare = nil }
+        index = n
         requestPreview(for: current)
     }
 
+    /// The ‹ › buttons and a swipe on the picture: one moment back or forward.
+    func step(_ delta: Int) { scrub(to: index + delta) }
+
     func goLive() {
-        playTask?.cancel(); playing = false
         following = true
+        selectedSquare = nil
         index = frames.count - 1
     }
 
-    /// Replay the development from the photograph to the newest moment.
-    func play() {
-        playTask?.cancel()
-        following = false
-        playing = true
-        index = 0
-        playTask = Task { [weak self] in
-            while let self, !Task.isCancelled, self.index < self.frames.count - 1 {
-                let hold: UInt64 = {
-                    switch self.current {
-                    case .step: return 300_000_000
-                    case .gaze: return 330_000_000
-                    case .numbers: return 2_500_000_000
-                    default: return 1_200_000_000
-                    }
-                }()
-                try? await Task.sleep(nanoseconds: hold)
-                if Task.isCancelled { break }
-                self.index += 1
-                self.requestPreview(for: self.current)
-            }
-            self?.playing = false
-        }
+    /// Tap a chapter in the top pill: its first moment.
+    func jump(to chapter: TrayChapter) {
+        if let i = frames.firstIndex(where: { $0.chapter == chapter }) { scrub(to: i) }
     }
-
-    func pause() { playTask?.cancel(); playing = false }
 
     /// Tap a word: jump to the moment the eye chose it.
     func jump(toWord i: Int) {
         if let at = frames.firstIndex(of: .gaze(i)) { scrub(to: at) }
     }
 
-    /// The word on screen, on a gaze frame.
+    /// Tap a square: compare from it. Tapping the same square again lets go of it.
+    func tapSquare(_ s: Int) {
+        following = false
+        selectedSquare = selectedSquare == s ? nil : s
+    }
+
+    func has(_ chapter: TrayChapter) -> Bool { frames.contains { $0.chapter == chapter } }
+
+    var chapterSpans: [TrayChapterSpan] {
+        TrayChapter.allCases.compactMap { c in
+            guard let first = frames.firstIndex(where: { $0.chapter == c }),
+                  let last = frames.lastIndex(where: { $0.chapter == c }) else { return nil }
+            return TrayChapterSpan(chapter: c, first: first, last: last)
+        }
+    }
+
+    // MARK: Reading the eye
+
+    /// The word on screen, on a gaze moment.
     var currentWord: TrayWord? {
         if case .gaze(let i) = current, eyeWords.indices.contains(i) { return eyeWords[i] }
         return nil
     }
 
-    /// The step actually on screen for step `k`: itself if decoded, else the newest decoded step
-    /// before it (so the screen never sits on a spinner while a preview is on its way).
+    /// The square everything is being compared with: the one tapped, or on the numbers moment the
+    /// one the eye looked at most (so the numbers never open on a blank invitation; Mark found
+    /// "tap a square" confusing with no square to see).
+    var comparedSquare: Int? {
+        if let s = selectedSquare { return s }
+        if current == .numbers { return mostLookedSquare }
+        return nil
+    }
+
+    /// Every square's likeness to square `s`, -1...1 (nil until the comparison is ready).
+    func alike(to s: Int) -> [Float]? {
+        if let c = alikeCache, c.square == s { return c.values }
+        guard let likeness else { return nil }
+        let v = likeness.alike(to: s)
+        alikeCache = (s, v)
+        return v
+    }
+
+    /// Word `i`'s whole look, when the shot recorded it.
+    func look(_ i: Int) -> TrayLook? {
+        if let cached = lookCache[i] { return cached }
+        guard let e = trace?.eye, eyeWords.indices.contains(i) else { return nil }
+        let made = TrayLook(word: eyeWords[i], words: eyeWords, eye: e)
+        lookCache[i] = made
+        return made
+    }
+
+    var currentLook: TrayLook? { currentWord.flatMap { look($0.id) } }
+
+    /// Attention as light, 0...1, on the shot's one scale. The square root is only a display curve, so
+    /// small amounts stay visible; the order of bright and dim is never changed.
+    func brightness(_ v: Float) -> Float {
+        lightScale > 0 ? min(1, max(0, v / lightScale)).squareRoot() : 0
+    }
+
+    /// The light on each square right now: likeness when a square is being compared, the word's
+    /// attention on a gaze moment, otherwise none.
+    var squareLight: [Float]? {
+        if let c = comparedSquare { return alike(to: c)?.map { pow(max(0, $0), 0.8) } }
+        if let w = currentWord { return w.gaze.map(brightness) }
+        return nil
+    }
+
+    func wordState(_ v: Int) -> TrayWordState {
+        let currentIndex = currentWord?.id
+        if v == currentIndex { return .current }
+        if let c = comparedSquare {
+            guard eyeWords.indices.contains(v), c < eyeWords[v].gaze.count else { return .lit(0) }
+            return .lit(brightness(eyeWords[v].gaze[c]))
+        }
+        guard let i = currentIndex else { return .lit(0) }
+        if v > i { return .future }
+        guard let look = look(i), v < look.onWords.count else { return .lit(0) }
+        return .lit(brightness(look.onWords[v]))
+    }
+
+    /// Step `k`'s picture, or the newest decoded step before it (so the screen never sits on a spinner
+    /// while a preview is on its way).
     func shownStep(for k: Int) -> Int? {
         if previews[k] != nil { return k }
         return previews.keys.filter { $0 < k }.max()
     }
 
-    /// What the frame on screen is, in words. Every frame says what it is (Principle 2, and the tray's
-    /// own honesty rule: the in-between pictures are quick previews, not the drawing).
-    var caption: String {
-        let total = trace?.latents.count ?? 0
-        switch current {
-        case .reality: return "Reality: your photograph"
-        case .numbers:
-            guard let e = trace?.eye else { return "The numbers" }
-            return "The numbers: \(e.squares) squares, \(e.width.formatted()) numbers each, made before any word"
-        case .gaze(let i):
-            guard eyeWords.indices.contains(i) else { return "Where it looked" }
-            return "\u{201C}\(eyeWords[i].text)\u{201D}: where it looked as it chose this word"
-        case .words:   return (trace?.wordsFromEye ?? true) ? "What the eye said" : "Your instruction to the hand"
-        case .mixing:  return "Mixing the developer"
-        case .step(let k):
-            let view = (trace?.isGuess ?? false) ? DevelopView.guess.name : DevelopView.working.name
-            let of = max(total, trace?.steps ?? 0)
-            guard let shown = shownStep(for: k) else { return "Step \(k) of \(of) · preview on its way" }
-            // After the drawing, missing previews go through the model lane, which holds work while the
-            // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
-            let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
-            let waiting = (drawingDone && hot) ? "waits for the phone to cool" : "is on its way"
-            let lag = shown == k ? "" : " (step \(k) \(waiting))"
-            return "Step \(shown) of \(of) · \(view.lowercased()) (quick preview)\(lag)"
-        case .finished: return "The finished drawing"
-        }
-    }
+    // MARK: Words for the screen
 
-    /// The stage pill's few words: what this moment is.
+    /// The moment pill: what this moment is, in a few words.
     var title: String {
         switch current {
         case .reality: return "Your photograph"
-        case .numbers: return "The numbers"
-        case .gaze(let i): return eyeWords.indices.contains(i) ? "\u{201C}\(eyeWords[i].text)\u{201D}" : "Where it looked"
+        case .numbers:
+            return comparedSquare.map { "The numbers \u{00B7} square \($0 + 1)" } ?? "The numbers"
+        case .gaze(let i):
+            guard eyeWords.indices.contains(i) else { return "Where it looked" }
+            return "\u{201C}\(eyeWords[i].bare)\u{201D} \u{00B7} word \(i + 1) of \(eyeWords.count)"
         case .words: return (trace?.wordsFromEye ?? true) ? "What the eye said" : "Your instruction"
         case .mixing: return "Mixing the developer"
         case .step(let k): return "Step \(k) of \(max(trace?.latents.count ?? 0, trace?.steps ?? 0))"
@@ -720,58 +879,125 @@ final class TrayModel {
         }
     }
 
-    /// One short line of fact for the moment on screen; everything longer lives behind "?".
+    /// One short line of fact for moments that need one; the rest lives behind "?".
     var fact: String? {
         switch current {
-        case .numbers:
-            guard let s = summary else { return "Summarizing the numbers…" }
-            return "3 colours carry \(Int((s.explained * 100).rounded()))% · tap a square"
         case .gaze(let i):
-            guard eyeWords.indices.contains(i) else { return nil }
-            return "\(Int((eyeWords[i].imageShare * 100).rounded()))% of its attention on the picture"
+            guard currentLook == nil, eyeWords.indices.contains(i) else { return nil }
+            return "\(Self.percent(eyeWords[i].imageShare)) of its attention on the picture"
         case .words:
             guard trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true else { return nil }
             return name == Seer.apple.name ? "Apple's eye doesn't show its workings" : "\(name) doesn't show its workings here yet"
         case .step(let k):
             guard let shown = shownStep(for: k) else { return "Preview on its way" }
             let view = (trace?.isGuess ?? false) ? "best guess" : "working image"
-            return shown == k ? "Quick preview · \(view)" : "Showing step \(shown) · step \(k) on its way"
+            // After the drawing, missing previews go through the model lane, which holds work while the
+            // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
+            let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+            if shown == k { return "Quick preview \u{00B7} \(view)" }
+            return "Showing step \(shown) \u{00B7} step \(k) \((drawingDone && hot) ? "waits for the phone to cool" : "on its way")"
         default:
             return nil
         }
     }
 
-    /// The second line under the caption: how to read the frame, and what it is a summary of.
-    var detail: String? {
+    /// Behind "?": a title and a focused explanation of THIS moment (Mark, 2026-11-12: "?" should be
+    /// specific to the stage). The general notes belong in the user guide.
+    var helpTitle: String {
+        if let s = selectedSquare { return "Square \(s + 1)" }
         switch current {
-        case .numbers:
-            guard let s = summary else { return "Summarizing them as colours…" }
-            return "Colours summarize the numbers: squares the eye thinks alike come out alike (3 colours carry \(Int((s.explained * 100).rounded()))% of the variation). Tap a square to see its real numbers."
-        case .gaze(let i):
-            guard eyeWords.indices.contains(i), let e = trace?.eye else { return nil }
-            let share = Int((eyeWords[i].imageShare * 100).rounded())
-            let how = e.layers > 0 && e.heads > 0
-                ? "measured in \(e.layers) attention layers, averaged over \(e.heads) heads"
-                : "measured in its attention layers"
-            return "Brightest squares got the most attention; \(share)% of its attention was on the picture, the rest on words (\(how)). Tap a word to jump to it."
-        case .words:
-            guard trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true else { return nil }
-            if name == Seer.apple.name { return "Apple's eye doesn't show its workings; choose Qwen as the eye to see them." }
-            return "\(name) doesn't show its workings here yet."
-        default:
-            return nil
+        case .gaze(let i): return eyeWords.indices.contains(i) ? "\u{201C}\(eyeWords[i].bare)\u{201D}" : "Where it looked"
+        default: return title
         }
     }
+
+    var helpBody: String {
+        guard let e = trace?.eye, e.squares > 0 else { return plainHelp }
+        if let s = comparedSquare {
+            var parts: [String] = []
+            if current == .numbers {
+                parts.append("Before it has a single word, the eye turns your photograph into a grid of \(e.squares) squares, \(e.rows) by \(e.cols), and describes each square with \(e.width.formatted()) numbers. That grid is its whole understanding of the picture.")
+                if selectedSquare == nil { parts.append("It opens on square \(s + 1), the one the eye looked at most while it spoke.") }
+            }
+            parts.append("The lit squares are the ones whose \(e.width.formatted()) numbers are most like square \(s + 1)'s: brighter means more alike; dark means unlike, or opposite. Every number counts in the comparison; nothing is summarized. What all the squares have in common is set aside first, so the comparison shows how they differ.")
+            if !eyeWords.isEmpty { parts.append("The words glow by how much attention each one paid to square \(s + 1) as the eye chose it.") }
+            parts.append("Tap \u{201C}\(e.width.formatted()) numbers\u{201D} to read square \(s + 1)'s actual numbers. Tap another square to compare from there, or the same square again to let go of it.")
+            return parts.joined(separator: "\n\n")
+        }
+        if let w = currentWord {
+            var parts = ["As it chose \u{201C}\(w.bare)\u{201D}, the eye looked at everything in front of it at once: the picture, its instructions, and every word it had already said."]
+            if let look = currentLook {
+                parts.append("\(Self.percent(look.picture)) went to the picture, \(Self.percent(look.instructions)) to its instructions, and \(Self.percent(look.said)) to what it had already said. The picture glows where its attention landed; the earlier words glow by how much each one got.")
+                if look.instructions >= 0.02 {
+                    parts.append("Of the share on its instructions, \(Self.percent(look.markers)) landed on the invisible markers that separate their parts, not on their words.")
+                }
+            } else {
+                parts.append("\(Self.percent(w.imageShare)) of its attention went to the picture. This shot didn't record where the rest went.")
+            }
+            parts.append("Light is on one scale for the whole description, so a word that barely looked at the picture leaves it dim.")
+            let how = e.layers > 0 && e.heads > 0 ? "Measured in \(e.layers) attention layers, averaged over \(e.heads) heads. " : ""
+            parts.append(how + "Tap a square to light the squares whose numbers are like it, and the words that looked there.")
+            return parts.joined(separator: "\n\n")
+        }
+        return plainHelp
+    }
+
+    private var plainHelp: String {
+        switch current {
+        case .reality:
+            return "What the lens saw, exactly as you shot it. Everything after this is the machine's: the eye reads the photograph, then the hand draws from the eye's words alone."
+        case .numbers:
+            return "Before it has a single word, the eye turns your photograph into a grid of squares, each described by a long list of numbers. Tap any square to light the squares whose numbers are like it."
+        case .gaze:
+            return "Where the eye's attention went as it chose this word."
+        case .words:
+            var s = (trace?.wordsFromEye ?? true)
+                ? "The eye's words, exactly as it said them. They are all the hand receives: it never sees your photograph."
+                : "In the silent loop the eye says nothing; the hand draws from your instruction."
+            if let t = trace, let w = t.eyeWords, !t.prompt.isEmpty, t.prompt != w {
+                s += "\n\nThe hand received a shortened version, shown under the words."
+            }
+            if trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true {
+                s += name == Seer.apple.name
+                    ? "\n\nApple's eye doesn't show its workings. Choose Qwen as the eye in Preferences to see its numbers and where it looked."
+                    : "\n\n\(name) doesn't show its workings here yet."
+            }
+            return s
+        case .mixing:
+            return mixingText
+        case .step(let k):
+            let of = max(trace?.latents.count ?? 0, trace?.steps ?? 0)
+            let kind = (trace?.isGuess ?? false)
+                ? "These previews show the engine's best guess at the finished picture after each step."
+                : "These previews show the engine's working image after each step."
+            return "The hand never sees your photograph. It starts from random noise and, over \(of) steps, refines it toward the eye's words. This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
+        case .finished:
+            return "The hand's finished drawing, made from the eye's words alone. This is the real one; it's saved to Photos."
+        }
+    }
+
+    var mixingText: String {
+        "Loading the drawing model\((trace?.channelsLast ?? false) ? "" : " onto the Neural Engine"). The first time after installing or updating takes a couple of minutes; after that, a second or two."
+    }
+
+    static func percent(_ v: Float) -> String { "\(Int((v * 100).rounded()))%" }
 }
 
-/// The Developer Tray: watch one shot develop, live, and scrub back through every real moment.
+/// The Developer Tray: watch one shot develop, live, and step back through every real moment.
 ///
-/// Full screen, like the viewfinder (Mark, 2026-11-05; mockup screenshots-draft/tray-fullscreen-mockup.jpg,
-/// touchstone Underworld's "Everything, Everything" cover): the picture is the whole canvas and the
-/// controls are small translucent pills laid across it. The picture is never cropped, because hiding part
-/// of it would hide data the eye really looked at; the space it does not fill is a blurred, darkened copy
-/// of itself. Tap the picture to hide or show the pills. It follows the phone's orientation: upright suits
-/// the square drawing, sideways suits a wide photograph. The explanations live behind "?", not on screen.
+/// Full screen, like the viewfinder (Mark, 2026-11-05; touchstone Underworld's "Everything, Everything"
+/// cover): the picture is the canvas and the controls are small translucent pills. The picture is never
+/// cropped, because hiding part of it would hide data the eye really looked at; the space it does not
+/// fill is a blurred, darkened copy of itself. Tap that backdrop to hide or show the pills.
+///
+/// Laid out from the 2026-11-12 design pass (mockups in screenshots-draft/design-pass-2026-11-12):
+/// the top pill names the chapter (LENS / EYE / HAND); the pill above the slider names the moment; ‹ ›,
+/// a swipe on the picture, or the slider move through the moments (no Play: too fast to read the data).
+/// Upright, the picture sits just under the top pills, in the same place on every moment, with the
+/// sentence and its facts in the calm space below; sideways, the picture fills the screen as before.
+/// The eye's moments show the WHOLE look: the picture lit where attention landed and the earlier words
+/// lit by how much attention they got, on one scale. Tap a square to compare every square's numbers
+/// with it (the raw numbers one tap further).
 struct DeveloperTrayView: View {
     @State private var model: TrayModel
     @State private var worker = DarkRoomWorker.shared
@@ -784,15 +1010,13 @@ struct DeveloperTrayView: View {
             let wide = geo.size.width > geo.size.height
             ZStack {
                 backdrop
-                stage
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-                if model.chromeVisible { chrome(wide: wide).transition(.opacity) }
+                if wide { wideLayout } else { tallLayout(geo.size) }
                 if model.helpOpen { helpCard(wide: wide).transition(.opacity) }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .background(Color.black.ignoresSafeArea())
+        .foregroundStyle(.white)
         .animation(.easeInOut(duration: 0.2), value: model.chromeVisible)
         .animation(.easeInOut(duration: 0.2), value: model.helpOpen)
         .statusBarHidden(!model.chromeVisible)
@@ -808,20 +1032,23 @@ struct DeveloperTrayView: View {
         #if DEBUG
         .onChange(of: AntennaUIBridge.shared.trayScrubTo) { _, v in
             guard let v else { return }
-            if v == -2 { model.play() } else if v < 0 { model.goLive() } else { model.scrub(to: v) }
+            if v < 0 { model.goLive() } else { model.scrub(to: v) }
             AntennaUIBridge.shared.trayScrubTo = nil
         }
         .onChange(of: AntennaUIBridge.shared.trayTap) { _, tap in
             guard let tap else { return }
-            let parts = tap.split(separator: ":")
-            switch (parts.first, parts.count > 1 ? Int(parts[1]) : nil) {
-            case ("word"?, let i?): model.jump(toWord: i)
-            case ("square"?, let n?): model.openSquare = n
-            case ("close"?, _): model.openSquare = nil
-            case ("look"?, _): model.numbersLook = model.numbersLook.next
-            case ("picture"?, _): model.chromeVisible.toggle()
-            case ("help"?, _): model.helpOpen.toggle()
-            case ("dismiss"?, _): dismiss()
+            let parts = tap.split(separator: ":").map(String.init)
+            let arg = parts.count > 1 ? parts[1] : ""
+            switch parts.first ?? "" {
+            case "word": if let i = Int(arg) { model.jump(toWord: i) }
+            case "square": if let n = Int(arg) { model.tapSquare(n) }
+            case "numbers": model.openSquare = model.comparedSquare
+            case "close": model.openSquare = nil
+            case "step": if let d = Int(arg) { model.step(d) }
+            case "chapter": if let c = TrayChapter(rawValue: arg) { model.jump(to: c) }
+            case "picture": model.chromeVisible.toggle()
+            case "help": model.helpOpen.toggle()
+            case "dismiss": dismiss()
             default: break
             }
             AntennaUIBridge.shared.trayTap = nil
@@ -830,6 +1057,49 @@ struct DeveloperTrayView: View {
     }
 
     private var isDeveloping: Bool { worker.currentShotID == model.shotID }
+
+    // MARK: Layouts
+
+    /// Upright: pills, then the picture anchored under them, then the moment's words, then the controls.
+    private func tallLayout(_ size: CGSize) -> some View {
+        let aspect = currentPicture.map { CGFloat($0.width) / CGFloat(max(1, $0.height)) } ?? 16.0 / 9.0
+        let stageHeight = min(size.width / max(aspect, 0.1), size.height * 0.5)
+        return VStack(spacing: 12) {
+            topBar
+                .opacity(model.chromeVisible ? 1 : 0)
+                .allowsHitTesting(model.chromeVisible)
+            stage.frame(width: size.width, height: stageHeight)
+            if model.chromeVisible {
+                momentContent(wide: false)
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
+                bottomBar.transition(.opacity)
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// Sideways: the picture fills the screen; the pills lie across it.
+    private var wideLayout: some View {
+        ZStack {
+            stage
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+            if model.chromeVisible {
+                VStack(spacing: 10) {
+                    topBar
+                    Spacer(minLength: 0)
+                    momentContent(wide: true).frame(maxWidth: 640)
+                    bottomBar.frame(maxWidth: 760)
+                }
+                .padding(.vertical, 8)
+                .transition(.opacity)
+            }
+        }
+    }
 
     // MARK: The canvas
 
@@ -859,50 +1129,47 @@ struct DeveloperTrayView: View {
             }
             .clipped()
             .ignoresSafeArea()
-        .contentShape(Rectangle())
-        .onTapGesture { model.chromeVisible.toggle() }
+            .contentShape(Rectangle())
+            .onTapGesture { model.chromeVisible.toggle() }
     }
 
-    @ViewBuilder
     private var stage: some View {
-        switch model.current {
-        case .reality, .words, .mixing:
-            if let photo = model.trace?.photo {
-                picture(photo).opacity(model.current == .reality ? 1 : 0.45)
-            } else {
-                ProgressView().tint(.white)
+        Group {
+            switch model.current {
+            case .reality, .words, .mixing:
+                if let photo = model.trace?.photo {
+                    picture(photo).opacity(model.current == .reality ? 1 : 0.45)
+                } else {
+                    ProgressView().tint(.white)
+                }
+            case .numbers, .gaze:
+                if let photo = model.trace?.photo, let e = model.trace?.eye, e.squares > 0 {
+                    let compared = model.comparedSquare
+                    EyeLightPhoto(photo: photo, rows: e.rows, cols: e.cols,
+                                  light: model.squareLight,
+                                  soft: compared == nil,
+                                  floor: compared == nil ? 0.2 : 0.12,
+                                  outlined: compared,
+                                  gridLines: model.current == .numbers || compared != nil,
+                                  key: compared.map { "square\($0)" } ?? "moment\(model.index)",
+                                  onTapSquare: { model.tapSquare($0) })
+                }
+            case .step(let k):
+                if let shown = model.shownStep(for: k), let img = model.previews[shown]?.cgImage {
+                    picture(img)
+                } else {
+                    ProgressView().tint(.white)
+                }
+            case .finished:
+                if let f = model.trace?.final { picture(f) }
             }
-        case .numbers:
-            if let photo = model.trace?.photo, let e = model.trace?.eye {
-                let s = model.summary
-                let opacity: Double = model.numbersLook == .blend ? 0.72 : model.numbersLook == .colours ? 1 : 0
-                // A tap on a square opens its numbers; a tap on the blur around it hides the pills.
-                EyeGridPhoto(photo: photo, rows: e.rows, cols: e.cols, tint: { i in
-                    guard let s, i < s.colors.count, opacity > 0 else { return .clear }
-                    let c = s.colors[i]
-                    return Color(red: Double(c.0), green: Double(c.1), blue: Double(c.2)).opacity(opacity)
-                }, onTap: { model.openSquare = $0 })
-            }
-        case .gaze(let i):
-            if let photo = model.trace?.photo, let e = model.trace?.eye, model.eyeWords.indices.contains(i) {
-                let g = model.eyeWords[i].gaze
-                let top = max(g.max() ?? 0, .leastNonzeroMagnitude)
-                // Darken by how little attention each square got, scaled to this word's strongest.
-                EyeGridPhoto(photo: photo, rows: e.rows, cols: e.cols, tint: { j in
-                    guard j < g.count else { return .clear }
-                    return Color.black.opacity(0.78 * Double(1 - g[j] / top))
-                })
-                .onTapGesture { model.chromeVisible.toggle() }
-            }
-        case .step(let k):
-            if let shown = model.shownStep(for: k), let img = model.previews[shown]?.cgImage {
-                picture(img)
-            } else {
-                ProgressView().tint(.white)
-            }
-        case .finished:
-            if let f = model.trace?.final { picture(f) }
         }
+        // Swipe the picture to step through the moments.
+        .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { v in
+            let dx = v.translation.width
+            guard abs(dx) > 50, abs(dx) > abs(v.translation.height) else { return }
+            model.step(dx < 0 ? 1 : -1)
+        })
     }
 
     private func picture(_ image: CGImage) -> some View {
@@ -912,120 +1179,89 @@ struct DeveloperTrayView: View {
             .onTapGesture { model.chromeVisible.toggle() }
     }
 
-    // MARK: The pills
+    // MARK: The moment's words
 
-    private func chrome(wide: Bool) -> some View {
-        VStack(spacing: 10) {
-            // Top: close, what this moment is, and "?".
-            HStack(alignment: .top) {
-                roundPill("xmark") { dismiss() }
-                Spacer(minLength: 12)
-                VStack(spacing: 8) {
-                    pill { Text(model.title).font(.subheadline.weight(.semibold)) }
-                    if isDeveloping, let live = liveLine {
-                        pill { Label(live, systemImage: "circle.fill").font(.caption.weight(.semibold)).labelStyle(LiveDot()) }
-                    }
-                }
-                Spacer(minLength: 12)
-                roundPill("questionmark") { model.helpOpen.toggle() }
+    @ViewBuilder
+    private func momentContent(wide: Bool) -> some View {
+        switch model.current {
+        case .numbers, .gaze:
+            VStack(alignment: .leading, spacing: 14) {
+                if !model.eyeWords.isEmpty { sentence(wide: wide) }
+                eyeFacts
             }
-
-            Spacer(minLength: 0)
-
-            // The moment's own words: the sentence (lit word, tap to jump), the words in full, or a card.
-            Group {
-                switch model.current {
-                case .numbers, .gaze: if !model.eyeWords.isEmpty { sentenceBand(wide: wide) }
-                case .words: wordsCard(wide: wide)
-                case .mixing: textCard(mixingText)
-                default: EmptyView()
-                }
+            .padding(wide ? 12 : 0)
+            .background {
+                if wide { RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial.opacity(0.9)) }
             }
-            .frame(maxWidth: wide ? 640 : .infinity)
-
-            HStack(alignment: .center, spacing: 10) {
-                if let fact = model.fact { pill { Text(fact).font(.caption.weight(.medium)) } }
-                Spacer(minLength: 0)
-                if model.current == .numbers {
-                    Button { model.numbersLook = model.numbersLook.next } label: {
-                        pill { Text(model.numbersLook.label).font(.caption.weight(.semibold)) }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(maxWidth: wide ? 640 : .infinity)
-
-            // Bottom: Play, the scrubber, Live.
-            HStack(spacing: 12) {
-                Button { model.playing ? model.pause() : model.play() } label: {
-                    pill { Image(systemName: model.playing ? "pause.fill" : "play.fill").font(.callout.weight(.semibold)) }
-                }
-                .buttonStyle(.plain)
-                .disabled(model.frames.count < 2)
-                Slider(value: Binding(get: { Double(model.index) },
-                                      set: { model.scrub(to: Int($0.rounded())) }),
-                       in: 0...Double(max(1, model.frames.count - 1)), step: 1)
-                    .tint(.white)
-                    .disabled(model.frames.count < 2)
-                if isDeveloping {
-                    Button { model.goLive() } label: {
-                        pill { Text("Live").font(.caption.weight(.bold)).foregroundStyle(model.following ? .red : .white) }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(maxWidth: wide ? 760 : .infinity)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    /// While this shot is still developing: where it is, in a few words.
-    private var liveLine: String? {
-        switch worker.currentStage {
-        case .seeing?: return "Seeing"
-        case .mixing?: return "Mixing the developer"
-        case .drawing?:
-            let n = model.trace?.latents.count ?? 0, total = model.trace?.steps ?? 0
-            return n == 0 ? "Drawing" : "Drawing · step \(n) of \(max(n, total))"
-        case .saving?: return "Saving to Photos"
-        case .none: return "Developing"
+            .environment(\.colorScheme, .dark)
+        case .words: wordsCard(wide: wide)
+        case .mixing: textCard(model.mixingText)
+        default:
+            if let fact = model.fact { pill { Text(fact).font(.caption.weight(.medium)) } }
         }
     }
 
-    /// The eye's sentence as a translucent band; the word on screen is lit, every word is a button.
-    private func sentenceBand(wide: Bool) -> some View {
+    /// The eye's sentence. The word being chosen is underlined, words not yet said are faint, and the
+    /// earlier words glow by how much attention the word on screen paid them. With a square picked,
+    /// every word glows by how much it looked at that square. Every word is a button.
+    private func sentence(wide: Bool) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                WordFlow(spacing: 5) {
+                WordFlow(spacing: 3) {
                     ForEach(model.eyeWords) { w in
-                        let lit = model.currentWord?.id == w.id
                         Button { model.jump(toWord: w.id) } label: {
-                            Text(w.text)
-                                .font(.callout.weight(lit ? .bold : .regular))
-                                .foregroundStyle(lit ? Color.black : Color.white)
-                                .padding(.horizontal, 4)
-                                .background(lit ? Color.yellow.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            TrayWordLabel(text: w.text, state: model.wordState(w.id))
                         }
                         .buttonStyle(.plain)
                         .id(w.id)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+                .padding(.vertical, 4)
             }
-            .frame(maxHeight: wide ? 70 : 104)
-            .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
-            .environment(\.colorScheme, .dark)
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: wide ? 84 : .infinity)
             .onChange(of: model.currentWord?.id) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
     }
 
+    /// Under the sentence: where the whole look went, or what the lit squares mean, and the way to the
+    /// raw numbers.
+    @ViewBuilder
+    private var eyeFacts: some View {
+        if let s = model.comparedSquare, let e = model.trace?.eye {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(model.eyeWords.isEmpty
+                     ? "Lit: squares whose numbers are like square \(s + 1)'s."
+                     : "Lit: squares whose numbers are like square \(s + 1)'s, and the words that looked there.")
+                    .font(.footnote).foregroundStyle(.white.opacity(0.75))
+                HStack(spacing: 10) {
+                    Button { model.openSquare = s } label: {
+                        pill { Label("\(e.width.formatted()) numbers", systemImage: "number").font(.caption.weight(.semibold)) }
+                    }
+                    .buttonStyle(.plain)
+                    if model.selectedSquare != nil, let w = model.currentWord {
+                        Button { model.selectedSquare = nil } label: {
+                            pill { Text("Back to \u{201C}\(w.bare)\u{201D}").font(.caption.weight(.semibold)) }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        } else if let look = model.currentLook {
+            TraySplitBar(look: look)
+        } else if let fact = model.fact {
+            Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.75))
+        } else if model.current == .numbers, let e = model.trace?.eye {
+            Text("Tap any square to compare its \(e.width.formatted()) numbers with every other square's.")
+                .font(.footnote).foregroundStyle(.white.opacity(0.75))
+        }
+    }
+
     /// The eye's words in full. Height-capped (and scrolling) so a long description can never push the
-    /// top pills off screen; sideways the cap is lower (device, 2026-11-05).
+    /// pills off screen; sideways the cap is lower (device, 2026-11-05).
     private func wordsCard(wide: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
@@ -1033,6 +1269,7 @@ struct DeveloperTrayView: View {
                 if let t = model.trace, let w = t.eyeWords, !t.prompt.isEmpty, t.prompt != w {
                     Text("The hand received a shorter version: \"\(t.prompt)\"").font(.footnote).opacity(0.75)
                 }
+                if let fact = model.fact { Text(fact).font(.footnote).opacity(0.75) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
@@ -1043,10 +1280,6 @@ struct DeveloperTrayView: View {
         .environment(\.colorScheme, .dark)
     }
 
-    private var mixingText: String {
-        "Loading the drawing model\((model.trace?.channelsLast ?? false) ? "" : " onto the Neural Engine"). The first time after installing or updating takes a couple of minutes; after that, a second or two."
-    }
-
     private func textCard(_ text: String) -> some View {
         Text(text).font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1055,20 +1288,96 @@ struct DeveloperTrayView: View {
             .environment(\.colorScheme, .dark)
     }
 
-    /// Behind "?": what this moment is and how to read it, plus the tray's honesty note.
+    // MARK: The pills
+
+    /// Top: close, the chapters, and "?".
+    private var topBar: some View {
+        HStack {
+            roundPill("xmark") { dismiss() }
+            Spacer(minLength: 8)
+            HStack(spacing: 2) {
+                ForEach(TrayChapter.allCases, id: \.self) { c in
+                    let on = model.current.chapter == c
+                    let has = model.has(c)
+                    Button { model.jump(to: c) } label: {
+                        Text(c.label).font(.caption.weight(.bold)).tracking(0.6)
+                            .foregroundStyle(on ? Color.black : Color.white.opacity(has ? 0.8 : 0.3))
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(on ? Color.white : Color.clear, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!has)
+                }
+            }
+            .padding(3)
+            .background(.ultraThinMaterial.opacity(0.85), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+            .environment(\.colorScheme, .dark)
+            Spacer(minLength: 8)
+            roundPill("questionmark") { model.helpOpen.toggle() }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// Bottom: the moment, then ‹ the slider › (and Live while the shot is still developing).
+    private var bottomBar: some View {
+        VStack(spacing: 10) {
+            if isDeveloping, let live = liveLine {
+                pill { Label(live, systemImage: "circle.fill").font(.caption.weight(.semibold)).labelStyle(LiveDot()) }
+            }
+            pill { Text(model.title).font(.subheadline.weight(.semibold)) }
+            HStack(spacing: 10) {
+                roundPill("chevron.left") { model.step(-1) }
+                    .disabled(model.index <= 0)
+                    .opacity(model.index <= 0 ? 0.4 : 1)
+                TrayScrubber(count: model.frames.count, index: model.index, spans: model.chapterSpans) {
+                    model.scrub(to: $0)
+                }
+                roundPill("chevron.right") { model.step(1) }
+                    .disabled(model.index >= model.frames.count - 1)
+                    .opacity(model.index >= model.frames.count - 1 ? 0.4 : 1)
+                if isDeveloping {
+                    Button { model.goLive() } label: {
+                        pill { Text("Live").font(.caption.weight(.bold)).foregroundStyle(model.following ? .red : .white) }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
+
+    /// While this shot is still developing: where it is, in a few words.
+    private var liveLine: String? {
+        switch worker.currentStage {
+        case .seeing?: return "Seeing"
+        case .mixing?: return "Mixing the developer"
+        case .drawing?:
+            let n = model.trace?.latents.count ?? 0, total = model.trace?.steps ?? 0
+            return n == 0 ? "Drawing" : "Drawing \u{00B7} step \(n) of \(max(n, total))"
+        case .saving?: return "Saving to Photos"
+        case .none: return "Developing"
+        }
+    }
+
+    /// Behind "?": this moment, explained.
     private func helpCard(wide: Bool) -> some View {
         ZStack {
             Color.black.opacity(0.35).ignoresSafeArea().onTapGesture { model.helpOpen = false }
             VStack(alignment: .leading, spacing: 12) {
-                Text(model.caption).font(.headline)
-                if let d = model.detail { Text(d).font(.subheadline) }
-                Text("Everything here is real: your photograph, the numbers the eye made of it, where it looked as it chose each word, its own words, and the drawing engine's actual state at each step. The colours and the step pictures are summaries and quick previews, and say so; the finished drawing is the real one.")
-                    .font(.footnote).opacity(0.75)
+                Text(model.helpTitle).font(.headline)
+                ScrollView {
+                    Text(model.helpBody).font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: wide ? 220 : 460)
+                .fixedSize(horizontal: false, vertical: true)
                 Button("Done") { model.helpOpen = false }
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .foregroundStyle(.white)
             .padding(18)
             .frame(maxWidth: wide ? 560 : .infinity)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
@@ -1110,38 +1419,181 @@ private struct LiveDot: LabelStyle {
     }
 }
 
-/// The photograph with one colour laid over each of the eye's squares (rows x cols, the grid the
-/// vision encoder made). Optional tap: which square was touched.
-struct EyeGridPhoto: View {
+/// One word of the eye's sentence, lit as `TrayWordState` says.
+struct TrayWordLabel: View {
+    let text: String
+    let state: TrayWordState
+
+    var body: some View {
+        let level: Double = { if case .lit(let l) = state { return Double(l) } else { return 0 } }()
+        let isCurrent = state == .current
+        Text(text)
+            .font(.callout.weight(isCurrent ? .bold : .regular))
+            .foregroundStyle(color(level))
+            .padding(.horizontal, 2).padding(.vertical, 1)
+            .background {
+                if level > 0.12 {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(red: 1, green: 0.62, blue: 0.2).opacity(0.75 * level))
+                        .blur(radius: 4)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if isCurrent { Capsule().fill(.white).frame(height: 2).offset(y: 2) }
+            }
+    }
+
+    private func color(_ level: Double) -> Color {
+        switch state {
+        case .current: return .white
+        case .future: return .white.opacity(0.32)
+        case .lit: return level > 0.12 ? Color(red: 1, green: 0.9, blue: 0.75).opacity(0.62 + 0.38 * level) : .white.opacity(0.62)
+        }
+    }
+}
+
+/// Where one word's whole attention went: the picture, its instructions, what it had already said.
+struct TraySplitBar: View {
+    let look: TrayLook
+
+    private var parts: [(String, Float, Color)] {
+        [("picture", look.picture, Color(red: 1, green: 0.84, blue: 0.55)),
+         ("its instructions", look.instructions, Color(white: 0.62)),
+         ("what it had said", look.said, Color(red: 1, green: 0.59, blue: 0.24))]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                let total = max(0.0001, parts.reduce(Float(0)) { $0 + $1.1 })
+                HStack(spacing: 2) {
+                    ForEach(parts.indices, id: \.self) { i in
+                        Capsule().fill(parts[i].2)
+                            .frame(width: max(2, (geo.size.width - 4) * CGFloat(parts[i].1 / total)))
+                    }
+                }
+            }
+            .frame(height: 8)
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(parts.indices, id: \.self) { i in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(TrayModel.percent(parts[i].1)).font(.callout.weight(.bold)).foregroundStyle(parts[i].2)
+                        Text(parts[i].0).font(.caption).foregroundStyle(.white.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+/// The timeline slider, with a mark where each chapter begins and the chapter names under it.
+struct TrayScrubber: View {
+    let count: Int
+    let index: Int
+    let spans: [TrayChapterSpan]
+    let onScrub: (Int) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset: CGFloat = 11
+            let w = max(1, geo.size.width - inset * 2)
+            let x: (Double) -> CGFloat = { i in inset + (count > 1 ? CGFloat(i / Double(count - 1)) : 0) * w }
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(.white.opacity(0.25)).frame(width: w, height: 4).offset(x: inset, y: 13)
+                Capsule().fill(.white).frame(width: max(4, x(Double(index)) - inset), height: 4).offset(x: inset, y: 13)
+                ForEach(spans.dropFirst()) { s in
+                    Capsule().fill(.white.opacity(0.75)).frame(width: 2, height: 14)
+                        .offset(x: x(Double(s.first) - 0.5) - 1, y: 8)
+                }
+                Circle().fill(.white).frame(width: 22, height: 22).shadow(radius: 2)
+                    .offset(x: x(Double(index)) - 11, y: 4)
+                ForEach(spans) { s in
+                    if x(Double(s.last)) - x(Double(s.first)) >= 30 {
+                        Text(s.chapter.rawValue).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.55))
+                            .fixedSize()
+                            .position(x: (x(Double(s.first)) + x(Double(s.last))) / 2, y: 38)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                guard count > 1 else { return }
+                let f = (v.location.x - inset) / w
+                onScrub(min(count - 1, max(0, Int((f * CGFloat(count - 1)).rounded()))))
+            })
+        }
+        .frame(height: 46)
+    }
+}
+
+/// The photograph, lit square by square: full brightness where the light is 1, down to `floor` where
+/// it is 0. Soft (a smooth glow between square centers) for attention; crisp squares for likeness,
+/// where each square is its own comparison. Tapping reports which square was touched.
+struct EyeLightPhoto: View {
     let photo: CGImage
     let rows: Int
     let cols: Int
-    let tint: (Int) -> Color
-    var onTap: ((Int) -> Void)? = nil
+    let light: [Float]?
+    var soft = true
+    var floor: Double = 0.2
+    var outlined: Int?
+    var gridLines = false
+    var key: String = ""
+    var onTapSquare: ((Int) -> Void)?
 
     var body: some View {
         Image(uiImage: UIImage(cgImage: photo)).resizable().scaledToFit()
+            .overlay {
+                ZStack {
+                    if let light, let shade = Self.shade(light, rows: rows, cols: cols) {
+                        Color.black.opacity(1 - floor)
+                            .mask(Image(decorative: shade, scale: 1).resizable().interpolation(soft ? .high : .none))
+                            .id(key)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.25), value: key)
+            }
             .overlay {
                 GeometryReader { geo in
                     Canvas { ctx, size in
                         guard rows > 0, cols > 0 else { return }
                         let w = size.width / CGFloat(cols), h = size.height / CGFloat(rows)
-                        for r in 0..<rows {
-                            for c in 0..<cols {
-                                let rect = CGRect(x: CGFloat(c) * w, y: CGFloat(r) * h, width: w + 0.5, height: h + 0.5)
-                                ctx.fill(Path(rect), with: .color(tint(r * cols + c)))
-                            }
+                        if gridLines {
+                            var lines = Path()
+                            for c in 1..<cols { lines.move(to: CGPoint(x: CGFloat(c) * w, y: 0)); lines.addLine(to: CGPoint(x: CGFloat(c) * w, y: size.height)) }
+                            for r in 1..<rows { lines.move(to: CGPoint(x: 0, y: CGFloat(r) * h)); lines.addLine(to: CGPoint(x: size.width, y: CGFloat(r) * h)) }
+                            ctx.stroke(lines, with: .color(.white.opacity(0.12)), lineWidth: 0.5)
+                        }
+                        if let o = outlined, o >= 0, o < rows * cols {
+                            let rect = CGRect(x: CGFloat(o % cols) * w, y: CGFloat(o / cols) * h, width: w, height: h)
+                            ctx.stroke(Path(rect.insetBy(dx: 1, dy: 1)), with: .color(.white), lineWidth: 2)
                         }
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { loc in
-                        guard let onTap, rows > 0, cols > 0, geo.size.width > 0, geo.size.height > 0 else { return }
+                        guard let onTapSquare, rows > 0, cols > 0, geo.size.width > 0, geo.size.height > 0 else { return }
                         let c = min(cols - 1, max(0, Int(loc.x / geo.size.width * CGFloat(cols))))
                         let r = min(rows - 1, max(0, Int(loc.y / geo.size.height * CGFloat(rows))))
-                        onTap(r * cols + c)
+                        onTapSquare(r * cols + c)
                     }
                 }
             }
+    }
+
+    /// One pixel per square: black, as opaque as the square is dark (1 - light).
+    static func shade(_ light: [Float], rows: Int, cols: Int) -> CGImage? {
+        guard rows > 0, cols > 0, light.count == rows * cols else { return nil }
+        var px = [UInt8](repeating: 0, count: rows * cols * 4)
+        for i in 0..<(rows * cols) {
+            px[i * 4 + 3] = UInt8(clamping: Int(((1 - max(0, min(1, light[i]))) * 255).rounded()))
+        }
+        guard let provider = CGDataProvider(data: Data(px) as CFData) else { return nil }
+        return CGImage(width: cols, height: rows, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: cols * 4,
+                       space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 }
 

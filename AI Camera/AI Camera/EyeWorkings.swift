@@ -27,8 +27,8 @@ import MLXLMCommon
 ///   of layer that has no attention to read) and averaged over 8 heads. `imageShare` is the
 ///   fraction of the attention that went to the picture at all; the rest went to the words.
 ///
-/// Nothing here is smoothed, rescaled or guessed. The tray's colours are a labelled summary of
-/// the numbers (see `EyeNumbersSummary`); the raw numbers stay one tap away.
+/// Nothing here is smoothed, rescaled or guessed. The tray compares squares over all of their
+/// numbers (`EyeLikeness`), and the raw numbers stay one tap away.
 nonisolated struct EyeWorkings: Sendable {
     struct Piece: Sendable {
         let text: String       // the word piece exactly as the tokenizer spells it
@@ -245,76 +245,52 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
     }
 }
 
-/// The numbers, summarized so a person can see them: each square coloured by where it falls on
-/// the three directions in which the 2,048 numbers vary most across this photograph (principal
-/// components). Squares the eye considers alike come out alike in colour. This is a SUMMARY and
-/// the tray says so, with how much of the variation the three colours capture; the raw numbers
-/// are one tap away.
+/// How alike the squares are, measured over ALL of their numbers at once (Mark, 2026-11-12: of
+/// the ways tried in the design pass, this one shows the numbers without summarizing them).
 ///
-/// Computed on the phone, cheaply: the squares' similarity matrix (squares x squares, about
-/// 144 x 144) and three rounds of power iteration on it, so the cost is about one look at a
-/// small table rather than anything proportional to the 2,048 numbers more than once.
-nonisolated struct EyeNumbersSummary: Sendable {
-    let rows: Int
-    let cols: Int
-    let colors: [(Float, Float, Float)]   // one per square, each channel 0...1
-    let explained: Float                  // fraction of the variation the three colours carry
+/// Tap a square and every square lights by the cosine similarity of its 2,048 numbers to the tapped
+/// square's: 1 means the same direction, 0 unrelated, below 0 opposite. Each of the 2,048 numbers
+/// is first centered across the squares (the photograph's average square is taken away), so what
+/// every square shares does not make them all look alike; what remains is how each square differs.
+/// Nothing is dropped: every number of every square enters every comparison.
+///
+/// Cheap: one centering pass when the numbers arrive, then each tap is 144 dot products of 2,048.
+nonisolated struct EyeLikeness: Sendable {
+    let squares: Int
+    let width: Int
+    private let centered: [Float]   // [squares, width]
+    private let norms: [Float]
 
     init?(_ w: EyeWorkings) {
         let n = w.squares, d = w.width
-        guard n > 3, d > 0, w.features.count == n * d else { return nil }
-        rows = w.rows; cols = w.cols
-
-        // Centre each of the d numbers across the squares, then the Gram matrix G = X Xt: how
-        // alike each pair of squares is (Accelerate; about 144 x 144 x 2,048 multiply-adds).
+        guard n > 1, d > 0, w.features.count == n * d else { return nil }
         var x = w.features
-        var xt = [Float](repeating: 0, count: n * d)
-        vDSP_mtrans(x, 1, &xt, 1, vDSP_Length(d), vDSP_Length(n))      // xt is [d, n]
-        for j in 0..<d {
-            var mean: Float = 0
-            xt.withUnsafeBufferPointer { vDSP_meanv($0.baseAddress! + j * n, 1, &mean, vDSP_Length(n)) }
-            var negative = -mean
-            xt.withUnsafeMutableBufferPointer {
-                let row = $0.baseAddress! + j * n
-                vDSP_vsadd(row, 1, &negative, row, 1, vDSP_Length(n))
+        var mean = [Float](repeating: 0, count: d)
+        for i in 0..<n { x.withUnsafeBufferPointer { vDSP_vadd($0.baseAddress! + i * d, 1, mean, 1, &mean, 1, vDSP_Length(d)) } }
+        var inverse = 1 / Float(n)
+        vDSP_vsmul(mean, 1, &inverse, &mean, 1, vDSP_Length(d))
+        var norms = [Float](repeating: 0, count: n)
+        x.withUnsafeMutableBufferPointer { buf in
+            for i in 0..<n {
+                let row = buf.baseAddress! + i * d
+                vDSP_vsub(mean, 1, row, 1, row, 1, vDSP_Length(d))   // row - mean
+                var sq: Float = 0
+                vDSP_svesq(row, 1, &sq, vDSP_Length(d))
+                norms[i] = sq.squareRoot()
             }
         }
-        vDSP_mtrans(xt, 1, &x, 1, vDSP_Length(n), vDSP_Length(d))      // x is [n, d], centred
-        var g = [Float](repeating: 0, count: n * n)
-        vDSP_mmul(x, 1, xt, 1, &g, 1, vDSP_Length(n), vDSP_Length(n), vDSP_Length(d))
-        var total: Float = 0
-        for i in 0..<n { total += g[i * n + i] }
-        guard total > 0 else { return nil }
+        squares = n; width = d; centered = x; self.norms = norms
+    }
 
-        // Top three eigenvectors of G by power iteration with deflation.
-        var components: [[Float]] = []
-        var captured: Float = 0
-        for k in 0..<3 {
-            var v = (0..<n).map { Float(($0 * 7 + k * 13) % 11) - 5 }   // fixed start: same photo, same colours
-            var next = [Float](repeating: 0, count: n)
-            var lambda: Float = 0
-            for _ in 0..<200 {
-                vDSP_mmul(g, 1, v, 1, &next, 1, vDSP_Length(n), 1, vDSP_Length(n))
-                var norm: Float = 0
-                vDSP_svesq(next, 1, &norm, vDSP_Length(n))
-                norm = norm.squareRoot()
-                guard norm > 0 else { break }
-                lambda = norm
-                var inverse = 1 / norm
-                vDSP_vsmul(next, 1, &inverse, &v, 1, vDSP_Length(n))
-            }
-            components.append(v)
-            captured += lambda
-            for a in 0..<n { for b in 0..<n { g[a * n + b] -= lambda * v[a] * v[b] } }
+    /// Every square's likeness to square `i`, from -1 to 1 (square `i` itself is 1).
+    func alike(to i: Int) -> [Float] {
+        guard i >= 0, i < squares, norms[i] > 0 else { return [Float](repeating: 0, count: squares) }
+        var dots = [Float](repeating: 0, count: squares)
+        centered.withUnsafeBufferPointer { buf in
+            vDSP_mmul(buf.baseAddress!, 1, buf.baseAddress! + i * width, 1, &dots, 1,
+                      vDSP_Length(squares), 1, vDSP_Length(width))
         }
-        explained = min(1, captured / total)
-
-        // Each component to 0...1 across the squares.
-        let scaled = components.map { c -> [Float] in
-            let lo = c.min() ?? 0, hi = c.max() ?? 1
-            return c.map { hi > lo ? ($0 - lo) / (hi - lo) : 0.5 }
-        }
-        colors = (0..<n).map { (scaled[0][$0], scaled[1][$0], scaled[2][$0]) }
+        return dots.indices.map { j in norms[j] > 0 ? dots[j] / (norms[j] * norms[i]) : 0 }
     }
 }
 

@@ -894,7 +894,6 @@ extension LocalAPIServer {
             "text": e.pieces.map(\.text).joined(),
             "pieces": pieces,
         ]
-        if e.done, let summary = EyeNumbersSummary(e) { out["summaryExplained"] = summary.explained }
         if full { out["promptPieces"] = e.promptPieces; out["promptImagePositions"] = e.promptImagePositions }
         if let n = req.headers["x-square"].flatMap(Int.init) { out["square"] = ["index": n, "numbers": Array(e.numbers(ofSquare: n))] }
         return (200, json(out))
@@ -996,55 +995,78 @@ extension LocalAPIServer {
             case .finished: return "finished"
             }
         }
+        var look: [String: Any] = [:]
+        if let l = m.currentLook {
+            look = ["picture": l.picture, "instructions": l.instructions, "said": l.said, "markers": l.markers]
+        }
+        let lit: [[String: Any]] = m.eyeWords.indices.compactMap { v in
+            guard case .lit(let level) = m.wordState(v), level > 0.12 else { return nil }
+            return ["word": m.eyeWords[v].text, "index": v, "light": level]
+        }.sorted { ($0["light"] as? Float ?? 0) > ($1["light"] as? Float ?? 0) }
         return (200, json([
             "shotID": m.shotID.uuidString,
             "frames": names,
             "index": m.index,
-            "caption": m.caption,
-            "following": m.following,
-            "playing": m.playing,
-            "previewsDecoded": m.previews.count,
-            "drawingDone": m.drawingDone,
-            "detail": m.detail ?? "",
+            "chapter": m.current.chapter.rawValue,
+            "chapters": m.chapterSpans.map { ["chapter": $0.chapter.rawValue, "first": $0.first, "last": $0.last] },
             "title": m.title,
             "fact": m.fact ?? "",
+            "helpTitle": m.helpTitle,
+            "helpBody": m.helpBody,
+            "following": m.following,
+            "previewsDecoded": m.previews.count,
+            "drawingDone": m.drawingDone,
             "chromeVisible": m.chromeVisible,
             "helpOpen": m.helpOpen,
             "word": m.currentWord?.text ?? "",
             "words": m.eyeWords.map(\.text),
-            "numbersLook": m.numbersLook.rawValue,
+            "look": look,
+            "litWords": Array(lit.prefix(8)),
+            "selectedSquare": m.selectedSquare ?? -1,
+            "comparedSquare": m.comparedSquare ?? -1,
+            "mostLookedSquare": m.mostLookedSquare ?? -1,
+            "likenessReady": m.likeness != nil,
+            "lightScale": m.lightScale,
+            "squareLightMax": m.squareLight?.max() ?? -1,
             "openSquare": m.openSquare ?? -1,
-            "summaryExplained": m.summary?.explained ?? -1,
         ]))
     }
 
-    /// POST /tray  X-Index: n (drag the scrubber to frame n), live (tap Live), or play (tap Play).
-    /// Taps, for human parity: `X-Word: i` (tap word i in the sentence), `X-Square: n` (tap square n on
-    /// the numbers; `close` dismisses its sheet), `X-Look: next` (the Both / Colours / Photo toggle).
+    /// POST /tray, for human parity with every control on the tray:
+    ///   X-Index: n (drag the slider to moment n) | live (tap Live) | next | prev (the ‹ › buttons)
+    ///   X-Word: i (tap word i in the sentence)
+    ///   X-Square: n (tap square n on the picture; again to let go) | close (dismiss the numbers sheet)
+    ///   X-Chapter: lens | eye | hand (tap a chapter in the top pill)
+    ///   X-Tap: numbers (the "2,048 numbers" pill) | picture (show/hide the pills) | help ("?") | close
     private func handleScrubTray(_ req: ParsedRequest) -> (Int, String) {
         guard TrayModel.current != nil else { return (404, #"{"error":"The Developer Tray is not open."}"#) }
+        let bridge = AntennaUIBridge.shared
         if let w = req.headers["x-word"].flatMap(Int.init) {
-            AntennaUIBridge.shared.trayTap = "word:\(w)"; return (200, json(["tapped": "word \(w)"]))
+            bridge.trayTap = "word:\(w)"; return (200, json(["tapped": "word \(w)"]))
         }
         if let sq = req.headers["x-square"] {
-            AntennaUIBridge.shared.trayTap = sq.lowercased() == "close" ? "close" : "square:\(Int(sq) ?? 0)"
+            bridge.trayTap = sq.lowercased() == "close" ? "close" : "square:\(Int(sq) ?? 0)"
             return (200, json(["tapped": "square \(sq)"]))
         }
-        if req.headers["x-look"] != nil {
-            AntennaUIBridge.shared.trayTap = "look"; return (200, json(["tapped": "look toggle"]))
+        if let c = req.headers["x-chapter"]?.lowercased() {
+            guard TrayChapter(rawValue: c) != nil else { return (400, #"{"error":"X-Chapter: lens | eye | hand"}"#) }
+            bridge.trayTap = "chapter:\(c)"; return (200, json(["tapped": "chapter \(c)"]))
         }
-        // X-Tap: picture (show/hide the pills) | help (the "?" pill) | close (the close pill)
         if let tap = req.headers["x-tap"]?.lowercased() {
-            let map = ["picture": "picture", "help": "help", "close": "dismiss"]
-            guard let t = map[tap] else { return (400, #"{"error":"X-Tap: picture | help | close"}"#) }
-            AntennaUIBridge.shared.trayTap = t; return (200, json(["tapped": tap]))
+            let map = ["numbers": "numbers", "picture": "picture", "help": "help", "close": "dismiss"]
+            guard let t = map[tap] else { return (400, #"{"error":"X-Tap: numbers | picture | help | close"}"#) }
+            bridge.trayTap = t; return (200, json(["tapped": tap]))
         }
         let raw = (req.headers["x-index"] ?? "").lowercased()
-        if raw == "live" { AntennaUIBridge.shared.trayScrubTo = -1 }
-        else if raw == "play" { AntennaUIBridge.shared.trayScrubTo = -2 }
-        else if let n = Int(raw) { AntennaUIBridge.shared.trayScrubTo = n }
-        else { return (400, #"{"error":"X-Index: <frame number> | live | play"}"#) }
-        return (200, json(["scrubbed": raw]))
+        switch raw {
+        case "live": bridge.trayScrubTo = -1
+        case "next": bridge.trayTap = "step:1"
+        case "prev": bridge.trayTap = "step:-1"
+        default:
+            guard let n = Int(raw) else { return (400, #"{"error":"X-Index: <moment number> | live | next | prev"}"#) }
+            bridge.trayScrubTo = n
+        }
+        return (200, json(["moved": raw]))
     }
 
     /// POST /viewfinder: show a still photograph in the viewfinder instead of the live sensor, for App

@@ -23,6 +23,10 @@ nonisolated struct NegativeMeta: Codable, Sendable, Identifiable {
         let layers: Int, heads: Int
         let recorderMS: Double
         let pieces: [Piece]
+        /// The prompt as tokens, and where its image squares sit: what each word's whole attention
+        /// (context.f32) is measured over. Absent in negatives kept before 2026-11-12.
+        var promptPieces: [String]? = nil
+        var promptImagePositions: [Int]? = nil
     }
 
     var formatVersion = 1
@@ -93,9 +97,12 @@ actor NegativeStore {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let eye = trace.eye.flatMap { e -> NegativeMeta.Eye? in
                 guard e.squares > 0 else { return nil }
+                let keepsContext = Self.contextIsWhole(e)
                 return NegativeMeta.Eye(model: e.model, width: e.width, rows: e.rows, cols: e.cols,
                                         layers: e.layers, heads: e.heads, recorderMS: e.recorderMS,
-                                        pieces: e.pieces.map { .init(text: $0.text, imageShare: $0.imageShare) })
+                                        pieces: e.pieces.map { .init(text: $0.text, imageShare: $0.imageShare) },
+                                        promptPieces: keepsContext ? e.promptPieces : nil,
+                                        promptImagePositions: keepsContext ? e.promptImagePositions : nil)
             }
             let meta = NegativeMeta(id: id, capturedAt: capturedAt, place: place, eyeName: trace.eyeName,
                                     eyeWords: trace.eyeWords, wordsFromEye: trace.wordsFromEye,
@@ -115,6 +122,12 @@ actor NegativeStore {
             if let e = trace.eye, e.squares > 0 {
                 try Self.data(e.features).write(to: dir.appendingPathComponent("numbers.f32"))
                 try Self.data(e.pieces.flatMap(\.gaze)).write(to: dir.appendingPathComponent("gaze.f32"))
+                // Each word's whole attention (picture, instructions, earlier words), exactly as
+                // recorded: word i's row is (prompt length + i) long, so the rows are simply laid end
+                // to end and cut apart again on load.
+                if Self.contextIsWhole(e) {
+                    try Self.data(e.pieces.flatMap(\.context)).write(to: dir.appendingPathComponent("context.f32"))
+                }
             }
             // The description goes last: a folder without it is unfinished and is never listed.
             try JSONEncoder().encode(meta).write(to: dir.appendingPathComponent("meta.json"), options: .atomic)
@@ -137,6 +150,12 @@ actor NegativeStore {
     }
 
     // MARK: Reading
+
+    /// True when every word piece carries its whole attention row (prompt length + its position).
+    private static func contextIsWhole(_ e: EyeWorkings) -> Bool {
+        let p = e.promptPieces.count
+        return p > 0 && !e.pieces.isEmpty && e.pieces.indices.allSatisfy { e.pieces[$0].context.count == p + $0 }
+    }
 
     /// Every kept negative, newest first.
     func list() -> [NegativeMeta] {
@@ -179,6 +198,16 @@ actor NegativeStore {
                     w.pieces = e.pieces.enumerated().map { i, p in
                         .init(text: p.text, gaze: Array(g[(i * squares)..<((i + 1) * squares)]), imageShare: p.imageShare)
                     }
+                }
+            }
+            if let prompt = e.promptPieces, let positions = e.promptImagePositions, w.pieces.count == e.pieces.count,
+               let d = try? Data(contentsOf: dir.appendingPathComponent("context.f32")) {
+                let all: [Float] = Self.values(d)
+                let p = prompt.count, n = w.pieces.count
+                if all.count == n * p + n * (n - 1) / 2 {
+                    var at = 0
+                    for i in 0..<n { w.pieces[i].context = Array(all[at..<(at + p + i)]); at += p + i }
+                    w.promptPieces = prompt; w.promptImagePositions = positions
                 }
             }
             eye = w

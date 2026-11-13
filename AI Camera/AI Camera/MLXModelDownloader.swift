@@ -1643,7 +1643,7 @@ class MLXModelDownloader: ObservableObject {
                 await MainActor.run {
                     if var state = self.downloadStates[modelID] {
                         state.isDownloading = false
-                        state.message = "Download cancelled at \(Int(state.progress * 100))%"
+                        state.message = "Download canceled at \(Int(state.progress * 100))%"
                         state.error = "Cancelled"
                         self.downloadStates[modelID] = state
                     }
@@ -1823,7 +1823,7 @@ class MLXModelDownloader: ObservableObject {
         // Update state
         if var state = downloadStates[modelID] {
             state.isDownloading = false
-            state.message = "Download cancelled at \(Int(state.progress * 100))%"
+            state.message = "Download canceled at \(Int(state.progress * 100))%"
             state.error = "Cancelled"
             downloadStates[modelID] = state
         }
