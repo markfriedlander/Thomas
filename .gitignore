@@ -83,3 +83,6 @@ tools/
 screenshots-draft/
 IMG_*.HEIC
 screenshots-submission/
+
+# Mark's phone data copied off the iPhone (2026-11-05): private, never commit
+phone-data-backup-*/
