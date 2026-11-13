@@ -132,6 +132,36 @@ nonisolated func cameraLog(_ message: @autoclosure () -> String) {
     #endif
 }
 
+// MARK: - Disk-write meter (DEBUG instrument)
+
+#if DEBUG
+/// iOS's own per-process counters (the same numbers its disk-writes report uses). `proc_pid_rusage`
+/// is exported by libsystem but not declared in the iOS SDK headers, so it is bound by name here, in
+/// DEBUG only: a measuring instrument for the 2026-11-05 disk-writes investigation, never shipped.
+@_silgen_name("proc_pid_rusage")
+nonisolated private func _proc_pid_rusage(_ pid: Int32, _ flavor: Int32, _ buffer: UnsafeMutableRawPointer) -> Int32
+#endif
+
+/// Bytes this process has written since it launched: `disk` = physical disk I/O, `logical` = all
+/// writes including file-backed memory it dirtied (what iOS's disk-writes limit counts). Includes
+/// what Apple's frameworks write on our behalf (Core ML's model preparation). nil in Release.
+nonisolated func processBytesWritten() -> (disk: UInt64, logical: UInt64)? {
+    #if DEBUG
+    var info = rusage_info_v4()
+    let rc = withUnsafeMutablePointer(to: &info) { _proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) }
+    guard rc == 0 else { return nil }
+    return (info.ri_diskio_byteswritten, info.ri_logical_writes)
+    #else
+    return nil
+    #endif
+}
+
+/// A one-line "written so far" for the log, in MB.
+nonisolated func writesLine() -> String {
+    guard let w = processBytesWritten() else { return "writes=n/a" }
+    return String(format: "writtenMB disk=%.0f logical=%.0f", Double(w.disk) / 1_048_576, Double(w.logical) / 1_048_576)
+}
+
 // MARK: - Process memory introspection
 
 /// Bytes the process can still allocate before iOS terminates it, in MB.

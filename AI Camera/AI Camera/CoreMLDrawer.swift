@@ -149,7 +149,7 @@ actor CoreMLDrawer {
         // `.cpuAndNeuralEngine` — the whole reason this hand exists. Do not soften it.
         let mlConfig = MLModelConfiguration()
         mlConfig.computeUnits = .cpuAndNeuralEngine
-        cameraLog("COREML: loading \(repoID) on the Neural Engine (first draw after install compiles, ~190s once) availMB=\(formatMB(availBefore))")
+        cameraLog("COREML: loading \(repoID) on the Neural Engine (first draw after install compiles, ~190s once) availMB=\(formatMB(availBefore)) \(writesLine())")
 
         // `reduceMemory: true` is not optional on a phone: it streams the sub-models in and out
         // rather than holding them all resident, which is how the peak stays ~800 MB.
@@ -163,7 +163,7 @@ actor CoreMLDrawer {
         defer { pipeline.unloadResources() }
 
         let availLoaded = processAvailableMemoryMB()
-        cameraLog("COREML: loaded \(repoID) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s — drawing \(steps) steps | availMB \(formatMB(availBefore)) → \(formatMB(availLoaded))")
+        cameraLog("COREML: loaded \(repoID) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s — drawing \(steps) steps | availMB \(formatMB(availBefore)) → \(formatMB(availLoaded)) \(writesLine())")
 
         var config = StableDiffusionPipeline.Configuration(prompt: prompt)
         config.stepCount = steps
@@ -215,7 +215,7 @@ actor CoreMLDrawer {
         guard let cg = images.first ?? nil else {
             throw CoreMLDrawError.producedNothing
         }
-        cameraLog("COREML: DONE \(repoID) total=\(String(format: "%.1f", Date().timeIntervalSince(started)))s draw=\(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB())) thermal=\(thermalStateLabel())")
+        cameraLog("COREML: DONE \(repoID) total=\(String(format: "%.1f", Date().timeIntervalSince(started)))s draw=\(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB())) thermal=\(thermalStateLabel()) \(writesLine())")
         return cg
     }
 }

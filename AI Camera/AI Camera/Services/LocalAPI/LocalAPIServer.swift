@@ -1841,6 +1841,12 @@ extension LocalAPIServer {
             // The companion instrument: thermal throttling and memory jetsam compound, so a
             // memory trace that can't see heat is half-blind. Read it here beside availableMB.
             "thermal":      thermalStateLabel(),
+            // The disk-write meter (2026-11-05 investigation): this process's writes since launch,
+            // including Core ML's on our behalf, and how big Caches (where its compiled model lives) is.
+            "writtenDiskMB":    processBytesWritten().map { Int($0.disk / 1_048_576) } ?? -1,
+            "writtenLogicalMB": processBytesWritten().map { Int($0.logical / 1_048_576) } ?? -1,
+            "cachesMB": NegativeStore.size(of: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]) / 1_048_576,
+            "tmpMB": NegativeStore.size(of: FileManager.default.temporaryDirectory) / 1_048_576,
             "log":          MemoryLog.shared.recent(200)
         ]))
     }
