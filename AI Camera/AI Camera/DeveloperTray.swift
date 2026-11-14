@@ -1798,7 +1798,10 @@ struct TrayScrubber: View {
                 Circle().fill(.white).frame(width: 22, height: 22).shadow(radius: 2)
                     .offset(x: x(Double(index)) - 11, y: 4)
                 ForEach(spans) { s in
-                    if x(Double(s.last)) - x(Double(s.first)) >= minLabelSpan {
+                    // The eye keeps its label even when it is one moment wide: with Apple's eye (no
+                    // workings) it is only "What the eye said", and the slider read "hand" alone under
+                    // it (Mac, 2026-11-13). The hand's label is far to the right, so they don't meet.
+                    if s.chapter == .eye || x(Double(s.last)) - x(Double(s.first)) >= minLabelSpan {
                         Text(s.chapter.rawValue).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.55))
                             .fixedSize()
                             .position(x: inBounds((x(Double(s.first)) + x(Double(s.last))) / 2), y: 38)
