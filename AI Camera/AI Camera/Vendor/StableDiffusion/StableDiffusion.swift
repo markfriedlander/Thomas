@@ -217,6 +217,11 @@ nonisolated open class StableDiffusion {
     let sampler: SimpleEulerSampler
     let tokenizer: CLIPTokenizer
 
+    /// AI Camera addition (VENDOR.md #6): when set, each `step` also keeps its best guess at the
+    /// finished latent (the Developer Tray's best-guess view), from the noise it just predicted.
+    public var recordsPrediction = false
+    public private(set) var lastPrediction: MLXArray?
+
     internal init(
         hub: HubApi, configuration: StableDiffusionConfiguration, dType: DType,
         diffusionConfiguration: DiffusionConfiguration? = nil, unet: UNetModel? = nil,
@@ -280,6 +285,15 @@ nonisolated open class StableDiffusion {
         if cfgWeight > 1 {
             let (epsText, epsNeg) = epsPred.split()
             epsPred = epsNeg + cfgWeight * (epsText - epsNeg)
+        }
+
+        // AI Camera addition (VENDOR.md #6): the step's best guess at the finished latent. In this
+        // sampler's scaled space the noisy latent is sqrt(sigma^2 + 1) * xt, and the guess is that minus
+        // sigma times the predicted noise: exactly where `sampler.step` would land if it went straight
+        // to sigma = 0.
+        if recordsPrediction {
+            let sigma = sampler.sigmas(t).asType(epsPred.dtype)
+            lastPrediction = (sigma.square() + 1).sqrt() * xt - sigma * epsPred
         }
 
         return sampler.step(epsPred: epsPred, xt: xt, t: t, tPrev: tPrev)

@@ -127,6 +127,13 @@ must re-apply them (small cost, accepted for the clean baseline while we develop
 | `UNet.swift:196` | `let dtype = x.dtype` (dead) | removed |
 | `UNet.swift:503` | `let dtype = x.dtype` (dead) | removed |
 
+### 6. The step's best guess, for the Developer Tray (2026-11-14)
+
+`StableDiffusion.recordsPrediction` / `lastPrediction`: when set, `step` also keeps the predicted
+finished latent, `sqrt(sigma^2 + 1) * xt - sigma * epsPred`, the point `SimpleEulerSampler.step` would
+reach going straight to sigma = 0. Off by default; the denoising itself is unchanged. Lets the MLX hand
+(sd-turbo) show the tray's best-guess view, as the Core ML hand does with `useDenoisedIntermediates`.
+
 ## Known upstream issues, NOT fixed here
 
 Recorded so nobody rediscovers them as bugs of ours.

@@ -219,6 +219,7 @@ enum Shot {
                 drawing.steps = steps      // the frozen step-knob value overrides the recipe default
                 drawn = try await DrawerLoader.shared.draw(
                     drawing, prompt: prompt, decoderPreference: config.decoderChoice,
+                    reportsGuess: config.effectiveDevelopView == .guess,
                     onStep: { step, _ in if step == 1 { DarkRoomWorker.signalDrawingStarted() } })
                 // Tear it down BEFORE upscaling, so the upscale (GPU too) runs with the drawer's
                 // memory already returned. (The drawer also tears itself down in `draw`'s `defer`.)

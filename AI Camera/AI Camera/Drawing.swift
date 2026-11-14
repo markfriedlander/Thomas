@@ -375,6 +375,7 @@ actor DrawerLoader {
     /// Costs 4.3 s to reload on the next shot. That is the right trade here — *the latency is
     /// the film developing* — and a shot that finishes slowly beats a process that dies.
     func draw(_ drawing: Drawing, prompt: String, decoderPreference: DecoderChoice,
+              reportsGuess: Bool = false,
               onStep: (@Sendable (Int, Int) -> Void)? = nil) async throws -> CGImage {
         // ⭐ Mark's rule, 2026-07-16: *"building and tearing down the drawer each time... one
         // operation has its own world and all its resources from scratch."* This `defer`
@@ -415,9 +416,16 @@ actor DrawerLoader {
 
         var latent: MLXArray?
         var step = 0
-        // Developer Tray: this hand exposes only its working latent (no best-guess prediction), so the
-        // trace is always the working view here, and says so.
-        DevelopTrace.shared.begin(prompt: prompt, steps: parameters.steps, isGuess: false,
+        // Developer Tray: the working latent, or, when the shot asked for the best-guess view, each step's
+        // guess at the finished drawing (Vendor/StableDiffusion VENDOR.md #6; 2026-11-14: before this the
+        // MLX hand could show only the working view, so sd-turbo's best guess was three steps of
+        // confetti). The trace says which it holds.
+        // `var`, and dropped with the others below: it is a fourth handle on the model, and the model
+        // frees only when every handle is gone.
+        var diffusion = generator as? StableDiffusion
+        let guessing = reportsGuess && diffusion != nil
+        diffusion?.recordsPrediction = guessing
+        DevelopTrace.shared.begin(prompt: prompt, steps: parameters.steps, isGuess: guessing,
                                   channelsLast: true, hand: ModelCatalog.model(id: drawing.repoID)?.displayName ?? drawing.repoID)
         var iterator: DenoiseIterator? = generator!.generateLatents(parameters: parameters)
         while let xt = iterator?.next() {
@@ -426,7 +434,9 @@ actor DrawerLoader {
             // whole diffusion collapses into the final eval and every per-step number is a
             // fiction.
             eval(xt)
-            DevelopTrace.shared.record(xt.asType(.float32).asArray(Float.self), shape: xt.shape)
+            let shown = (guessing ? diffusion?.lastPrediction : nil) ?? xt
+            if guessing { eval(shown) }
+            DevelopTrace.shared.record(shown.asType(.float32).asArray(Float.self), shape: shown.shape)
             step += 1
             onStep?(step, parameters.steps)
             cameraLog("DRAW: step \(step)/\(parameters.steps) at \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
@@ -439,11 +449,12 @@ actor DrawerLoader {
         // last step still reference these arrays, and releasing underneath them fires their
         // completion handlers against freed memory (SIGABRT). Same reason `unload()` drains.
         //
-        // All three references, or none of it frees: the iterator (it holds the model to
+        // All four references, or none of it frees (the fourth is `diffusion`, the best-guess handle): the iterator (it holds the model to
         // step it), this function's handle, and the actor's cache.
         let beforeRelease = processAvailableMemoryMB()
         MLX.Stream.gpu.synchronize()
         iterator = nil
+        diffusion = nil
         generator = nil
         loaded = nil
         loadedID = nil
