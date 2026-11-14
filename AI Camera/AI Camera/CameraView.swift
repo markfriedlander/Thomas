@@ -179,7 +179,7 @@ struct CameraView: View {
         // Accept flow. Accept takes the identical `startModelDownload` path the button's Accept takes.
         // DEBUG-only: driven solely by the DEBUG antenna via AntennaUIBridge; real users reach the
         // license sheet through the Model Library's own `$modelForLicense` path, so this ships in no build.
-        .sheet(item: $bridge.licenseModel) { model in
+        .macResizablePresentation(item: $bridge.licenseModel) { model in
             ModelLicenseSheet(
                 model: model,
                 onAccept: { bridge.licenseModel = nil; startModelDownload(model) },
@@ -404,6 +404,26 @@ extension View {
             self.fullScreenCover(isPresented: isPresented, onDismiss: onDismiss, content: content)
         } else {
             self.sheet(isPresented: isPresented, onDismiss: onDismiss, content: content)
+        }
+    }
+}
+
+// Thomas's addition, written to match Hal's modifier above: the same idea for a screen opened FOR an
+// item (the license screen opens for one model). On the Mac the license card sized itself to its
+// scrolling text; in a small window the card and the window kept re-measuring each other until macOS
+// aborted ("more Layout Window passes than there are views in the window", reproduced twice,
+// 2026-11-13). A window-filling cover has no size to negotiate. iPhone and iPad keep the sheet.
+extension View {
+    @ViewBuilder
+    func macResizablePresentation<Item: Identifiable, PresentedContent: View>(
+        item: Binding<Item?>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping (Item) -> PresentedContent
+    ) -> some View {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            self.fullScreenCover(item: item, onDismiss: onDismiss, content: content)
+        } else {
+            self.sheet(item: item, onDismiss: onDismiss, content: content)
         }
     }
 }

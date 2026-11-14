@@ -166,7 +166,7 @@ struct ModelLibraryView: View {
         }
         // Surface the model's license before the download begins. Hangs off the stable List,
         // not a row (rows come and go as the catalog refreshes, which would tear the sheet down).
-        .sheet(item: $modelForLicense) { model in
+        .macResizablePresentation(item: $modelForLicense) { model in
             ModelLicenseSheet(
                 model: model,
                 onAccept: { modelForLicense = nil; download(model) },
