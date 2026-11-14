@@ -1123,7 +1123,9 @@ struct DeveloperTrayView: View {
         .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
-        .sheet(item: Binding(get: { model.openSquare.map(SquareRef.init) },
+        // Window-filling on the Mac: as a self-sizing card it crashed Thomas in a small window, the
+        // same layout loop as the license card (2026-11-13). iPhone and iPad keep the sheet.
+        .macResizablePresentation(item: Binding(get: { model.openSquare.map(SquareRef.init) },
                              set: { model.openSquare = $0?.id })) { ref in
             if let e = model.trace?.eye {
                 SquareNumbersSheet(eye: e, square: ref.id, photo: model.trace?.photo)

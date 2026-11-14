@@ -412,7 +412,8 @@ extension View {
 // item (the license screen opens for one model). On the Mac the license card sized itself to its
 // scrolling text; in a small window the card and the window kept re-measuring each other until macOS
 // aborted ("more Layout Window passes than there are views in the window", reproduced twice,
-// 2026-11-13). A window-filling cover has no size to negotiate. iPhone and iPad keep the sheet.
+// 2026-11-13); the square's numbers card did the same. A window-filling cover has no size to
+// negotiate. iPhone and iPad keep the sheet.
 extension View {
     @ViewBuilder
     func macResizablePresentation<Item: Identifiable, PresentedContent: View>(
