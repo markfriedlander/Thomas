@@ -325,6 +325,7 @@ extension LocalAPIServer {
         case ("POST", "/settings"):        return await handleSetSettings(req)
         case ("POST", "/zoom"):            return await handleZoom(req)
         case ("POST", "/flip"):            return await handleFlip(req)
+        case ("POST", "/camera-format"):   return await handleCameraFormat(req)
         case ("POST", "/license"):         return await handleLicense(req)
         case ("POST", "/open"):            return await handleOpen(req)
         case ("POST", "/viewfinder"):      return await handleViewfinder(req)
@@ -1166,6 +1167,31 @@ extension LocalAPIServer {
         default:
             return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | preparing | photos | about"}"#)
         }
+    }
+
+    /// POST /camera-format  X-Size: <width>x<height>  [X-Angle: 0|90|180|270]
+    /// Experiment for the Mac's landscape/portrait question (2026-11-13): switch the live camera to
+    /// one of the sizes /rotation lists under "formats", and on a Mac to one quarter-turn angle, so
+    /// each combination can be looked at in Thomas's window. Not a user feature.
+    @MainActor
+    private func handleCameraFormat(_ req: ParsedRequest) async -> (Int, String) {
+        guard let lens = Lens.current else { return (503, #"{"error":"No lens on screen"}"#) }
+        let parts = (req.headers["x-size"] ?? "").split(separator: "x").compactMap { Int32($0) }
+        guard parts.count == 2 else { return (400, #"{"error":"X-Size: <width>x<height>"}"#) }
+        let angle = req.headers["x-angle"].flatMap { Double($0) }.map { CGFloat($0) }
+        let ok = lens.debugUseFormat(width: parts[0], height: parts[1], angle: angle)
+        var payload: [String: Any] = ["ok": ok, "size": "\(parts[0])x\(parts[1])", "angle": angle.map { Double($0) } as Any]
+        // And the photo this combination actually takes (the same capture the shutter uses), so the
+        // field of view and uprightness can be seen, not inferred from the cropped preview.
+        if ok {
+            try? await Task.sleep(for: .milliseconds(600))
+            if let cg = await lens.capture(), let jpg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.7) {
+                payload["frame"] = jpg.base64EncodedString()
+                payload["width"] = cg.width
+                payload["height"] = cg.height
+            }
+        }
+        return (ok ? 200 : 404, json(payload))
     }
 
     /// POST /shoot — the WHOLE shutter path, end to end, without Mark's thumbs.

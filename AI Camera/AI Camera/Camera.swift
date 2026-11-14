@@ -145,6 +145,17 @@ final class Lens: NSObject {
             "devicePosition":    device.map { $0.position == .front ? "front" : $0.position == .back ? "back" : "unspecified" } ?? "",
             "isiOSAppOnMac":     ProcessInfo.processInfo.isiOSAppOnMac,
             "canFlip":           canFlip,
+            // What the camera can hand over, measured not assumed (the Mac's landscape/portrait
+            // question, 2026-11-13): the format in use, every size it offers, the largest photo.
+            "activeFormat":      device.map { d -> String in
+                let dim = CMVideoFormatDescriptionGetDimensions(d.activeFormat.formatDescription)
+                return "\(dim.width)x\(dim.height)" } ?? "",
+            "formats":           device.map { d -> [String] in
+                Array(Set(d.formats.map { f -> String in
+                    let dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+                    return "\(dim.width)x\(dim.height)" })).sorted() } ?? [],
+            "maxPhoto":          "\(output.maxPhotoDimensions.width)x\(output.maxPhotoDimensions.height)",
+            "sessionPreset":     session.sessionPreset.rawValue,
             "previewMirrored":   previewLayer?.connection?.isVideoMirrored ?? false,
             "photoMirrored":     output.connection(with: .video)?.isVideoMirrored ?? false,
             "position":          position == .front ? "front" : "back",
@@ -305,6 +316,25 @@ final class Lens: NSObject {
     /// antenna's `/flip` verb; a human uses `flip()` (the flip button), which stays in every build.
     var isFront: Bool { position == .front }
     func setCamera(front: Bool) { if isFront != front { flip() } }
+
+    /// Antenna-only experiment (2026-11-13, the Mac's landscape/portrait question): use the camera
+    /// format of this size and, on a Mac, this quarter-turn angle, so each combination can be LOOKED
+    /// at instead of reasoned about. Not a user feature; nothing calls it but `POST /camera-format`.
+    var debugMacAngle: CGFloat?
+    func debugUseFormat(width: Int32, height: Int32, angle: CGFloat?) -> Bool {
+        guard let device, let f = device.formats.first(where: {
+            let d = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            return d.width == width && d.height == height
+        }), (try? device.lockForConfiguration()) != nil else { return false }
+        session.beginConfiguration()
+        session.sessionPreset = .inputPriority
+        device.activeFormat = f
+        session.commitConfiguration()
+        device.unlockForConfiguration()
+        debugMacAngle = angle
+        beginTrackingRotation()
+        return true
+    }
     #endif
 
     private func beginTrackingRotation() {
@@ -384,7 +414,10 @@ final class Lens: NSObject {
     /// the app provides": it is iPhone/iPad only and does NOT exist in the Mac's AVFoundation (checked
     /// with class_getInstanceMethod on macOS 27.2). Calling it crashed Thomas on the Mac, 2026-11-13.
     private var macAngle: CGFloat? {
-        ProcessInfo.processInfo.isiOSAppOnMac ? 90 : nil
+        #if DEBUG
+        if let debugMacAngle, ProcessInfo.processInfo.isiOSAppOnMac { return debugMacAngle }
+        #endif
+        return ProcessInfo.processInfo.isiOSAppOnMac ? 90 : nil
     }
 
     // MARK: - Zoom
