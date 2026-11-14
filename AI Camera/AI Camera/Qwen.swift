@@ -227,7 +227,7 @@ actor MLXEyeLoader {
     /// Whether a given model's weights are on disk right now (they are, if Hal or Posey
     /// fetched them, or the library downloaded them here).
     nonisolated static func isAvailable(_ repoID: String) -> Bool {
-        SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: repoID))
+        SharedModelStore.isRepoReady(sharedStoreKey(forRepoID: repoID))
     }
 
     /// True once *some* eye is resident in memory.
@@ -259,7 +259,7 @@ actor MLXEyeLoader {
             // on-disk folder, so we load the exact pinned commit and claim it by that identity.
             let key = sharedStoreKey(forRepoID: repoID)
             let directory = SharedModelStore.mlxModelDir(key)
-            guard SharedModelStore.isRepoDownloaded(key) else {
+            guard SharedModelStore.isRepoReady(key) else {
                 throw MLXEyeError.notInstalled(repoID)
             }
 

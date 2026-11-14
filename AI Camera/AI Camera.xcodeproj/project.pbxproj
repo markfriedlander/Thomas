@@ -382,7 +382,7 @@
 			repositoryURL = "https://github.com/markfriedlander/SharedModelStoreKit";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.1;
+				minimumVersion = 1.4.0;
 			};
 		};
 		856031C9301715600059F17E /* XCRemoteSwiftPackageReference "ml-stable-diffusion" */ = {

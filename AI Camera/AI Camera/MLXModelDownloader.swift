@@ -1502,6 +1502,10 @@ class MLXModelDownloader: ObservableObject {
     /// claim) so a completion delivered after a background relaunch still clears
     /// the lock.
     private func performLockedDownload(modelID: String, repoID: String, sizeGB: Double?, files: [String]?) async {
+        // "Begun, not finished", in the model's own folder (SharedModelStoreKit 1.4.0): if Thomas is
+        // killed or the network drops before the end, every app in the family reads this copy as NOT
+        // ready (isRepoReady) instead of offering a partial model. Cleared by markRepoComplete.
+        SharedModelStore.markDownloadStarted(sharedStoreKey(forRepoID: modelID))
         // Start download
         await MainActor.run {
             currentDownloadModelID = modelID
@@ -1714,7 +1718,7 @@ class MLXModelDownloader: ObservableObject {
             // notifyModelDownloadComplete does claim-then-release, so no lock + a claim = whole).
             if SharedModelStore.downloadLock(modelID: key) == nil,
                !SharedModelStore.claimants(modelID: key).isEmpty,
-               SharedModelStore.isRepoDownloaded(key) {
+               SharedModelStore.isRepoReady(key) {
                 cameraLog("HALDEBUG-DOWNLOAD: sibling finished \(modelID); adopting with zero re-download")
                 adoptSharedModel(modelID: modelID)
                 return
@@ -1726,7 +1730,7 @@ class MLXModelDownloader: ObservableObject {
             if SharedModelStore.acquireDownloadLock(modelID: key) {
                 // Race guard: it may have completed in the same tick we grabbed.
                 if !SharedModelStore.claimants(modelID: key).isEmpty,
-                   SharedModelStore.isRepoDownloaded(key) {
+                   SharedModelStore.isRepoReady(key) {
                     SharedModelStore.releaseDownloadLock(modelID: key)
                     adoptSharedModel(modelID: modelID)
                     return
@@ -1915,9 +1919,9 @@ class MLXModelDownloader: ObservableObject {
         // if its files exist there, regardless of WHICH app fetched them. This
         // is what lets Hal see (and load) models Posey downloaded, without Hal
         // having its own record of the download. Matches Posey's
-        // `SharedModelStore.isRepoDownloaded`. Mid-download a partial dir reads
-        // present, so callers that care also check `isDownloading`.
-        return SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: modelID))
+        // `SharedModelStore.isRepoDownloaded`. Since SharedModelStoreKit 1.4.0 this asks isRepoReady:
+        // a download cut off by a kill read as installed here (Mac, 2026-11-13).
+        return SharedModelStore.isRepoReady(sharedStoreKey(forRepoID: modelID))
     }
 
     /// Waits asynchronously for the `.mlxModelDidDownload` notification that

@@ -62,7 +62,10 @@ actor CoreMLDrawer {
     }
 
     nonisolated static func isInstalled(_ repoID: String) -> Bool {
-        FileManager.default.fileExists(atPath: resourcesDir(for: repoID).appendingPathComponent("Unet.mlmodelc").path)
+        // The download must be finished (SharedModelStoreKit 1.4.0), not merely have its Unet folder:
+        // a cut-off download can hold a half-written Unet.mlmodelc.
+        SharedModelStore.isRepoReady(sharedStoreKey(forRepoID: repoID))
+            && FileManager.default.fileExists(atPath: resourcesDir(for: repoID).appendingPathComponent("Unet.mlmodelc").path)
     }
 
     /// The hand's pieces in the order a shot uses them, with plain names for the preparation card.

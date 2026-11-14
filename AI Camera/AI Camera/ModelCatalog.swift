@@ -213,7 +213,9 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// question for the shared store, which is the only thing that actually knows.
     var isInstalled: Bool {
         if isBuiltIn { return true }
-        return SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: id))
+        // Finished, not merely "files on disk" (SharedModelStoreKit 1.4.0): an interrupted download
+        // offered "Select" on 0.17 GB of a 2.4 GB model (Mac, 2026-11-13).
+        return SharedModelStore.isRepoReady(sharedStoreKey(forRepoID: id))
     }
 
     /// Real bytes on disk, once it's here. 0 if it isn't.
@@ -550,7 +552,7 @@ final class ModelCatalogService {
                 return m
             }
             let key = sharedStoreKey(forRepoID: model.id)
-            m.isDownloaded = SharedModelStore.isRepoDownloaded(key)
+            m.isDownloaded = SharedModelStore.isRepoReady(key)
             m.localPath = m.isDownloaded ? SharedModelStore.mlxModelDir(key) : nil
             return m
         }

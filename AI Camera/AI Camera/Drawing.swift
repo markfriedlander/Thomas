@@ -228,7 +228,7 @@ actor DrawerLoader {
 
     /// Whether a given drawer's weights are on disk right now.
     nonisolated static func isAvailable(_ repoID: String) -> Bool {
-        SharedModelStore.isRepoDownloaded(sharedStoreKey(forRepoID: repoID))
+        SharedModelStore.isRepoReady(sharedStoreKey(forRepoID: repoID))
     }
 
     var isLoaded: Bool { loaded != nil }
@@ -262,7 +262,7 @@ actor DrawerLoader {
             // (matching the plain folder the vendored SD loader reads); a shared drawer would key
             // by identity. Either way the claim below matches the folder we load from.
             let key = sharedStoreKey(forRepoID: repoID)
-            guard SharedModelStore.isRepoDownloaded(key) else {
+            guard SharedModelStore.isRepoReady(key) else {
                 throw DrawingError.notInstalled(repoID)
             }
 
