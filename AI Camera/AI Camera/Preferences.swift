@@ -725,14 +725,17 @@ struct PreferencesView: View {
                 .frame(minHeight: 160)
                 .focused($promptFocused)
 
-            HStack {
-                Text("Temperature")
-                Spacer()
-                Text(String(format: "%.2f", settings.temperature))
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
+            // Only for an eye that truly takes it (its record's `controls`; item 11).
+            if ModelCatalog.model(for: settings.seer).controls.contains(.temperature) {
+                HStack {
+                    Text("Temperature")
+                    Spacer()
+                    Text(String(format: "%.2f", settings.temperature))
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
             }
-            Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
 
             // What FRAME 2 prints — the eye's full words, or the (possibly condensed) words the hand
             // actually received. It lives HERE, in the eye section, because it controls frame 2, the
@@ -829,7 +832,7 @@ struct PreferencesView: View {
                 // range is the model's own — turbo draws in a handful, SD-2.1 wants ~20 — so
                 // `currentDrawerSteps` reads and writes the selected hand's slot, clamped to its
                 // range. Modelled on the eye's temperature slider above.
-                if let spec = selectedDrawerModel?.drawSteps {
+                if let model = selectedDrawerModel, model.controls.contains(.steps), let spec = model.drawSteps {
                     HStack {
                         Text("Steps")
                         Spacer()

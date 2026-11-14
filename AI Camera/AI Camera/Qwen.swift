@@ -57,7 +57,7 @@ import SharedModelStoreKit
 /// difference to be the model. If we hand-tune a prompt per model we're measuring our
 /// prompt-writing, not the machines — that's the experiment Mark wants: *"run the same
 /// harness against multiple models, and see how each one finds truth and what they see."*
-/// The one thing that IS per-model is the sampler recipe (`VisionRecipe`), because that's a
+/// The one thing that IS per-model is the sampler recipe (`CameraModel.sampler`), because that's a
 /// property of the model's decoder, not an instruction to it.
 nonisolated struct MLXVLMEye: Sendable {
     /// The shared-store repo id — which model this eye is.
@@ -91,7 +91,7 @@ nonisolated struct MLXVLMEye: Sendable {
                 instructions: PromptLayers.compose(
                     layerOne: PromptLayers.layerOne(forRepo: repoID),
                     userPrompt: systemPrompt),
-                generateParameters: VisionRecipe.params(forRepo: repoID, temperature: temperature)
+                generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: temperature)
             )
             let text = try await session.respond(to: "Describe what you see.",
                                                  image: .ciImage(ci))
@@ -120,7 +120,7 @@ nonisolated struct MLXVLMEye: Sendable {
                     that could be drawn; drop only what couldn't. Output the shortened \
                     description and nothing else — no preamble.
                     """,
-                generateParameters: VisionRecipe.params(forRepo: repoID, temperature: 0.3)
+                generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: 0.3)
             )
             let out = try await session.respond(to: "Rewrite this in no more than \(maxWords) words:\n\n\(text)")
             let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -132,8 +132,8 @@ nonisolated struct MLXVLMEye: Sendable {
 }
 
 /// Qwen3.5-2B — the reference MLX eye, and the first VLM anyone in the family ran. Kept as a
-/// named namespace because its repo id and its published vision recipe are referenced from
-/// several places (the catalog, the memory pre-flight, the antenna).
+/// named namespace because its repo id is referenced from several places (the catalog, the memory
+/// pre-flight, the antenna). Its published vision recipe lives on its catalog record (`sampler`).
 ///
 /// ⚠️ Nobody in the family had run a VLM before this. Hal links MLXLLM (text only); Posey
 /// doesn't do vision at all. The pieces below were verified against mlx-swift-lm 3.31.4 by
@@ -147,67 +147,18 @@ nonisolated enum Qwen {
     /// The repo id, as it sits in the shared container. Hal and Posey already downloaded
     /// this; we adopt it. Zero bytes, zero wait.
     static let repo = "mlx-community/Qwen3.5-2B-MLX-4bit"
-
-    /// ⭐ Qwen's **published vision recipe**, not the library defaults.
-    ///
-    /// Caught by the Hal CC on 2026-07-14 and handed to us before we chased it ourselves:
-    /// *"Qwen3.5-2B's vision path is the same family that loops on us, and its recommended
-    /// vision recipe is different from the text one."*
-    ///
-    /// From the base model card (**the 2B ships NO `generation_config`**, so nothing on
-    /// disk will ever correct a wrong default — this must be set in code):
-    ///   - thinking-**TEXT**   = temp 1.0 / top_p 0.95 / top_k 20 / min_p 0 / presence 1.5
-    ///   - thinking-**VISION** = temp 0.6 / presence 0.0     ← **us**
-    ///
-    /// Hal's diagnosis of their own bug, which we had faithfully reproduced: *"we run every
-    /// curated model outside its recommended sampler (we pass only temperature +
-    /// repetitionPenalty; never top_k/top_p/presence_penalty)."* Our first version passed
-    /// temperature and nothing else, which left **topK at 0 (filtering OFF) and topP at
-    /// 1.0 (filtering OFF)** — the model free to reach for any token in the vocabulary.
-    ///
-    /// ⚠️ Do NOT copy Hal's *text* recipe here. temp 1.0 / presence 1.5 is a different
-    /// mode; Hal measured temp 1.0 looping on deterministic tasks (188s loop → 11s correct
-    /// answer at 0.6). Vision gets 0.6 / 0.0. Two recipes, one model.
-    ///
-    /// (Card note, if descriptions ever start repeating themselves: *"adjust
-    /// presence_penalty 0–2 to reduce endless repetitions."*)
-    static func visionRecipe(temperature: Double) -> GenerateParameters {
-        GenerateParameters(
-            temperature: Float(temperature),   // card: 0.6 for vision
-            topP: 0.95,
-            topK: 20,
-            minP: 0,
-            presencePenalty: 0.0
-        )
-    }
 }
 
-/// Which sampler recipe an MLX eye uses, chosen by repo id.
-///
-/// A model's vision recipe is a property of the model, not the library. MLX's defaults leave
-/// top_k/top_p filtering OFF, which sets a VLM free to reach for any token in the vocabulary
-/// and loop — the bug Hal diagnosed and we reproduced (see `Qwen.visionRecipe`). So a model
-/// with a known recipe gets a case here; anything else gets a sane, conservative default
-/// until we learn its own. This is the one place a new eye may need a line of its own.
-nonisolated enum VisionRecipe {
-    static func params(forRepo repoID: String, temperature: Double) -> GenerateParameters {
-        switch repoID {
-        case Qwen.repo: return Qwen.visionRecipe(temperature: temperature)
-        default:        return defaultParams(temperature: temperature)
-        }
+/// An MLX eye's whole sampler: its own recipe (`CameraModel.sampler`, on the model's record with its
+/// Layer 1) plus the temperature the user set. A model with no record gets the conservative floor.
+nonisolated extension SamplerRecipe {
+    static func forRepo(_ repoID: String) -> SamplerRecipe {
+        ModelCatalog.model(id: repoID)?.sampler ?? .conservative
     }
 
-    /// A conservative default for a model whose own recipe we don't yet encode: the requested
-    /// temperature, with top_p/top_k filtering ON so the decoder can't wander the whole
-    /// vocabulary. Mirrors Qwen's shape, a reasonable floor for the small VLMs we target.
-    static func defaultParams(temperature: Double) -> GenerateParameters {
-        GenerateParameters(
-            temperature: Float(temperature),
-            topP: 0.95,
-            topK: 20,
-            minP: 0,
-            presencePenalty: 0.0
-        )
+    func parameters(temperature: Double) -> GenerateParameters {
+        GenerateParameters(temperature: Float(temperature), topP: topP, topK: topK, minP: minP,
+                           presencePenalty: presencePenalty)
     }
 }
 

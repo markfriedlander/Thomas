@@ -112,6 +112,26 @@ nonisolated struct DrawStepSpec: Hashable, Sendable {
 }
 
 /// One thing the camera can load.
+/// A setting Preferences can offer for a model. A model lists the ones it truly takes
+/// (`CameraModel.controls`), and Preferences shows only those.
+nonisolated enum ModelControl: Hashable, Sendable {
+    case temperature   // an eye's: how far it reaches for less likely words
+    case steps         // a hand's: denoising steps
+}
+
+/// An MLX eye's sampling recipe, besides the temperature the user sets. MLX's defaults leave top-k and
+/// top-p filtering OFF, which sets a VLM free to reach for any token in the vocabulary and loop (the
+/// bug Hal diagnosed and Thomas reproduced, 2026-07-14), so every MLX eye carries one.
+nonisolated struct SamplerRecipe: Hashable, Sendable {
+    let topP: Float
+    let topK: Int
+    let minP: Float
+    let presencePenalty: Float
+
+    /// For a small VLM with no published recipe: filtering ON, Qwen's shape.
+    static let conservative = SamplerRecipe(topP: 0.95, topK: 20, minP: 0, presencePenalty: 0)
+}
+
 nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// The HuggingFace repo id, and the id the store and downloader key on.
     /// `"apple"` for the built-in, which has no repo.
@@ -147,6 +167,18 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// For a drawing model, the step knob's range and default (see `DrawStepSpec`). `nil` for an
     /// eye. Read by the Preferences step slider and frozen per-shot in `ShotConfig.drawSteps`.
     let drawSteps: DrawStepSpec?
+
+    /// The controls this model truly takes, and so the only ones Preferences offers for it (item 11,
+    /// Mark, 2026-11-13: "the temperature control is only available when it actually is truly having
+    /// an effect on the model"). Declared per model, so a new model states its own. Checked 2026-11-13:
+    /// every eye passes temperature to its decoder; every hand takes denoising steps.
+    let controls: Set<ModelControl>
+
+    /// An MLX eye's sampling recipe (what sits behind temperature: top-p, top-k, min-p, presence).
+    /// On the record with the model's Layer 1, so all of a model's settings live in one place (item 11;
+    /// before 2026-11-14 it was a separate `VisionRecipe` switch in Qwen.swift). `nil` for Apple's eye,
+    /// which takes temperature alone, and for a hand. See `SamplerRecipe`.
+    let sampler: SamplerRecipe?
 
     /// Whether the weights are on the phone — the DISPLAY copy of the download state, refreshed
     /// centrally by `ModelCatalogService.refreshDownloadStates()` (Hal's pattern: the catalog holds
@@ -303,7 +335,9 @@ nonisolated enum ModelCatalog {
         // The shared gentle brevity line — the one it uses today. Behaves well within it.
         layerOnePrompt: PromptLayers.brevity,
         engine: .mlx,        // unused for an eye
-        drawSteps: nil
+        drawSteps: nil,
+        controls: [.temperature],   // GenerationOptions(temperature:)
+        sampler: nil                // Apple's eye takes temperature alone
     )
 
     /// The fast prime. Downloaded, richer, unguarded.
@@ -320,7 +354,15 @@ nonisolated enum ModelCatalog {
         // (not a hidden fallback) so every eye's record states its own Layer 1 plainly.
         layerOnePrompt: PromptLayers.brevity,
         engine: .mlx,        // unused for an eye
-        drawSteps: nil
+        drawSteps: nil,
+        controls: [.temperature],
+        // ⭐ Qwen's PUBLISHED VISION recipe, not the library defaults (caught by the Hal CC,
+        // 2026-07-14). The 2B ships NO generation_config, so nothing on disk corrects a wrong default.
+        // From the base model card: thinking-TEXT = temp 1.0 / top_p 0.95 / top_k 20 / min_p 0 /
+        // presence 1.5; thinking-VISION = temp 0.6 / presence 0.0 (us). Do NOT copy Hal's text recipe:
+        // temp 1.0 / presence 1.5 loops on deterministic tasks. If descriptions start repeating, the
+        // card says to adjust presence_penalty 0-2. Temperature itself is the user's (default 0.6).
+        sampler: SamplerRecipe(topP: 0.95, topK: 20, minP: 0, presencePenalty: 0)
     )
 
     /// The small eye. A second downloadable eye, and the proof that the eye loader really is
@@ -336,8 +378,8 @@ nonisolated enum ModelCatalog {
     /// LLM/VLM-shaped repo — one model — so every MLX file in it IS the model (`.wholeRepo`).
     /// 1.02 GB measured from HuggingFace (the `.safetensors` + tokenizer), not estimated.
     ///
-    /// No `VisionRecipe` case: it falls through to the conservative default (top_p/top_k
-    /// filtering ON) on purpose, until we've watched it on the device and learned its own.
+    /// Its sampler is the conservative floor (`SamplerRecipe.conservative`) on purpose, until we've
+    /// watched it on the device and learned its own.
     static let smolVLM2 = CameraModel(
         id: "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
         displayName: "SmolVLM2-500M",
@@ -353,7 +395,11 @@ nonisolated enum ModelCatalog {
         // it feeds a drawing — just a firm, honest instruction. Tuned on device 2026-07-26.
         layerOnePrompt: "Describe what you see in no more than two or three sentences. Do not explain, analyze, list, or add commentary. Give only the description, then stop.",
         engine: .mlx,        // unused for an eye
-        drawSteps: nil
+        drawSteps: nil,
+        controls: [.temperature],
+        // No published vision recipe of its own: the conservative floor (top_p/top_k filtering ON,
+        // so the decoder can't wander the whole vocabulary), until we learn its own.
+        sampler: .conservative
     )
 
     /// The hand — frame 3.
@@ -399,7 +445,9 @@ nonisolated enum ModelCatalog {
         // Distilled to draw in very few steps and stays coherent to about 6; default 4 (its
         // trained sweet spot). The knob lets a user trade a touch more time for a touch more detail
         // without leaving turbo's comfortable range.
-        drawSteps: DrawStepSpec(range: 1...6, default: 4)
+        drawSteps: DrawStepSpec(range: 1...6, default: 4),
+        controls: [.steps],
+        sampler: nil
     )
 
     /// The second hand — CoreML on the Neural Engine.
@@ -433,7 +481,9 @@ nonisolated enum ModelCatalog {
         engine: .coreML,
         // A base (non-turbo) SD model needs real denoising steps; 20 is a good default, 15–30 the
         // useful range. Fewer is faster and rougher, more is slower and cleaner.
-        drawSteps: DrawStepSpec(range: 15...30, default: 20)
+        drawSteps: DrawStepSpec(range: 15...30, default: 20),
+        controls: [.steps],
+        sampler: nil
     )
 
     static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo, coreMLSD21]
