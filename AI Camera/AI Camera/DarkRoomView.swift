@@ -30,7 +30,8 @@ struct DarkRoomView: View {
     @State private var thumbnails: [UUID: Image] = [:]
     /// Developed shots whose negatives the dark room still keeps (NegativeStore), newest first.
     @State private var negatives: [NegativeMeta] = []
-    @State private var pickerItem: PhotosPickerItem?
+    /// The pictures chosen from the library, in the order picked; they join the queue in that order.
+    @State private var pickerItems: [PhotosPickerItem] = []
     @State private var confirmingPurgeAll = false
     /// The shot whose development the Developer Tray is showing (pushed by its row's Watch button).
     @State private var watching: WatchTarget?
@@ -50,7 +51,7 @@ struct DarkRoomView: View {
             }
             .safeAreaInset(edge: .bottom) { loadBar }
             // Full screen, not pushed inside this sheet: the tray's picture is the whole canvas.
-            .fullScreenCover(item: $watching) { target in DeveloperTrayView(shotID: target.id) }
+            .fullScreenCover(item: $watching) { target in DeveloperTrayView(shotID: target.id, followsQueue: target.followsQueue) }
         }
         .task { await reload() }
         // Reload the list whenever a shot is added (count changes) or one lands in Photos
@@ -58,7 +59,7 @@ struct DarkRoomView: View {
         // reads the worker's observable `currentStage`, so no reload is needed for that.
         .onChange(of: worker.developingCount) { _, _ in Task { await reload() } }
         .onChange(of: worker.arrivals) { _, _ in Task { await reload() } }
-        .onChange(of: pickerItem) { _, item in load(item) }
+        .onChange(of: pickerItems) { _, items in load(items) }
         #if DEBUG
         // Human parity: the antenna taps the developing shot's Watch button (`POST /open` X-Screen: tray).
         .onChange(of: AntennaUIBridge.shared.tapWatch) { _, tap in
@@ -66,7 +67,17 @@ struct DarkRoomView: View {
             if let id = worker.currentShotID { watching = WatchTarget(id: id) }
             AntennaUIBridge.shared.tapWatch = false
         }
+        // The antenna taps "Watch the queue" (`POST /open` X-Screen: tray, X-Follow: queue).
+        .onChange(of: AntennaUIBridge.shared.tapWatchAll) { _, tap in
+            guard tap else { return }
+            watchAll()
+            AntennaUIBridge.shared.tapWatchAll = false
+        }
         .onAppear {
+            if AntennaUIBridge.shared.tapWatchAll {
+                watchAll()
+                AntennaUIBridge.shared.tapWatchAll = false
+            }
             if AntennaUIBridge.shared.tapWatch, let id = worker.currentShotID {
                 watching = WatchTarget(id: id)
                 AntennaUIBridge.shared.tapWatch = false
@@ -100,6 +111,15 @@ struct DarkRoomView: View {
                       systemImage: worker.isPaused ? "play.fill" : "pause.fill")
             }
             Spacer()
+            // More than one shot in the bath: watch them develop one after another (Mark, 2026-11-14).
+            // Watch on a row still watches just that shot.
+            // "The queue", not "all" (Mark): it follows the shots still developing, not the ones already done.
+            if worker.currentShotID != nil && worker.developingCount > 1 {
+                Button(action: watchAll) {
+                    Label("Watch the queue", systemImage: "play.rectangle.on.rectangle")
+                }
+                Spacer()
+            }
             Button(role: .destructive) {
                 confirmingPurgeAll = true
             } label: {
@@ -118,7 +138,7 @@ struct DarkRoomView: View {
             ContentUnavailableView {
                 Label("The dark room is empty", systemImage: "tray")
             } description: {
-                Text("Shots you take appear here while they develop, then land in Photos. You can also load a picture to develop below.")
+                Text("Shots you take appear here while they develop, then land in Photos. You can also load pictures to develop below.")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -164,8 +184,9 @@ struct DarkRoomView: View {
     // MARK: - The library door (second home for "load a picture")
 
     private var loadBar: some View {
-        PhotosPicker(selection: $pickerItem, matching: .images) {
-            Label("Load a picture to develop", systemImage: "photo.on.rectangle.angled")
+        // As many as the person likes, no cap (Mark: never limit what a user can do; Thomas cleans up after).
+        PhotosPicker(selection: $pickerItems, maxSelectionCount: nil, selectionBehavior: .ordered, matching: .images) {
+            Label("Load pictures to develop", systemImage: "photo.on.rectangle.angled")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
@@ -226,20 +247,34 @@ struct DarkRoomView: View {
         Task { await DarkRoomWorker.shared.purgeAll(); await reload() }
     }
 
-    private func load(_ item: PhotosPickerItem?) {
-        guard let item else { return }
+    private func watchAll() {
+        if let id = worker.currentShotID { watching = WatchTarget(id: id, followsQueue: true) }
+    }
+
+    /// Each chosen picture joins the queue in the order picked, one at a time (only one full-size picture
+    /// is in memory at once), and its row appears as it lands. The worker develops them in turn, with the
+    /// same heat protection as shots from the shutter.
+    private func load(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        pickerItems = []
         Task {
-            defer { pickerItem = nil }
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let src = CGImageSourceCreateWithData(data as CFData, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return }
-            // Upright before it goes anywhere — same rule the shutter and the old library door used.
-            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-            let raw = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
-            let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-            // A picture imported from the library has no capture location, so no place stamp.
-            await DarkRoomWorker.shared.enqueue(cg.uprighted(orientation), place: nil)
-            await reload()
+            var added = 0
+            for item in items {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let src = CGImageSourceCreateWithData(data as CFData, nil),
+                      let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+                    cameraLog("INTAKE: a library picture could not be read; skipped")
+                    continue
+                }
+                // Upright before it goes anywhere — same rule the shutter and the old library door used.
+                let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+                let raw = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
+                let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
+                // A picture imported from the library has no capture location, so no place stamp.
+                if await DarkRoomWorker.shared.enqueue(cg.uprighted(orientation), place: nil) != nil { added += 1 }
+                await reload()
+            }
+            cameraLog("INTAKE: \(added) of \(items.count) library pictures joined the queue")
         }
     }
 }
@@ -355,6 +390,6 @@ private struct NegativeRow: View {
 }
 
 /// A shot to watch in the Developer Tray (`navigationDestination(item:)` needs Identifiable + Hashable).
-private struct WatchTarget: Identifiable, Hashable { let id: UUID }
+private struct WatchTarget: Identifiable, Hashable { let id: UUID; var followsQueue = false }
 
 // ==== LEGO END: 35 The Dark Room Screen (The Developing Queue) ====

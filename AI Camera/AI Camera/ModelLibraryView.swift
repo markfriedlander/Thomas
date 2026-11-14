@@ -852,12 +852,14 @@ struct ModelLicenseSheet: View {
     var tapWatch = false
     /// = tapping Watch on a developed shot's row (its kept negative) in the Dark Room.
     var tapWatchShot: UUID? = nil
+    /// = tapping "Watch the queue" in the Dark Room (the tray follows the queue, one shot after another).
+    var tapWatchAll = false
     /// = dragging the Developer Tray's slider to a moment (-1 = tapping Live).
     var trayScrubTo: Int? = nil
     /// A tap inside the Developer Tray, as a human would make it: "word:i" (a word), "square:n" (a
     /// square on the picture), "numbers" (the "2,048 numbers" pill), "close" (dismiss that sheet),
     /// "step:1" / "step:-1" (the › and ‹ buttons), "chapter:lens|eye|hand" (the top pill),
-    /// "picture" (show/hide the pills), "help" ("?"), "dismiss" (close the tray).
+    /// "picture" (show/hide the pills), "help" ("?"), "dismiss" (close the tray), "next" ("Watch the next shot").
     var trayTap: String? = nil
 }
 #endif

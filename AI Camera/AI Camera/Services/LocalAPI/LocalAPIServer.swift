@@ -1051,6 +1051,8 @@ extension LocalAPIServer {
         }.sorted { ($0["light"] as? Float ?? 0) > ($1["light"] as? Float ?? 0) }
         return (200, json([
             "shotID": m.shotID.uuidString,
+            "followsQueue": m.followsQueue,
+            "screenKeptAwake": UIApplication.shared.isIdleTimerDisabled,
             "frames": names,
             "index": m.index,
             "chapter": m.current.chapter.rawValue,
@@ -1106,8 +1108,8 @@ extension LocalAPIServer {
             bridge.trayTap = "chapter:\(c)"; return (200, json(["tapped": "chapter \(c)"]))
         }
         if let tap = req.headers["x-tap"]?.lowercased() {
-            let map = ["numbers": "numbers", "picture": "picture", "help": "help", "close": "dismiss"]
-            guard let t = map[tap] else { return (400, #"{"error":"X-Tap: numbers | picture | help | close"}"#) }
+            let map = ["numbers": "numbers", "picture": "picture", "help": "help", "close": "dismiss", "nextshot": "next"]
+            guard let t = map[tap] else { return (400, #"{"error":"X-Tap: numbers | picture | help | close | nextshot"}"#) }
             bridge.trayTap = t; return (200, json(["tapped": tap]))
         }
         let raw = (req.headers["x-index"] ?? "").lowercased()
@@ -1177,6 +1179,16 @@ extension LocalAPIServer {
             // Open the Dark Room and tap the developing shot's Watch button, as a finger would.
             guard DarkRoomWorker.shared.currentShotID != nil else {
                 return (409, #"{"error":"No shot is developing, so there is no Watch button to tap."}"#)
+            }
+            // X-Follow: queue = tap "Watch the queue" instead (shown when more than one shot is in the bath).
+            if ["queue", "all"].contains((req.headers["x-follow"] ?? "").lowercased()) {
+                guard DarkRoomWorker.shared.developingCount > 1 else {
+                    return (409, #"{"error":"Only one shot is in the bath, so there is no Watch the queue button to tap."}"#)
+                }
+                bridge.tapWatchAll = true
+                bridge.tapDarkRoom = true
+                return (200, json(["screen": "tray", "opened": true, "follow": "queue",
+                                   "message": "Opened the Dark Room and tapped Watch the queue."]))
             }
             bridge.tapWatch = true
             bridge.tapDarkRoom = true

@@ -630,6 +630,10 @@ actor TrayPreviewDecoder {
 @MainActor @Observable
 final class TrayModel {
     let shotID: UUID
+    /// Opened with the Dark Room's "Watch the queue": when this shot is done and the next one starts developing,
+    /// the tray moves on to it (Mark, 2026-11-14: "it might be fun to sit there and watch the tray while it
+    /// produces more than one image"). Carried to each next shot's model.
+    let followsQueue: Bool
     private(set) var trace: DevelopTrace.Snapshot?
     private(set) var frames: [TrayFrame] = [.reality]
     var index = 0
@@ -693,7 +697,7 @@ final class TrayModel {
     static weak var current: TrayModel?
     #endif
 
-    init(shotID: UUID) { self.shotID = shotID }
+    init(shotID: UUID, followsQueue: Bool = false) { self.shotID = shotID; self.followsQueue = followsQueue }
 
     var current: TrayFrame { frames[min(max(index, 0), frames.count - 1)] }
     var isMine: Bool { trace?.shotID == shotID }
@@ -1192,7 +1196,13 @@ struct DeveloperTrayView: View {
     /// The pills and controls are packed tighter so the words get the height.
     private var short: Bool { heightClass == .compact }
 
-    init(shotID: UUID) { _model = State(initialValue: TrayModel(shotID: shotID)) }
+    /// The pause before "Watch the queue" moves on to the next shot, so the finished drawing is seen first.
+    private static let holdOnFinished: UInt64 = 5_000_000_000
+    @State private var advanceTask: Task<Void, Never>?
+
+    init(shotID: UUID, followsQueue: Bool = false) {
+        _model = State(initialValue: TrayModel(shotID: shotID, followsQueue: followsQueue))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -1217,8 +1227,11 @@ struct DeveloperTrayView: View {
         .animation(.easeInOut(duration: 0.2), value: model.helpOpen)
         .statusBarHidden(!model.chromeVisible)
         .persistentSystemOverlays(model.chromeVisible ? .automatic : .hidden)
-        .onAppear { model.start() }
-        .onDisappear { model.stop() }
+        .onAppear { model.start(); keepAwake(); if model.followsQueue { nextShotStarted(worker.currentShotID) } }
+        .onDisappear { model.stop(); advanceTask?.cancel(); UIApplication.shared.isIdleTimerDisabled = false }
+        // While a shot develops in front of someone, the screen stays on: a locked phone sends Thomas to the
+        // background, where developing stops (by design) until it comes back. Only while the tray is open.
+        .onChange(of: worker.currentShotID) { _, next in keepAwake(); if model.followsQueue { nextShotStarted(next) } }
         // Window-filling on the Mac: as a self-sizing card it crashed Thomas in a small window, the
         // same layout loop as the license card (2026-11-13). iPhone and iPad keep the sheet.
         .macResizablePresentation(item: Binding(get: { model.openSquare.map(SquareRef.init) },
@@ -1241,6 +1254,7 @@ struct DeveloperTrayView: View {
             case "word": if let i = Int(arg) { model.jump(toWord: i) }
             case "square": if let n = Int(arg) { model.tapSquare(n) }
             case "numbers": model.openSquare = model.comparedSquare
+            case "next": if case .next(let id) = queueNote, !model.following { watch(id) }   // "Watch the next shot"
             case "close": model.openSquare = nil
             case "step": if let d = Int(arg) { model.step(d) }
             case "chapter": if let c = TrayChapter(rawValue: arg) { model.jump(to: c) }
@@ -1255,6 +1269,74 @@ struct DeveloperTrayView: View {
     }
 
     private var isDeveloping: Bool { worker.currentShotID == model.shotID }
+
+    // MARK: Watch the queue (one shot after another)
+
+    private func keepAwake() {
+        UIApplication.shared.isIdleTimerDisabled = isDeveloping || (model.followsQueue && worker.currentShotID != nil)
+    }
+
+    /// The next shot has started developing. On Live, hold on the finished drawing a moment, then move on.
+    /// Someone who stepped back to look at a moment stays where they are; the bar offers the next shot.
+    private func nextShotStarted(_ next: UUID?) {
+        advanceTask?.cancel()
+        guard let next, next != model.shotID, model.following else { return }
+        advanceTask = Task {
+            try? await Task.sleep(nanoseconds: Self.holdOnFinished)
+            guard !Task.isCancelled, model.following, worker.currentShotID == next else { return }
+            watch(next)
+        }
+    }
+
+    private func watch(_ next: UUID) {
+        advanceTask?.cancel()
+        model.stop()
+        model = TrayModel(shotID: next, followsQueue: true)
+        model.start()
+        cameraLog("TRAY: watch the queue moved on to \(next.uuidString.prefix(8))")
+    }
+
+    /// The other shots, as the bar shows them while watching the queue: how many are still to come, or why the
+    /// next one waits. Nothing to say outside "Watch the queue".
+    private enum QueueNote: Equatable { case toCome(Int), next(UUID), cooling, paused, lastOne }
+
+    private var queueNote: QueueNote? {
+        guard model.followsQueue else { return nil }
+        if isDeveloping {
+            let after = worker.developingCount - 1
+            return after > 0 ? .toCome(after) : nil
+        }
+        if let next = worker.currentShotID, next != model.shotID { return .next(next) }
+        if worker.developingCount > 0 { return worker.isCoolingDown ? .cooling : (worker.isPaused ? .paused : nil) }
+        return model.drawingDone || model.trace != nil ? .lastOne : nil
+    }
+
+    @ViewBuilder
+    private var queueLine: some View {
+        switch queueNote {
+        case .toCome(let n):
+            Text(n == 1 ? "1 more shot after this one" : "\(n) more shots after this one")
+                .font(.caption).foregroundStyle(.white.opacity(0.7))
+        case .next(let id):
+            if model.following {
+                Text("The next shot is developing").font(.caption).foregroundStyle(.white.opacity(0.7))
+            } else {
+                Button { watch(id) } label: {
+                    pill { Label("Watch the next shot", systemImage: "forward.fill").font(.caption.weight(.bold)) }
+                }
+                .buttonStyle(.plain)
+            }
+        case .cooling:
+            Label("The next shot waits for the \(ThisDevice.deviceKind) to cool", systemImage: "snowflake")
+                .font(.caption).foregroundStyle(.orange)
+        case .paused:
+            Text("Paused. The next shot waits until you resume.").font(.caption).foregroundStyle(.white.opacity(0.7))
+        case .lastOne:
+            Text("That was the last shot").font(.caption).foregroundStyle(.white.opacity(0.7))
+        case nil:
+            EmptyView()
+        }
+    }
 
     // MARK: Layouts
 
@@ -1687,6 +1769,7 @@ struct DeveloperTrayView: View {
     /// Bottom: the moment, then ‹ the slider › (and Live while the shot is still developing).
     private var bottomBar: some View {
         VStack(spacing: 8) {
+            queueLine
             // One name for the moment. While developing, a red dot marks that it is the newest moment.
             if !short { pill { momentName(.subheadline) } }
             HStack(spacing: 6) {
