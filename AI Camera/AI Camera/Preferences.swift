@@ -563,7 +563,7 @@ struct PreferencesView: View {
         } header: {
             Text("Location")
         } footer: {
-            Text("The footer stamps where a shot was taken. Normally that's a place name (\"Los Angeles, CA\"), looked up by sending the coordinate to Apple's mapping service. Turn this on to stamp raw latitude and longitude instead - no lookup, no network call - so with a downloaded local eye and hand, nothing about the shot leaves your phone.")
+            Text("The footer stamps where a shot was taken. Normally that's a place name (\"Los Angeles, CA\"), looked up by sending the coordinate to Apple's mapping service. Turn this on to stamp raw latitude and longitude instead - no lookup, no network call - so with a downloaded local eye and hand, nothing about the shot leaves your \(ThisDevice.deviceKind).")
         }
     }
 
@@ -591,7 +591,7 @@ struct PreferencesView: View {
                     Button("Cancel", role: .cancel) {}
                 }
         } footer: {
-            Text("Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load a picture to develop.\n\nAfter a shot lands in Photos, the dark room keeps its negative: the machine's workings (the eye's numbers, where it looked, the drawing's steps) so you can open it in the Developer Tray again. The oldest are removed as new ones arrive. They stay on this phone and are not backed up. Now using \(NegativeStore.formatBytes(negativesBytes)).")
+            Text("Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load a picture to develop.\n\nAfter a shot lands in Photos, the dark room keeps its negative: the machine's workings (the eye's numbers, where it looked, the drawing's steps) so you can open it in the Developer Tray again. The oldest are removed as new ones arrive. They stay on this \(ThisDevice.deviceKind) and are not backed up. Now using \(NegativeStore.formatBytes(negativesBytes)).")
         }
         .task { negativesBytes = await NegativeStore.shared.totalBytes() }
     }

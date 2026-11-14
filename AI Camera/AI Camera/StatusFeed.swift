@@ -244,6 +244,8 @@ struct StatusFeedView: View {
         case .explainPrivacy:
             Button { showingPrivacy = true } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
+                // The lock is glyph-only; without a name VoiceOver read the symbol ("Unlock").
+                .accessibilityLabel(message.icon == "lock" ? "Privacy: stays on device" : "Privacy: may leave device")
                 .popover(isPresented: $showingPrivacy) {
                     PrivacyPopover(
                         state: privacyState,

@@ -296,7 +296,7 @@ nonisolated enum ModelCatalog {
         job: .seeing,
         delivery: .builtIn,
         sizeGB: nil,
-        blurb: "On the phone already - nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
+        blurb: "On the \(ThisDevice.deviceKind) already - nothing to download. A filter stops some images before the model sees them; when that happens the camera asks again with the filter relaxed, and records both answers.",
         licence: nil,
         // The shared gentle brevity line — the one it uses today. Behaves well within it.
         layerOnePrompt: PromptLayers.brevity,

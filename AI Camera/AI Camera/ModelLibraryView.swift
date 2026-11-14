@@ -266,10 +266,10 @@ struct ModelLibraryView: View {
         var message: String
         let others = model.claimants.filter { $0 != SharedModelStore.thisAppID }
         if others.isEmpty {
-            message = "The files will be removed from the phone, freeing \(formatted(model.bytesOnDisk)). You can download it again."
+            message = "The files will be removed from the \(ThisDevice.deviceKind), freeing \(formatted(model.bytesOnDisk)). You can download it again."
         } else {
             let names = others.map { SharedModelStore.displayName(forAppID: $0) }
-            message = "\(model.displayName) is also used by \(names.joined(separator: " and ")). This camera gives up its claim, but the files stay on the phone and no space is freed."
+            message = "\(model.displayName) is also used by \(names.joined(separator: " and ")). This camera gives up its claim, but the files stay on the \(ThisDevice.deviceKind) and no space is freed."
         }
         // Warn if shots in the dark room still need this model — they aren't lost, they pause.
         if let n = queuedUsage[model.id], n > 0 {
@@ -482,7 +482,7 @@ private struct DiskRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Label("Models on this phone", systemImage: "internaldrive")
+                Label("Models on this \(ThisDevice.deviceKind)", systemImage: "internaldrive")
                     .font(.subheadline)
                 Spacer()
                 Text(format(storeBytes))

@@ -490,7 +490,9 @@ private func thomasActiveModels() -> [ModelCredit] {
     let active = ModelCatalog.all.filter { model in
         switch model.job {
         case .seeing:  return settings.seer.modelID == model.id
-        case .drawing: return settings.drawsThirdFrame && model.isInstalled
+        // The SELECTED hand, not every installed one: with two hands (SD-Turbo and SD-2.1) the old
+        // "installed" test credited Stability AI while SD-2.1 drew (seen in About on the Mac, 2026-11-13).
+        case .drawing: return settings.drawsThirdFrame && settings.selectedDrawer == model.id && model.isInstalled
         }
     }
     return active.map { model in
@@ -506,7 +508,7 @@ private func thomasActiveModels() -> [ModelCredit] {
         case ModelCatalog.apple.id:
             return ModelCredit(
                 name: model.displayName,
-                terms: "Apple on-device foundation model, built into iOS",
+                terms: "Apple on-device foundation model, built into \(ThisDevice.deviceKind == "Mac" ? "macOS" : ThisDevice.deviceKind == "iPad" ? "iPadOS" : "iOS")",
                 attribution: nil,
                 url: nil
             )

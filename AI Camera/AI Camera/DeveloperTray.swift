@@ -981,7 +981,7 @@ final class TrayModel {
             // After the drawing, missing previews go through the model lane, which holds work while the
             // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
             let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
-            let waiting = (drawingDone && hot) ? "waits for the phone to cool" : "is on its way"
+            let waiting = (drawingDone && hot) ? "waits for the \(ThisDevice.deviceKind) to cool" : "is on its way"
             // Only when there is no picture at all: then the wait needs a reason. When an earlier step
             // is showing, no note (Mark, 2026-11-13: the pill already says which step this is).
             return shownStep(for: k) == nil ? "This preview \(waiting)" : nil

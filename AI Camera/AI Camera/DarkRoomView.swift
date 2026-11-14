@@ -126,7 +126,7 @@ struct DarkRoomView: View {
                 // Why nothing may be moving: the phone is too hot, or the user paused. (Blocked
                 // shots say so on their own row.) The pill shows the same condition from outside.
                 if worker.isCoolingDown {
-                    Label("Cooling down - the phone is too hot to develop. Shots resume automatically when it cools.",
+                    Label("Cooling down - the \(ThisDevice.deviceKind) is too hot to develop. Shots resume automatically when it cools.",
                           systemImage: "snowflake")
                         .font(.footnote)
                         .foregroundStyle(.orange)

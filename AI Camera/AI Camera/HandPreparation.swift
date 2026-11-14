@@ -211,9 +211,9 @@ struct HandPreparationCard: View {
 
     private var detail: String {
         if let last = HandPreparation.lastSeconds(repoID) {
-            return "Your iPhone is getting the drawing model ready for its Neural Engine. Last time this took \(HandPreparation.clock(last)) on this iPhone. Keep Thomas open until it finishes."
+            return "Your \(ThisDevice.deviceKind) is getting the drawing model ready for its Neural Engine. Last time this took \(HandPreparation.clock(last)) on this \(ThisDevice.deviceKind). Keep Thomas open until it finishes."
         }
-        return "Your iPhone is getting the drawing model ready for its Neural Engine. This takes a few minutes the first time, and happens once. Keep Thomas open until it finishes."
+        return "Your \(ThisDevice.deviceKind) is getting the drawing model ready for its Neural Engine. This takes a few minutes the first time, and happens once. Keep Thomas open until it finishes."
     }
 }
 

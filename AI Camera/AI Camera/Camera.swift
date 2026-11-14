@@ -79,6 +79,10 @@ final class Lens: NSObject {
 
     private(set) var isAuthorized = false
     private(set) var isRunning = false
+    /// True when there is a second camera to flip to. Decided by the cameras present, not by the
+    /// platform: a Mac with only its built-in camera has none (the flip button hides), while an iPhone,
+    /// an iPad, or a Mac using an iPhone as its camera has two (Mark, 2026-11-13).
+    private(set) var canFlip = false
 
     /// Current optical/digital zoom factor. On a virtual device this is one continuous
     /// scale spanning every lens — crossing a seam swaps the physical camera silently.
@@ -140,6 +144,10 @@ final class Lens: NSObject {
             "deviceType":        device?.deviceType.rawValue ?? "",
             "devicePosition":    device.map { $0.position == .front ? "front" : $0.position == .back ? "back" : "unspecified" } ?? "",
             "isiOSAppOnMac":     ProcessInfo.processInfo.isiOSAppOnMac,
+            "canFlip":           canFlip,
+            // Every camera the flip could choose between, by name and the way it says it faces.
+            "backPick":          backDevice().map { "\($0.localizedName) [\($0.deviceType.rawValue)]" } ?? "",
+            "frontPick":         frontDevice().map { "\($0.localizedName) [\($0.deviceType.rawValue)]" } ?? "",
             "macAngle":          macAngle ?? -1
         ]
     }
@@ -244,6 +252,12 @@ final class Lens: NSObject {
 
         session.commitConfiguration()
         configured = true
+        // Two cameras only if they differ by name as well as ID: on a Mac the one FaceTime camera is
+        // handed out as BOTH the "back" and the "front" camera, under different IDs (measured with
+        // /rotation's backPick/frontPick, 2026-11-13).
+        if let back = backDevice(), let front = frontDevice() {
+            canFlip = back.uniqueID != front.uniqueID && back.localizedName != front.localizedName
+        }
         beginTrackingRotation()
     }
 

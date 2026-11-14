@@ -242,6 +242,8 @@ struct CameraView: View {
         }
         .buttonStyle(.plain)
         .disabled(!lens.isAuthorized)
+        // Unlabelled to the eye on purpose, but VoiceOver needs a name (it had none, 2026-11-13).
+        .accessibilityLabel("Shutter")
     }
 
     /// The corner glyphs — quiet, one to a corner. They lose every fight with the shutter; they are
@@ -263,12 +265,18 @@ struct CameraView: View {
 
     private var preferencesButton: some View {
         Button { showingPreferences = true } label: { cornerGlyph("slider.horizontal.3") }
+            .accessibilityLabel("Preferences")   // the glyph's own name read "Edit"
     }
 
     /// Selfie flip — the standard camera-flip loop. ⚠️ Front-camera mirroring is a device-tuning
     /// question (see `Lens.flip`).
     private var flipButton: some View {
         Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
+            // Only when there is a second camera (a Mac's built-in camera is the only one). Hidden by
+            // opacity, not removed, so the shutter stays centred between the corners.
+            .opacity(lens.canFlip ? 1 : 0)
+            .disabled(!lens.canFlip)
+            .accessibilityHidden(!lens.canFlip)
     }
 
     /// See what came OUT — opens the Photos app to the shots you've developed. A *stack* of
@@ -280,6 +288,7 @@ struct CameraView: View {
                 .symbolEffect(.bounce, value: worker.arrivals)
                 .modifier(CaptureControlCircle())
         }
+        .accessibilityLabel("Photos")
     }
 
     /// Open the system Photos app. There is no official API for this; `photos-redirect://` is the
@@ -288,7 +297,10 @@ struct CameraView: View {
     /// (App Review note: this is an undocumented scheme; widely used, but worth watching at
     /// submission.)
     private func openPhotos() {
-        if let url = URL(string: "photos-redirect://") {
+        // On a Mac (this same app, "Designed for iPad") photos-redirect:// opens nothing; the Mac's
+        // Photos app declares `photos` among its URL schemes (its Info.plist, checked 2026-11-13).
+        let scheme = ProcessInfo.processInfo.isiOSAppOnMac ? "photos://" : "photos-redirect://"
+        if let url = URL(string: scheme) {
             UIApplication.shared.open(url)
         }
     }
@@ -393,6 +405,28 @@ extension View {
         } else {
             self.sheet(isPresented: isPresented, onDismiss: onDismiss, content: content)
         }
+    }
+}
+
+/// What Thomas calls the device it runs on, in words people read ("your Mac", "this iPad"). Thomas runs
+/// on iPhone, iPad and (as the same app) on a Mac, and its messages said "phone" everywhere (found on the
+/// Mac, 2026-11-13). `deviceKind` is copied verbatim from Hal 4 (Sources/HalKit/BuildIdentity.swift).
+nonisolated enum ThisDevice {
+    /// WHICH KIND OF DEVICE THIS HAL IS RUNNING ON: "Mac", "iPhone" or "iPad". The one place that says it: the prompt's
+    /// "Device:" line, the send's log line and every door's reply read it. It names the KIND, never the person's own name
+    /// for the device, which is theirs. Hal runs on a Mac as an iPad app, so the Mac is asked first (an iPad app on a Mac
+    /// reports an iPad's screen). The hardware name is read from the system without UIKit, which HalKit does not import;
+    /// in the Simulator the system names the simulated device in its environment.
+    public nonisolated static var deviceKind: String {
+        if ProcessInfo.processInfo.isiOSAppOnMac { return "Mac" }
+        var size = 0
+        sysctlbyname("hw.machine", nil, &size, nil, 0)
+        var bytes = [UInt8](repeating: 0, count: size)
+        sysctlbyname("hw.machine", &bytes, &size, nil, 0)
+        let machine = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"]
+            ?? String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        if machine.hasPrefix("iPad") { return "iPad" }
+        return machine.hasPrefix("iPhone") ? "iPhone" : "Mac"
     }
 }
 

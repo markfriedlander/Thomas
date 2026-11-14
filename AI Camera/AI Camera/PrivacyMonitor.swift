@@ -126,13 +126,13 @@ final class PrivacyMonitor: NSObject {
         let lookLeaves = useEye && seer == .apple && networkAvailable
         let lookLine: String
         if !useEye {
-            lookLine = "**The look** stays on your iPhone. The eye is off, so the hand draws from your photo directly on the device, and nothing about the look leaves."
+            lookLine = "**The look** stays on your \(ThisDevice.deviceKind). The eye is off, so the hand draws from your photo directly on the device, and nothing about the look leaves."
         } else if seer != .apple {
-            lookLine = "**The look** stays on your iPhone. The eye is a local model, so nothing it sees or writes leaves the device."
+            lookLine = "**The look** stays on your \(ThisDevice.deviceKind). The eye is a local model, so nothing it sees or writes leaves the device."
         } else if networkAvailable {
             lookLine = "**The look** uses Apple Intelligence. With a network connection Apple may process it on Private Cloud Compute (encrypted in transit, non-persistent memory on Apple servers). Choose a downloaded local eye, or go offline, to keep it on the device."
         } else {
-            lookLine = "**The look** uses Apple Intelligence, running on your iPhone because you're offline. Nothing about the look leaves."
+            lookLine = "**The look** uses Apple Intelligence, running on your \(ThisDevice.deviceKind) because you're offline. Nothing about the look leaves."
         }
 
         // ── The place ──
@@ -143,7 +143,7 @@ final class PrivacyMonitor: NSObject {
         if !locationAuthorized {
             placeLine = "**The place** isn't stamped. Location is off, so no coordinate is ever used or sent."
         } else if rawCoordinates {
-            placeLine = "**The place** is raw latitude and longitude, computed on your iPhone. No coordinate is sent anywhere."
+            placeLine = "**The place** is raw latitude and longitude, computed on your \(ThisDevice.deviceKind). No coordinate is sent anywhere."
         } else if networkAvailable {
             placeLine = "**The place** is a name, looked up by sending this shot's coordinate to Apple's mapping service. Switch to raw coordinates in Settings to stamp latitude and longitude with no lookup, so nothing is sent."
         } else {
