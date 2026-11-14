@@ -107,6 +107,16 @@ struct CameraView: View {
     /// The zoom at the instant the pinch began. A gesture reports magnification relative
     /// to its own start, so without an anchor each update would compound the last.
     @State private var zoomAnchor: CGFloat?
+    /// The one-finger touch on the viewfinder (Apple's Camera gestures): where it began, whether a
+    /// pinch joined it, whether it became a press and hold, and the brightness when a drag began.
+    @State private var touchStart: CGPoint?
+    @State private var pinching = false
+    @State private var held = false
+    @State private var holdTask: Task<Void, Never>?
+    @State private var biasAtDragStart: Float?
+    /// The yellow square shows for a moment after a tap or a drag, and stays while locked.
+    @State private var focusSquareVisible = false
+    @State private var focusSquareFade: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -115,6 +125,9 @@ struct CameraView: View {
             if lens.isAuthorized {
                 Viewfinder(lens: lens)
                     .ignoresSafeArea()
+                    // The viewfinder's own points, edge to edge, which are the preview layer's points:
+                    // a finger is measured here so the camera focuses exactly under it.
+                    .coordinateSpace(.named(Self.viewfinderSpace))
 #if DEBUG
                     // Screenshot still (see `AntennaUIBridge.viewfinderStill`). Under the square guide and
                     // all chrome, exactly where the live preview sits, so the screenshot is the real screen.
@@ -135,16 +148,30 @@ struct CameraView: View {
                     // Separate — square). It shows the centred square the shot will be cropped
                     // to, so you frame for it — see `squareGuide`.
                     .overlay { squareGuide }
+                    .overlay { focusSquare }
                     // Pinch to zoom, like every camera. The lens swap is the system's
                     // job, not ours — see `configure()`.
                     .gesture(
                         MagnifyGesture()
                             .onChanged { value in
+                                pinching = true
+                                holdTask?.cancel()
                                 if zoomAnchor == nil { zoomAnchor = lens.zoom }
                                 lens.zoom(by: value.magnification, from: zoomAnchor ?? 1)
                             }
                             .onEnded { _ in zoomAnchor = nil }
                     )
+                    // Tap to focus and expose there; press and hold to lock both; drag up or down
+                    // while the square shows for brighter or darker. Apple's Camera gestures (Mark,
+                    // 2026-11-13: "Tap to focus and drag for exposure would be awesome"). Gestures,
+                    // not buttons: the capture screen stays viewfinder and shutter.
+                    .simultaneousGesture(focusGesture)
+                    .onChange(of: lens.focusPoint) { _, point in
+                        if point != nil { showFocusSquare() } else { focusSquareVisible = false }
+                    }
+                    .onChange(of: lens.exposureBias) { _, _ in
+                        if lens.focusPoint != nil { showFocusSquare() }
+                    }
             } else {
                 Text("The camera needs permission to see.")
                     .foregroundStyle(.white.opacity(0.7))
@@ -168,6 +195,8 @@ struct CameraView: View {
                     preferencesButton
                 }
                 Spacer()
+                // Above the shutter, not at the top: the top row carries the status line.
+                if lens.focusLocked { focusLockBanner }
                 zoomReadout
                 HStack(alignment: .bottom) {
                     flipButton
@@ -372,6 +401,95 @@ struct CameraView: View {
 
     /// The zoom factor, said plainly. Principle 2: a real number, not five dots.
     /// Only while it's changing — the capture screen owes you nothing at rest.
+    /// One finger on the viewfinder: a tap, a press and hold, or (while the square shows) a drag
+    /// for brightness. A pinch's fingers also arrive here; any touch a pinch joined does nothing.
+    private var focusGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.viewfinderSpace))
+            .onChanged { value in
+                if touchStart == nil {
+                    touchStart = value.startLocation
+                    held = false
+                    let start = value.startLocation
+                    holdTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(600))
+                        guard !Task.isCancelled, !pinching else { return }
+                        held = true
+                        lens.focus(atScreenPoint: start, lock: true)
+                    }
+                }
+                let t = value.translation
+                if hypot(t.width, t.height) > 10 { holdTask?.cancel() }
+                guard !pinching else { return }
+                // Brightness: a mostly vertical drag while the square is up. Up is brighter.
+                if focusSquareVisible, lens.focusPoint != nil, abs(t.height) > 10, abs(t.height) > abs(t.width) {
+                    if biasAtDragStart == nil { biasAtDragStart = lens.exposureBias }
+                    lens.setExposureBias((biasAtDragStart ?? 0) - Float(t.height) / 120)
+                }
+            }
+            .onEnded { value in
+                holdTask?.cancel()
+                let t = value.translation
+                if !pinching, !held, biasAtDragStart == nil, hypot(t.width, t.height) <= 10 {
+                    lens.focus(atScreenPoint: value.startLocation, lock: false)
+                }
+                touchStart = nil
+                biasAtDragStart = nil
+                pinching = false
+            }
+    }
+
+    /// Show the square, and let it go after a moment unless focus is locked.
+    private func showFocusSquare() {
+        focusSquareVisible = true
+        focusSquareFade?.cancel()
+        focusSquareFade = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled, !lens.focusLocked else { return }
+            withAnimation(.easeOut(duration: 0.4)) { focusSquareVisible = false }
+        }
+    }
+
+    static let viewfinderSpace = "viewfinder"
+
+    /// Apple's yellow square where you tapped, with the sun beside it riding up and down with the
+    /// brightness when this camera can change it. Drawn in an edge-to-edge frame, like the square
+    /// guide: inside the safe area it landed ~58 points off on a landscape iPhone (measured
+    /// 2026-11-13, the Dynamic Island side's inset).
+    @ViewBuilder
+    private var focusSquare: some View {
+        if let p = lens.focusPoint, focusSquareVisible {
+            GeometryReader { _ in focusSquareMark.position(p) }
+                .allowsHitTesting(false)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var focusSquareMark: some View {
+        ZStack {
+            Rectangle()
+                .stroke(Color.yellow, lineWidth: 1.5)
+                .frame(width: 76, height: 76)
+            if lens.canAdjustExposure {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.yellow)
+                    .offset(x: 54, y: CGFloat(-lens.exposureBias) * 18)
+            }
+        }
+    }
+
+    /// Apple's banner for a press and hold. The next tap clears it.
+    private var focusLockBanner: some View {
+        Text("AE/AF LOCK")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color.yellow, in: RoundedRectangle(cornerRadius: 4))
+            .padding(.bottom, 10)
+            .accessibilityLabel("Focus and exposure locked")
+    }
+
     /// Apple's way of writing a zoom: "1x", "2x", "0.5x", "2.4x" (a whole number has no
     /// decimal). The number is already in Apple's scale (`Lens.displayZoom`).
     static func appleZoomLabel(_ z: CGFloat) -> String {

@@ -209,6 +209,35 @@ final class Lens: NSObject {
         ]
     }
 
+    /// Focus and exposure as the camera holds them now, for `POST /focus`: what the person set (point
+    /// on screen, lock, brightness) beside what the device reports, so a tap can be checked against
+    /// what the camera actually did.
+    var focusDiagnostics: [String: Any] {
+        func mode(_ m: AVCaptureDevice.FocusMode) -> String {
+            switch m { case .locked: "locked"; case .autoFocus: "auto"; case .continuousAutoFocus: "continuous"; @unknown default: "?" }
+        }
+        func mode(_ m: AVCaptureDevice.ExposureMode) -> String {
+            switch m { case .locked: "locked"; case .autoExpose: "auto"; case .continuousAutoExposure: "continuous"; case .custom: "custom"; @unknown default: "?" }
+        }
+        var d: [String: Any] = [
+            "focusPoint":   focusPoint.map { [Double($0.x), Double($0.y)] } ?? [],
+            "focusLocked":  focusLocked,
+            "exposureBias": Double(exposureBias),
+            "canAdjustExposure": canAdjustExposure
+        ]
+        if let device {
+            d["deviceFocusMode"] = mode(device.focusMode)
+            d["deviceFocusPoint"] = [Double(device.focusPointOfInterest.x), Double(device.focusPointOfInterest.y)]
+            d["deviceExposureMode"] = mode(device.exposureMode)
+            d["deviceExposurePoint"] = [Double(device.exposurePointOfInterest.x), Double(device.exposurePointOfInterest.y)]
+            d["deviceBias"] = Double(device.exposureTargetBias)
+            d["canFocusAtPoint"] = device.isFocusPointOfInterestSupported
+            d["canExposeAtPoint"] = device.isExposurePointOfInterestSupported
+            d["watchingScene"] = device.isSubjectAreaChangeMonitoringEnabled
+        }
+        return d
+    }
+
     nonisolated static var interfaceOrientationName: String {
         MainActor.assumeIsolated {
             // effectiveGeometry, not the deprecated `interfaceOrientation`.
@@ -314,6 +343,7 @@ final class Lens: NSObject {
             canFlip = back.uniqueID != front.uniqueID && back.localizedName != front.localizedName
         }
         beginTrackingRotation()
+        if let device { startFocusFresh(on: device) }
     }
 
     /// Flip between the back and front cameras — the selfie toggle.
@@ -349,6 +379,7 @@ final class Lens: NSObject {
         }
         session.commitConfiguration()
         beginTrackingRotation()   // the new device faces the other way; its angles must be remade
+        if let current = self.device { startFocusFresh(on: current) }
     }
 
     #if DEBUG
@@ -498,6 +529,109 @@ final class Lens: NSObject {
         device.videoZoomFactor = clamped
         device.unlockForConfiguration()
         zoom = clamped
+    }
+
+    // MARK: - Focus and exposure (Apple's Camera gestures: tap, press and hold, drag)
+
+    /// Where the person last tapped to focus and expose, in the preview layer's points (the same
+    /// points as the viewfinder on screen), or nil while the camera chooses for itself.
+    private(set) var focusPoint: CGPoint?
+    /// True after a press and hold: focus and exposure stay where they were set until the next tap,
+    /// whatever the scene does (Apple's "AE/AF LOCK").
+    private(set) var focusLocked = false
+    /// The brightness the person dragged in, in exposure stops (EV). 0 is the camera's own choice.
+    private(set) var exposureBias: Float = 0
+    private var subjectAreaObserver: NSObjectProtocol?
+
+    /// A couple of stops either way, like Apple's Camera slider. The hardware allows far more,
+    /// which mostly gives a white or a black frame.
+    private static let biasLimit: Float = 2
+
+    /// True when this camera lets brightness be adjusted at all.
+    var canAdjustExposure: Bool {
+        guard let device else { return false }
+        return device.maxExposureTargetBias > device.minExposureTargetBias
+    }
+
+    /// A tap (lock false) or a press and hold (lock true) at a point on the viewfinder. Focus and
+    /// exposure are set once at that point and then held. After a tap, a big change in the scene
+    /// hands control back to the camera (`watchSubjectArea`), as in Apple's Camera; after a hold,
+    /// nothing does until the next tap. Returns false, and changes nothing, when the point is
+    /// outside the picture (on the black bands) or this camera can set neither.
+    @discardableResult
+    func focus(atScreenPoint point: CGPoint, lock: Bool) -> Bool {
+        guard let device, let layer = previewLayer else { return false }
+        let picture = layer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard picture.contains(point) else { return false }
+        // The layer knows its own rotation, mirroring and fit, so it is the one to convert.
+        let devicePoint = layer.captureDevicePointConverted(fromLayerPoint: point)
+        let canFocus = device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus)
+        let canExpose = device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose)
+        guard canFocus || canExpose else { return false }
+        guard (try? device.lockForConfiguration()) != nil else { return false }
+        if canFocus {
+            device.focusPointOfInterest = devicePoint
+            device.focusMode = .autoFocus        // focus once there, then hold
+        }
+        if canExpose {
+            device.exposurePointOfInterest = devicePoint
+            device.exposureMode = .autoExpose    // meter once there, then hold
+        }
+        if device.maxExposureTargetBias > device.minExposureTargetBias {
+            device.setExposureTargetBias(0, completionHandler: nil)
+        }
+        device.isSubjectAreaChangeMonitoringEnabled = !lock
+        device.unlockForConfiguration()
+        focusPoint = point
+        focusLocked = lock
+        exposureBias = 0
+        return true
+    }
+
+    /// Brighter (positive) or darker (negative), in stops, kept within `biasLimit` and what the
+    /// camera allows.
+    func setExposureBias(_ ev: Float) {
+        guard let device, canAdjustExposure else { return }
+        let low = max(device.minExposureTargetBias, -Self.biasLimit)
+        let high = min(device.maxExposureTargetBias, Self.biasLimit)
+        let clamped = min(max(ev, low), high)
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.setExposureTargetBias(clamped, completionHandler: nil)
+        device.unlockForConfiguration()
+        exposureBias = clamped
+    }
+
+    /// Hand focus and exposure back to the camera: continuous, centred, no brightness change.
+    func resetFocus() {
+        focusPoint = nil
+        focusLocked = false
+        exposureBias = 0
+        guard let device, (try? device.lockForConfiguration()) != nil else { return }
+        let centre = CGPoint(x: 0.5, y: 0.5)
+        if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = centre }
+        if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+        if device.isExposurePointOfInterestSupported { device.exposurePointOfInterest = centre }
+        if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+        if device.maxExposureTargetBias > device.minExposureTargetBias {
+            device.setExposureTargetBias(0, completionHandler: nil)
+        }
+        device.isSubjectAreaChangeMonitoringEnabled = false
+        device.unlockForConfiguration()
+    }
+
+    /// A new camera (launch or flip) starts with the camera choosing, and with the scene watcher
+    /// pointed at it.
+    private func startFocusFresh(on device: AVCaptureDevice) {
+        resetFocus()
+        if let old = subjectAreaObserver { NotificationCenter.default.removeObserver(old) }
+        subjectAreaObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.subjectAreaDidChangeNotification, object: device, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.focusPoint != nil, !self.focusLocked else { return }
+                self.resetFocus()
+            }
+        }
     }
 
     // MARK: - The shutter

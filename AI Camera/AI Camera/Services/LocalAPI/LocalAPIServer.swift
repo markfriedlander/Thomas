@@ -324,6 +324,7 @@ extension LocalAPIServer {
         case ("GET",  "/settings"):        return await handleGetSettings()
         case ("POST", "/settings"):        return await handleSetSettings(req)
         case ("POST", "/zoom"):            return await handleZoom(req)
+        case ("POST", "/focus"):           return await handleFocus(req)
         case ("POST", "/flip"):            return await handleFlip(req)
         case ("POST", "/camera-format"):   return await handleCameraFormat(req)
         case ("POST", "/license"):         return await handleLicense(req)
@@ -761,6 +762,43 @@ extension LocalAPIServer {
             return (200, json(["ok": true, "bounds": bounds, "requested": z, "zoom": now]))
         }
         return (200, json(["ok": true, "bounds": bounds, "zoom": bounds["current"] ?? 1]))
+    }
+
+    /// POST /focus: what a finger does on the viewfinder. `X-Point: x,y` (screen points, as
+    /// `pictureRectOnScreen` in /rotation gives them) or `X-Point: centre` taps there; `X-Lock: 1`
+    /// makes it a press and hold; `X-Bias: <stops>` is the brightness drag; `X-Reset: 1` hands
+    /// control back to the camera. With no header it only reads. The square on screen follows,
+    /// because it watches the same Lens state a finger sets.
+    private func handleFocus(_ req: ParsedRequest) async -> (Int, String) {
+        let live = await MainActor.run { Lens.current }
+        guard let lens = live else {
+            return (200, json(["ok": false, "error": "No live lens. Foreground the camera on screen."]))
+        }
+        let result: [String: Any] = await MainActor.run {
+            var r: [String: Any] = ["ok": true]
+            if req.headers["x-reset"] == "1" { lens.resetFocus() }
+            if let spec = req.headers["x-point"] {
+                var point: CGPoint?
+                if spec == "centre" || spec == "center" {
+                    let d = lens.diagnostics
+                    if let p = d["pictureRectOnScreen"] as? [Double], p.count == 4 {
+                        point = CGPoint(x: p[0] + p[2] / 2, y: p[1] + p[3] / 2)
+                    }
+                } else {
+                    let n = spec.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                    if n.count == 2 { point = CGPoint(x: n[0], y: n[1]) }
+                }
+                if let point {
+                    r["accepted"] = lens.focus(atScreenPoint: point, lock: req.headers["x-lock"] == "1")
+                } else {
+                    r["ok"] = false; r["error"] = "X-Point must be x,y in screen points, or centre"
+                }
+            }
+            if let b = req.headers["x-bias"], let ev = Float(b) { lens.setExposureBias(ev) }
+            r["focus"] = lens.focusDiagnostics
+            return r
+        }
+        return (200, json(result))
     }
 
     /// POST /flip — switch the camera the way the flip glyph does (`lens.flip`), then hand back a
