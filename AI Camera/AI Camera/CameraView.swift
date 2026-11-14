@@ -70,6 +70,8 @@ struct CameraView: View {
     /// but chosen in Preferences, never here. The capture screen stays sacred.
     @State private var settings = Settings.shared
     @State private var showingPreferences = false
+    /// The one Dark Room sheet: opened by the Dark Room button, the status pill and the antenna alike.
+    @State private var showingDarkRoom = false
 #if DEBUG
     /// Lets the antenna drive the Download → license → Accept flow: when it sets a model here, this
     /// screen presents that model's license sheet (see `AntennaUIBridge`). DEBUG-only: the bridge is
@@ -133,8 +135,10 @@ struct CameraView: View {
             // status panel as the "developing" and "thermal" messages.
             VStack {
                 HStack(alignment: .top) {
-                    StatusFeedView(onOpenPreferences: { showingPreferences = true })
+                    StatusFeedView(onOpenPreferences: { showingPreferences = true },
+                                   onOpenDarkRoom: { showingDarkRoom = true })
                     Spacer()
+                    darkRoomButton
                     preferencesButton
                 }
                 Spacer()
@@ -161,6 +165,7 @@ struct CameraView: View {
         .onDisappear { lens.stop(); place.stop() }
         .statusBarHidden()
         .sheet(isPresented: $showingPreferences) { PreferencesView() }
+        .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
 #if DEBUG
         // Antenna-driven license sheet: the same `ModelLicenseSheet` the Model Library shows, presented
         // from the capture screen so the antenna can walk (and screenshot) the Download → license →
@@ -179,6 +184,11 @@ struct CameraView: View {
         // Preferences, so that request opens Preferences and Preferences pushes the library itself
         // (see its `navigationDestination`). The dark-room pill lives on the status panel, so that
         // request is honored by `StatusFeedView`, not here.
+        // Human-parity: the antenna's dark-room verb flips the same state the Dark Room button and the
+        // status pill flip.
+        .onChange(of: bridge.tapDarkRoom) { _, want in
+            if want { showingDarkRoom = true; bridge.tapDarkRoom = false }
+        }
         .onChange(of: bridge.tapPreferences) { _, want in
             if want { showingPreferences = true; bridge.tapPreferences = false }
         }
@@ -202,7 +212,7 @@ struct CameraView: View {
         // does. `StatusFeedView` honors the same flag for the Dark Room. Cleared here (the always-present
         // root); the guarded `want` means the clear can't re-trigger either observer.
         .onChange(of: bridge.dismissToCapture) { _, want in
-            if want { showingPreferences = false; bridge.dismissToCapture = false }
+            if want { showingPreferences = false; showingDarkRoom = false; bridge.dismissToCapture = false }
         }
         // Human-parity: the antenna's photos verb taps the Photos glyph — the same `openPhotos()`.
         .onChange(of: bridge.tapPhotos) { _, want in
@@ -233,6 +243,15 @@ struct CameraView: View {
     /// glyph width. (The privacy lock deliberately stays a capsule; it belongs to the status stack.)
     private func cornerGlyph(_ name: String) -> some View {
         Image(systemName: name).modifier(CaptureControlCircle())
+    }
+
+    /// The door to the Dark Room, always there (Mark, 2026-11-13: "I keep finding myself wanting to go
+    /// into the dark room when I'm on that screen"). Beside Preferences, between it and the status panel's
+    /// lock, wearing the tray glyph Preferences uses for the same room. The status pill still opens it
+    /// while something is developing; this door is there for every shot, including long-finished ones.
+    private var darkRoomButton: some View {
+        Button { showingDarkRoom = true } label: { cornerGlyph("tray.full") }
+            .accessibilityLabel("Dark Room")
     }
 
     private var preferencesButton: some View {

@@ -1135,7 +1135,7 @@ extension LocalAPIServer {
         case "darkroom", "dark-room", "dark":
             bridge.tapDarkRoom = true
             return (200, json(["screen": "darkroom", "opened": true,
-                               "message": "Opened the Dark Room the way the status pill does. Screenshot with devicectl."]))
+                               "message": "Opened the Dark Room the way its button on the camera screen does. Screenshot with devicectl."]))
         case "modellibrary", "model-library", "library":
             bridge.tapModelLibrary = true
             return (200, json(["screen": "modellibrary", "opened": true,

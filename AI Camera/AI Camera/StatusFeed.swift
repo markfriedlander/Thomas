@@ -175,15 +175,17 @@ struct StatusFeedView: View {
     /// downloaded local eye (via the Model Library inside Preferences) or switch off the place-name
     /// lookup — the two remedies the popover names (Mark, 2026-07-28).
     let onOpenPreferences: () -> Void
+    /// Opens the Dark Room. The camera screen owns the one Dark Room sheet, so the pill, the camera's
+    /// Dark Room button and the antenna all open the same screen (2026-11-13, when the button arrived).
+    let onOpenDarkRoom: () -> Void
 
     @State private var feed = StatusFeed.shared
     @State private var settings = Settings.shared
     @State private var network = PrivacyMonitor.shared
     @State private var showingPrivacy = false
-    @State private var showingDarkRoom = false
     #if DEBUG
-    /// The antenna's UI bridge — so `POST /open darkroom` opens the Dark Room through the pill's own
-    /// `showingDarkRoom`, exactly as tapping the pill does (no parallel presenter). DEBUG-only.
+    /// The antenna's UI bridge, so `POST /open privacy` opens the popover through the lock's own state.
+    /// DEBUG-only. (The Dark Room verbs are honored by `CameraView`, which owns that sheet.)
     @State private var antennaBridge = AntennaUIBridge.shared
     #endif
 
@@ -206,17 +208,7 @@ struct StatusFeedView: View {
         .onChange(of: network.isNetworkAvailable) { _, _ in refreshPrivacy() }
         .onChange(of: network.isLocationAuthorized) { _, _ in refreshPrivacy() }
         .onDisappear { feed.clear(.privacy) }
-        .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
         #if DEBUG
-        // Human-parity: the antenna's dark-room verb opens the Dark Room through the pill's own state.
-        .onChange(of: antennaBridge.tapDarkRoom) { _, want in
-            if want { showingDarkRoom = true; antennaBridge.tapDarkRoom = false }
-        }
-        // Human-parity "return to capture": drop the Dark Room the way its own Done does. `CameraView`
-        // honors the same flag for Preferences and clears it (this closes only the sheet we own).
-        .onChange(of: antennaBridge.dismissToCapture) { _, want in
-            if want { showingDarkRoom = false }
-        }
         // Human-parity: the antenna's privacy verb opens the popover through the lock's own state.
         .onChange(of: antennaBridge.tapPrivacyLock) { _, want in
             if want { showingPrivacy = true; antennaBridge.tapPrivacyLock = false }
@@ -257,7 +249,7 @@ struct StatusFeedView: View {
                     .presentationCompactAdaptation(.popover)
                 }
         case .openDarkRoom:
-            Button { showingDarkRoom = true } label: { capsuleBody(message) }
+            Button { onOpenDarkRoom() } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
         case .none:
             capsuleBody(message)

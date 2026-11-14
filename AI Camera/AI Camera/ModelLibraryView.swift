@@ -790,15 +790,16 @@ struct ModelLicenseSheet: View {
 
     /// = tapping the Preferences gear. `CameraView` mirrors this into its real `showingPreferences`.
     var tapPreferences = false
-    /// = tapping the dark-room pill. `StatusFeedView` mirrors this into its real `showingDarkRoom`.
+    /// = tapping the camera's Dark Room button (or the dark-room pill; both flip the same state).
+    /// `CameraView` mirrors this into its real `showingDarkRoom`.
     var tapDarkRoom = false
     /// = opening Preferences and pushing "Browse Model Library" (the library lives inside Preferences).
     /// `CameraView` opens Preferences; `PreferencesView` pushes the library onto its own nav stack while
     /// this stays true, and clears it when the library is popped.
     var tapModelLibrary = false
-    /// = tapping "Done" / backing all the way out to the bare capture screen. Both presenters observe it:
+    /// = tapping "Done" / backing all the way out to the bare capture screen.
     /// `CameraView` drops `showingPreferences` (which also drops any Model Library pushed inside it) and
-    /// `StatusFeedView` drops `showingDarkRoom`, exactly as the Done button / a back-swipe does. Without
+    /// `showingDarkRoom`, exactly as the Done button / a back-swipe does. Without
     /// this the antenna could open interior screens but never return to capture — below human parity.
     var dismissToCapture = false
     /// = tapping the privacy lock capsule to reveal the popover. `StatusFeedView` mirrors this into its
