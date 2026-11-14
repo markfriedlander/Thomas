@@ -108,9 +108,13 @@ enum Shot {
         // ── Frame 2. The eye reads the world and says what it sees. ──
         onStage?(.seeing)
         DevelopTrace.shared.noteEyeName(seer.name)   // the tray says which eye looked, and whether it can show how
+        let lookStarted = Date()
         let perception = await seer.look(at: photograph,
                                          systemPrompt: config.systemPrompt,
                                          temperature: config.temperature)
+        if case .spoke = perception {
+            ModelTimings.record(Date().timeIntervalSince(lookStarted), for: seer.modelID)   // item 16
+        }
 
         // The full perception — always what frame 2 shows by default, and the fallback for
         // `wordsForHand` in every early return below.
@@ -208,6 +212,7 @@ enum Shot {
         // is shared too. A failed hand is silent either way: frames 1 and 2 are already a complete
         // photograph (see the type doc).
         let engine = ModelCatalog.model(id: drawerID)?.engine ?? .mlx
+        let drawStarted = Date()
         do {
             let drawn: CGImage
             switch engine {
@@ -233,6 +238,7 @@ enum Shot {
                     reportsGuess: config.effectiveDevelopView == .guess,
                     onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             }
+            ModelTimings.record(Date().timeIntervalSince(drawStarted), for: drawerID)   // item 16
             // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
             // returns the model's own resolution (512²) unchanged.
             DevelopTrace.shared.finish(drawing: drawn)

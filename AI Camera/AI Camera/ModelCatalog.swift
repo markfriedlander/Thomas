@@ -220,6 +220,11 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// model (Qwen and SmolVLM through EyeRecorder, Apple through EyeIntake, both hands' best guess).
     let trayShows: Set<TrayFeature>
 
+    /// How long this model took on Mark's iPhone 16 Plus (eye: one look, loading included; hand: one
+    /// drawing at its default steps), shown on its card until it has been used on this device
+    /// (`ModelTimings`). `nil` until measured; never estimated.
+    var measuredSeconds: Double? = nil
+
     /// Whether the weights are on the phone — the DISPLAY copy of the download state, refreshed
     /// centrally by `ModelCatalogService.refreshDownloadStates()` (Hal's pattern: the catalog holds
     /// each model's downloaded flag and every screen reads that one array, so a delete or download
@@ -678,6 +683,41 @@ final class ModelCatalogService {
         case .apple:       return model(id: ModelCatalog.apple.id) ?? ModelCatalog.apple
         case .mlx(let id): return model(id: id) ?? ModelCatalog.apple
         }
+    }
+}
+
+/// How long each model really takes on this device (item 16, Mark, 2026-11-14: "how many seconds it takes
+/// to generate under each of the models"). Every real shot files its eye's look (loading included: that is
+/// the wait a person has) and its hand's drawing (load, steps and decode; not the upscale). The Model Library
+/// card shows the middle of the last few, "on this iPhone", so the number is right on every device; until a
+/// model has been used here, the card shows the record's `measuredSeconds`, labeled with the phone it was
+/// measured on. Kept on the device, never sent anywhere.
+nonisolated enum ModelTimings {
+    private static let key = "modelTimings.v1"
+    private static let keep = 8
+
+    static func record(_ seconds: Double, for modelID: String) {
+        guard seconds.isFinite, seconds > 0 else { return }
+        var all = load()
+        var list = all[modelID] ?? []
+        list.append(seconds)
+        if list.count > keep { list.removeFirst(list.count - keep) }
+        all[modelID] = list
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    /// The middle of this device's recent times for a model, and how many there are. The middle, not the
+    /// average, so one slow shot on a hot phone doesn't pull the number.
+    static func typical(for modelID: String) -> (seconds: Double, count: Int)? {
+        guard let list = load()[modelID], !list.isEmpty else { return nil }
+        let sorted = list.sorted()
+        let mid = sorted.count / 2
+        let middle = sorted.count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+        return (middle, list.count)
+    }
+
+    private static func load() -> [String: [Double]] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] ?? [:]
     }
 }
 

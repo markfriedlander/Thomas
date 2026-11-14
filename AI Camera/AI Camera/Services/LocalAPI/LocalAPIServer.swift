@@ -2137,7 +2137,10 @@ extension LocalAPIServer {
                         "job": m.job == .seeing ? "eye" : "hand",
                         "installed": m.isInstalled,
                         "filesOnDisk": m.isBuiltIn ? true : SharedModelStore.isRepoDownloaded(key),
-                        "selected": selected]
+                        "selected": selected,
+                        "typicalSeconds": ModelTimings.typical(for: m.id)?.seconds as Any,
+                        "timedShots": ModelTimings.typical(for: m.id)?.count ?? 0,
+                        "measuredSeconds": m.measuredSeconds as Any]
             }
         ]))
     }

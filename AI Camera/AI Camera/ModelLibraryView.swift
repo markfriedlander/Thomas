@@ -369,6 +369,8 @@ private struct ModelLibraryRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 8)
+                    ModelTimingView(model: model)
+                        .padding(.bottom, 8)
                     TrayScorecardView(model: model)
                         .padding(.bottom, 8)
                     if let licence = model.licence {
@@ -859,6 +861,39 @@ struct ModelLicenseSheet: View {
     var trayTap: String? = nil
 }
 #endif
+
+/// How long this model takes (item 16): this device's own recent shots when it has some, else the time
+/// measured on Mark's iPhone 16 Plus, labeled as such. Nothing when neither exists: never a guess.
+struct ModelTimingView: View {
+    let model: CameraModel
+
+    var body: some View {
+        let verb = model.job == .seeing ? "to look" : "to draw"
+        if let own = ModelTimings.typical(for: model.id) {
+            line("About \(Self.format(own.seconds)) \(verb) on this \(ThisDevice.deviceKind)",
+                 note: own.count == 1 ? "From your last shot." : "The middle of your last \(own.count) shots.")
+        } else if let measured = model.measuredSeconds {
+            line("About \(Self.format(measured)) \(verb) on an iPhone 16 Plus",
+                 note: "Measured, until you've used it here.")
+        }
+    }
+
+    private func line(_ text: String, note: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "stopwatch").font(.caption).foregroundStyle(.secondary)
+                .frame(width: 14).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(text).font(.caption2.weight(.semibold))
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    static func format(_ s: Double) -> String {
+        s < 10 ? String(format: "%.1f s", s) : "\(Int(s.rounded())) s"
+    }
+}
 
 /// What the Developer Tray shows of this model, row by row (Hal's Five Maxims scorecard, Hal4
 /// ModelLibraryView, for the look: icon spanning two lines, the name and its word on the first, the
