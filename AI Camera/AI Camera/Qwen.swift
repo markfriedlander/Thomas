@@ -72,9 +72,11 @@ nonisolated struct MLXVLMEye: Sendable {
 
             let ci = CIImage(cgImage: image)
 
-            // The Developer Tray's recorder: only Thomas's instrumented Qwen 3.5 can be watched,
+            // The Developer Tray's recorder: only Thomas's instrumented copies (Qwen 3.5, SmolVLM) can be watched,
             // and only a developing shot's look is recorded (EyeRecorder.beginLook decides).
-            let (watchable, tokenizer) = await container.perform { ctx in (ctx.model is TQwen35, ctx.tokenizer) }
+            let (watchable, tokenizer) = await container.perform { ctx in
+                (ctx.model is TQwen35 || ctx.model is TIdefics3, ctx.tokenizer)
+            }
             if watchable {
                 EyeRecorder.shared.beginLook(model: ModelCatalog.model(id: repoID)?.displayName ?? repoID,
                                              tokenizer: tokenizer)
@@ -310,10 +312,12 @@ actor MLXEyeLoader {
             // don't have. Taking the directory form means we never name a downloader here.
             // By this point the weights are already on disk either way (the library fetches
             // them through `MLXModelDownloader`); loading is not downloading.
-            // Thomas's own copy of the Qwen 3.5 recipe (Vendor/QwenVLM), so the Developer
-            // Tray can show where the eye looked. Same code as the library's; it only also
-            // records. Registered before every load: overwriting the entry is idempotent.
+            // Thomas's own copies of the Qwen 3.5 and SmolVLM recipes (Vendor/QwenVLM,
+            // Vendor/SmolVLM), so the Developer Tray can show where the eye looked. Same code as
+            // the library's; they only also record. Registered before every load: overwriting
+            // the entries is idempotent.
             await registerInstrumentedQwen()
+            await registerInstrumentedSmolVLM()
             return try await VLMModelFactory.shared.loadContainer(
                 from: directory,
                 using: #huggingFaceTokenizerLoader()
@@ -382,6 +386,16 @@ nonisolated func registerInstrumentedQwen() async {
     await VLMTypeRegistry.shared.registerModelType("qwen3_5") { data in
         let config = try JSONDecoder.json5().decode(TQwen35Configuration.self, from: data)
         return TQwen35(config)
+    }
+}
+
+/// The same for SmolVLM2: point the library's "smolvlm" model type at Thomas's vendored copy of its
+/// Idefics3 recipe (`TIdefics3`, Vendor/SmolVLM), which also records the tiles' numbers and where each
+/// word looked. The library's own processor (tiling, prompt) is unchanged.
+nonisolated func registerInstrumentedSmolVLM() async {
+    await VLMTypeRegistry.shared.registerModelType("smolvlm") { data in
+        let config = try JSONDecoder.json5().decode(TIdefics3Configuration.self, from: data)
+        return TIdefics3(config)
     }
 }
 

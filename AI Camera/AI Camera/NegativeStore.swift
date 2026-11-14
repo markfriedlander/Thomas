@@ -27,6 +27,8 @@ nonisolated struct NegativeMeta: Codable, Sendable, Identifiable {
         /// (context.f32) is measured over. Absent in negatives kept before 2026-11-12.
         var promptPieces: [String]? = nil
         var promptImagePositions: [Int]? = nil
+        /// SmolVLM's squares per tile side (EyeWorkings.tileSide). Absent before 2026-11-14 and for Qwen.
+        var tileSide: Int? = nil
     }
 
     var formatVersion = 1
@@ -102,7 +104,8 @@ actor NegativeStore {
                                         layers: e.layers, heads: e.heads, recorderMS: e.recorderMS,
                                         pieces: e.pieces.map { .init(text: $0.text, imageShare: $0.imageShare) },
                                         promptPieces: keepsContext ? e.promptPieces : nil,
-                                        promptImagePositions: keepsContext ? e.promptImagePositions : nil)
+                                        promptImagePositions: keepsContext ? e.promptImagePositions : nil,
+                                        tileSide: e.tileSide > 0 ? e.tileSide : nil)
             }
             let meta = NegativeMeta(id: id, capturedAt: capturedAt, place: place, eyeName: trace.eyeName,
                                     eyeWords: trace.eyeWords, wordsFromEye: trace.wordsFromEye,
@@ -190,6 +193,7 @@ actor NegativeStore {
             var w = EyeWorkings(model: e.model)
             w.width = e.width; w.rows = e.rows; w.cols = e.cols
             w.layers = e.layers; w.heads = e.heads; w.recorderMS = e.recorderMS; w.done = true
+            w.tileSide = e.tileSide ?? 0
             if let d = try? Data(contentsOf: dir.appendingPathComponent("numbers.f32")) { w.features = Self.values(d) }
             let squares = e.rows * e.cols
             if let d = try? Data(contentsOf: dir.appendingPathComponent("gaze.f32")) {

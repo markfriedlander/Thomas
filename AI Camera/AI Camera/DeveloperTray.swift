@@ -12,6 +12,7 @@
 //  pictures are quick TAESD previews while the last tile is the finished, full-quality drawing.
 //
 
+import Accelerate
 import AVFoundation
 import Foundation
 import MLX
@@ -134,6 +135,10 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         lock.withLock {
             eye?.features = features; eye?.width = width; eye?.rows = rows; eye?.cols = cols; version += 1
         }
+    }
+
+    func noteEyeTiles(side: Int) {
+        lock.withLock { eye?.tileSide = side; version += 1 }
     }
 
     func noteEyePrompt(_ pieces: [String], imagePositions: [Int]) {
@@ -611,11 +616,19 @@ final class TrayModel {
     private var piecesSeen = -1
     private(set) var likeness: EyeLikeness?
     private var likenessRequested = false
-    /// One unit of light for the whole shot: the strongest attention any word piece paid to any single
-    /// square or earlier word piece. Picture and words are lit on this same scale, so a word that barely
-    /// looked at the picture leaves it dim (design pass 2026-11-12; before, each word was scaled to its
-    /// own brightest square, which made a 32% look as bright as a 60% one).
+    /// One unit of light for the earlier words, for the whole shot: the strongest attention any word piece
+    /// paid to any single square or earlier word piece (design pass 2026-11-12; before, each word was
+    /// scaled to its own brightest square, which made a 32% look as bright as a 60% one). Since 2026-11-14
+    /// the picture has its own scale, `pictureScale`.
     private(set) var lightScale: Float = 0
+    /// The picture's own unit of light for the whole shot: the strongest attention any word piece paid to
+    /// any single square (Mark, 2026-11-14). Still one scale for every word, so a word that barely looked
+    /// at the picture leaves it dim; but the picture is no longer measured against the earlier words.
+    /// SmolVLM splits a thin share of its attention over 768 squares while one earlier word can take a
+    /// tenth of everything, so on the shared scale its squares came out at 7-8% light, nearly black. For
+    /// Qwen nothing changes: its brightest square was already the brightest thing in its shots (measured
+    /// on a saved shot, 2026-11-14). The split bar keeps stating the true shares.
+    private(set) var pictureScale: Float = 0
     /// While the shot is still developing: whether it is, and roughly how many moments are still to
     /// come, for the slider's faint track (Mark, 2026-11-13: mid-development the slider looked finished).
     private(set) var developing = false
@@ -691,6 +704,7 @@ final class TrayModel {
                 eyeWords = TrayWord.words(from: e.pieces)
                 lookCache = [:]
                 lightScale = Self.lightScale(e)
+                pictureScale = Self.pictureScale(e)
                 mostLookedSquare = Self.mostLooked(eyeWords, squares: e.squares)
             }
             // The comparison needs only the numbers, which exist before the first word.
@@ -738,6 +752,22 @@ final class TrayModel {
             if p > 0, piece.context.count > p { top = max(top, piece.context[p...].max() ?? 0) }
         }
         return top
+    }
+
+    /// The picture's unit of light: the attention that only one in a thousand of the shot's square-glows
+    /// (every word piece x every square) reaches or passes. Those few max out; everything else keeps its
+    /// order and its proportion below them. Mark, 2026-11-14: keep the attention sinks visible ("a
+    /// natural occurring phenomenon... it's important to show"), and they are: they stay the brightest
+    /// squares, at full light. They just stop dimming the rest. Measured on saved shots before choosing
+    /// it: a typical word's brightest square went from 0.51 to 0.86 light (SmolVLM) and 0.47 to 0.75 (Qwen).
+    private static func pictureScale(_ e: EyeWorkings) -> Float {
+        var all: [Float] = []
+        all.reserveCapacity(e.pieces.count * e.squares)
+        for piece in e.pieces { all.append(contentsOf: piece.gaze) }
+        guard !all.isEmpty else { return 0 }
+        vDSP.sort(&all, sortOrder: .ascending)
+        let at = all[min(all.count - 1, Int((Double(all.count - 1) * 0.999).rounded()))]
+        return at > 0 ? at : (all.last ?? 0)
     }
 
     private static func mostLooked(_ words: [TrayWord], squares: Int) -> Int? {
@@ -887,17 +917,22 @@ final class TrayModel {
 
     var currentLook: TrayLook? { currentWord.flatMap { look($0.id) } }
 
-    /// Attention as light, 0...1, on the shot's one scale. The square root is only a display curve, so
+    /// Attention on earlier words as light, 0...1, on the words' scale. The square root is only a display curve, so
     /// small amounts stay visible; the order of bright and dim is never changed.
     func brightness(_ v: Float) -> Float {
         lightScale > 0 ? min(1, max(0, v / lightScale)).squareRoot() : 0
+    }
+
+    /// Attention on the picture as light, on the picture's own scale (`pictureScale`).
+    func pictureBrightness(_ v: Float) -> Float {
+        pictureScale > 0 ? min(1, max(0, v / pictureScale)).squareRoot() : 0
     }
 
     /// The light on each square right now: likeness when a square is being compared, the word's
     /// attention on a gaze moment, otherwise none.
     var squareLight: [Float]? {
         if let c = comparedSquare { return alike(to: c)?.map { pow(max(0, $0), 0.8) } }
-        if let w = currentWord { return w.gaze.map(brightness) }
+        if let w = currentWord { return w.gaze.map(pictureBrightness) }
         return nil
     }
 
@@ -906,7 +941,7 @@ final class TrayModel {
         if v == currentIndex { return .current }
         if let c = comparedSquare {
             guard eyeWords.indices.contains(v), c < eyeWords[v].gaze.count else { return .lit(0) }
-            return .lit(brightness(eyeWords[v].gaze[c]))
+            return .lit(pictureBrightness(eyeWords[v].gaze[c]))
         }
         guard let i = currentIndex else { return .lit(0) }
         if v > i { return .future }
@@ -975,8 +1010,9 @@ final class TrayModel {
             guard currentLook == nil, eyeWords.indices.contains(i) else { return nil }
             return "\(Self.percent(eyeWords[i].imageShare)) of its attention on the picture"
         case .words:
-            guard trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true else { return nil }
-            return name == Seer.apple.name ? "Apple's eye doesn't show its workings" : "\(name) doesn't show its workings here yet"
+            // No "this eye doesn't show its workings" here (Mark, 2026-11-14): the tray shows what an eye
+            // gives; what each eye can show is said where people choose it, in the Model Library and guide.
+            return nil
         case .step(let k):
             // After the drawing, missing previews go through the model lane, which holds work while the
             // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
@@ -1005,10 +1041,16 @@ final class TrayModel {
         if let s = comparedSquare {
             var parts: [String] = []
             if current == .numbers {
-                parts.append("Before it has a single word, the eye turns your photograph into a grid of \(e.squares) squares, \(e.rows) by \(e.cols), and describes each square with \(e.width.formatted()) numbers. That grid is its whole understanding of the picture.")
+                if e.tileSide > 0 {
+                    parts.append("Before it has a single word, this eye cuts your photograph into \((e.rows / e.tileSide) * (e.cols / e.tileSide)) tiles, \(e.tileSide) by \(e.tileSide) squares each, \(e.squares) squares in all, and describes each square with \(e.width.formatted()) numbers. It also looks once at the whole picture, small. That is its whole understanding of the picture.")
+                } else {
+                    parts.append("Before it has a single word, the eye turns your photograph into a grid of \(e.squares) squares, \(e.rows) by \(e.cols), and describes each square with \(e.width.formatted()) numbers. That grid is its whole understanding of the picture.")
+                }
                 if selectedSquare == nil { parts.append("It opens on square \(s + 1), the one the eye looked at most while it spoke.") }
             }
-            parts.append("The lit squares are the ones whose \(e.width.formatted()) numbers are most like square \(s + 1)'s: brighter means more alike; dark means unlike, or opposite. Every number counts in the comparison; nothing is summarized. What all the squares have in common is set aside first, so the comparison shows how they differ.")
+            parts.append("The lit squares are the ones whose \(e.width.formatted()) numbers are most like square \(s + 1)'s: brighter means more alike; dark means unlike, or opposite. Every number counts in the comparison; nothing is summarized. " + (e.tileSide > 0
+                ? "Each tile stamps the same pattern on its squares by where they sit in the tile, so that pattern is set aside first; what remains is what the picture put there."
+                : "What all the squares have in common is set aside first, so the comparison shows how they differ."))
             if !eyeWords.isEmpty { parts.append("The words glow by how much attention each one paid to square \(s + 1) as the eye chose it.") }
             parts.append("Tap square \(s + 1) itself to read its actual numbers. Tap another square to compare from there.")
             return parts.joined(separator: "\n\n")
@@ -1023,7 +1065,11 @@ final class TrayModel {
             } else {
                 parts.append("\(Self.percent(w.imageShare)) of its attention went to the picture. This shot didn't record where the rest went.")
             }
-            parts.append("Light is on one scale for the whole description, so a word that barely looked at the picture leaves it dim.")
+            parts.append("The picture's light is on one scale for the whole description, so a word that barely looked at the picture leaves it dim; the very brightest glows, about one in a thousand, show at full light. The earlier words are lit on a scale of their own; the bar above gives the true shares.")
+            parts.append("A few squares may glow for nearly every word. Models park spare attention in a few fixed places, called attention sinks. It is a real part of how they work, not a fault in the picture.")
+            if e.tileSide > 0 {
+                parts.append("This eye looks twice: up close, tile by tile, and once at the whole picture, small. Both looks are on the picture: the close look lights single squares, the whole look lights the larger block each of its squares covered.")
+            }
             let how = e.layers > 0 && e.heads > 0 ? "Measured in \(e.layers) attention layers, averaged over \(e.heads) heads. " : ""
             parts.append(how + "Tap a square to light the squares whose numbers are like it, and the words that looked there.")
             return parts.joined(separator: "\n\n")
@@ -1044,11 +1090,6 @@ final class TrayModel {
                 ? "The eye's words, exactly as it said them. They are all the hand receives: it never sees your photograph."
                 : "In the silent loop the eye says nothing; the hand draws from your instruction."
             if wasShortened { s += "\n\nThey were too long for the hand, so the next moment shows the shorter version it received." }
-            if trace?.eye == nil, let name = trace?.eyeName, trace?.wordsFromEye ?? true {
-                s += name == Seer.apple.name
-                    ? "\n\nApple's eye doesn't show its workings. Choose Qwen as the eye in Preferences to see its numbers and where it looked."
-                    : "\n\n\(name) doesn't show its workings here yet."
-            }
             return s
         case .mixing:
             let handed = wasShortened ? shorteningHelp : "These are the eye's words exactly as the hand received them, every one."

@@ -62,6 +62,11 @@ nonisolated struct EyeWorkings: Sendable {
     /// attention heads averaged in each.
     var layers = 0
     var heads = 0
+    /// SmolVLM cuts the photograph into tiles and describes each as a `tileSide` x `tileSide` grid of
+    /// squares (8); the grid above is those tiles stitched together. 0 for an eye that sees the photo
+    /// whole (Qwen). Each tile's numbers carry a pattern set by a square's place in its tile, the same
+    /// in every tile, so `EyeLikeness` sets that pattern aside (Mark's option A, 2026-11-14).
+    var tileSide = 0
 
     var squares: Int { rows * cols }
 
@@ -105,6 +110,10 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
     private var pieceCount = 0
     private var layersSeen = 0
     private var headsSeen = 0
+    /// SmolVLM's layout for this look (tiles across and down, squares per tile side), or nil for an
+    /// eye that sees the photo whole. With it, each word's gaze over every image square (the tiles,
+    /// then the overview) is filed as one map on the stitched grid (`gridGaze`).
+    private var tiles: (rows: Int, cols: Int, side: Int)?
 
     /// Cheap enough to ask once per attention layer.
     var isRecording: Bool { lock.withLock { recording && imagePositions != nil } }
@@ -120,6 +129,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             layerGaze = []; layerShare = []; layerRow = []
             pending = nil; unread = []
             spent = 0; pieceCount = 0; layersSeen = 0; headsSeen = 0
+            tiles = nil
         }
         return true
     }
@@ -137,6 +147,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             imagePositions = nil
             layerGaze = []; layerShare = []; layerRow = []
             pending = nil; unread = []
+            tiles = nil
             spent += CFAbsoluteTimeGetCurrent() - started
             return (spent * 1000, layersSeen, headsSeen)
         }
@@ -148,7 +159,7 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
 
     /// A new prompt is being prepared: its image positions are not the last prompt's.
     func newPrompt() {
-        lock.withLock { imagePositions = nil; layerGaze = []; layerShare = []; layerRow = []; pending = nil }
+        lock.withLock { imagePositions = nil; layerGaze = []; layerShare = []; layerRow = []; pending = nil; tiles = nil }
     }
 
     /// The vision encoder has turned the photograph into numbers. `grid` is (t, h, w) in
@@ -179,6 +190,86 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
             imagePositions = usable ? MLXArray(positions) : nil
             spent += CFAbsoluteTimeGetCurrent() - started
         }
+    }
+
+    /// SmolVLM's encoder has turned the photograph into numbers (Vendor/SmolVLM, THOMAS). `features` is
+    /// [images, squares per image, width]: the tiles in reading order, then one overview of the whole
+    /// picture. The tiles across and down are read from the prompt's own `<row_r_col_c>` markers, which
+    /// the library's processor writes, so the layout is never assumed.
+    func noteTiledImage(features: MLXArray, inputIds: MLXArray, imageTokenIndex: Int) {
+        guard lock.withLock({ recording }) else { return }
+        let started = CFAbsoluteTimeGetCurrent()
+        let ids = inputIds.flattened().asArray(Int32.self)
+        let positions = ids.enumerated().compactMap { Int($0.element) == imageTokenIndex ? Int32($0.offset) : nil }
+        let f32 = features.asType(.float32)
+        eval(f32)
+        let shape = f32.shape
+        let tok = lock.withLock { tokenizer }
+        let image = Set(positions.map(Int.init))
+        let spelled = ids.enumerated().map { i, id in
+            image.contains(i) ? "" : (tok?.decode(tokenIds: [Int(id)], skipSpecialTokens: false) ?? "")
+        }
+        var tileRows = 0, tileCols = 0
+        for piece in spelled where piece.hasPrefix("<row_") {
+            let n = piece.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            if n.count == 2 { tileRows = max(tileRows, n[0]); tileCols = max(tileCols, n[1]) }
+        }
+        let per = shape.count == 3 ? shape[1] : 0
+        let side = Int(Double(per).squareRoot())
+        let tileCount = tileRows * tileCols
+        // A photo small enough for one tile has no tiles at all, only the overview: then the overview
+        // IS the grid.
+        let usable = shape.count == 3 && side > 0 && side * side == per && shape[0] == tileCount + 1
+            && positions.count == shape[0] * per
+        if usable {
+            let width = shape[2]
+            let all = f32.asArray(Float.self)
+            let gridRows = tileCount > 0 ? tileRows * side : side
+            let gridCols = tileCount > 0 ? tileCols * side : side
+            var grid = [Float](repeating: 0, count: gridRows * gridCols * width)
+            for r in 0..<gridRows {
+                for c in 0..<gridCols {
+                    let source = tileCount > 0
+                        ? ((r / side) * tileCols + c / side) * per + (r % side) * side + c % side
+                        : r * side + c
+                    let to = (r * gridCols + c) * width
+                    grid.replaceSubrange(to..<(to + width), with: all[(source * width)..<((source + 1) * width)])
+                }
+            }
+            DevelopTrace.shared.noteEyeNumbers(grid, width: width, rows: gridRows, cols: gridCols)
+            DevelopTrace.shared.noteEyeTiles(side: tileCount > 0 ? side : 0)
+            DevelopTrace.shared.noteEyePrompt(spelled, imagePositions: positions.map(Int.init))
+        } else {
+            cameraLog("EYE TRACE: SmolVLM shapes disagree (features \(shape), tiles \(tileRows)x\(tileCols), image tokens \(positions.count)); not recording this look")
+        }
+        lock.withLock {
+            imagePositions = usable ? MLXArray(positions) : nil
+            tiles = usable && tileCount > 0 ? (tileRows, tileCols, side) : nil
+            spent += CFAbsoluteTimeGetCurrent() - started
+        }
+    }
+
+    /// One word's gaze over every image square (the tiles, then the overview) as one map on the stitched
+    /// grid: each tile square keeps its own share, and each overview square's share is spread evenly over
+    /// the tile squares it covers. Nothing is lost or added: the map sums to what the squares received.
+    private static func gridGaze(_ raw: [Float], tiles t: (rows: Int, cols: Int, side: Int)) -> [Float] {
+        let per = t.side * t.side, gridCols = t.cols * t.side, gridRows = t.rows * t.side
+        guard raw.count == (t.rows * t.cols + 1) * per else { return raw }
+        var grid = [Float](repeating: 0, count: gridRows * gridCols)
+        for r in 0..<gridRows {
+            for c in 0..<gridCols {
+                grid[r * gridCols + c] = raw[((r / t.side) * t.cols + c / t.side) * per + (r % t.side) * t.side + c % t.side]
+            }
+        }
+        // Each overview square covers t.rows x t.cols squares of the grid.
+        let overview = (t.rows * t.cols) * per
+        let spread = 1 / Float(t.rows * t.cols)
+        for r in 0..<gridRows {
+            for c in 0..<gridCols {
+                grid[r * gridCols + c] += raw[overview + (r / t.rows) * t.side + c / t.cols] * spread
+            }
+        }
+        return grid
     }
 
     /// One full-attention layer's look. `queries` is [1, H, L, D], `keys` the whole cache so far
@@ -230,14 +321,16 @@ nonisolated final class EyeRecorder: @unchecked Sendable {
 
     /// Turn finished pieces into values and file them.
     private func drain() {
-        let (batch, tok) = lock.withLock { () -> ([(token: MLXArray, gaze: MLXArray, share: MLXArray, row: MLXArray)], (any Tokenizer)?) in
-            let b = unread; unread = []; return (b, tokenizer)
+        let (batch, tok, layout) = lock.withLock { () -> ([(token: MLXArray, gaze: MLXArray, share: MLXArray, row: MLXArray)], (any Tokenizer)?, (rows: Int, cols: Int, side: Int)?) in
+            let b = unread; unread = []; return (b, tokenizer, tiles)
         }
         guard !batch.isEmpty, let tok else { return }
         for entry in batch {
             let id = Int(entry.token.flattened()[0].item(Int32.self))
             let text = tok.decode(tokenIds: [id], skipSpecialTokens: true)
-            DevelopTrace.shared.appendEyePiece(.init(text: text, gaze: entry.gaze.asArray(Float.self),
+            let raw = entry.gaze.asArray(Float.self)
+            let gaze = layout.map { Self.gridGaze(raw, tiles: $0) } ?? raw
+            DevelopTrace.shared.appendEyePiece(.init(text: text, gaze: gaze,
                                                      imageShare: entry.share.item(Float.self),
                                                      context: entry.row.asArray(Float.self)))
             lock.withLock { pieceCount += 1 }
@@ -265,15 +358,39 @@ nonisolated struct EyeLikeness: Sendable {
         let n = w.squares, d = w.width
         guard n > 1, d > 0, w.features.count == n * d else { return nil }
         var x = w.features
-        var mean = [Float](repeating: 0, count: d)
-        for i in 0..<n { x.withUnsafeBufferPointer { vDSP_vadd($0.baseAddress! + i * d, 1, mean, 1, &mean, 1, vDSP_Length(d)) } }
-        var inverse = 1 / Float(n)
-        vDSP_vsmul(mean, 1, &inverse, &mean, 1, vDSP_Length(d))
+        // What is set aside before comparing: the photograph's average square, or, for a tiled eye
+        // (SmolVLM), the average square AT EACH PLACE IN A TILE across all the tiles, because that place
+        // stamps the same pattern on every tile (a simple form of what "Denoising Vision Transformers",
+        // Yang et al. 2024, models as a position-only term). Square i is compared after taking away
+        // `means[group(i)]`.
+        let side = w.tileSide
+        let tiled = side > 0 && w.rows % side == 0 && w.cols % side == 0 && w.rows * w.cols == n
+        let groups = tiled ? side * side : 1
+        let group: (Int) -> Int = { i in tiled ? ((i / w.cols) % side) * side + (i % w.cols) % side : 0 }
+        var means = [Float](repeating: 0, count: groups * d)
+        var counts = [Float](repeating: 0, count: groups)
+        for i in 0..<n {
+            let g = group(i)
+            counts[g] += 1
+            x.withUnsafeBufferPointer { src in
+                means.withUnsafeMutableBufferPointer { m in
+                    vDSP_vadd(src.baseAddress! + i * d, 1, m.baseAddress! + g * d, 1, m.baseAddress! + g * d, 1, vDSP_Length(d))
+                }
+            }
+        }
+        for g in 0..<groups where counts[g] > 0 {
+            var inverse = 1 / counts[g]
+            means.withUnsafeMutableBufferPointer { m in
+                vDSP_vsmul(m.baseAddress! + g * d, 1, &inverse, m.baseAddress! + g * d, 1, vDSP_Length(d))
+            }
+        }
         var norms = [Float](repeating: 0, count: n)
         x.withUnsafeMutableBufferPointer { buf in
             for i in 0..<n {
                 let row = buf.baseAddress! + i * d
-                vDSP_vsub(mean, 1, row, 1, row, 1, vDSP_Length(d))   // row - mean
+                means.withUnsafeBufferPointer { m in
+                    vDSP_vsub(m.baseAddress! + group(i) * d, 1, row, 1, row, 1, vDSP_Length(d))   // row - mean
+                }
                 var sq: Float = 0
                 vDSP_svesq(row, 1, &sq, vDSP_Length(d))
                 norms[i] = sq.squareRoot()

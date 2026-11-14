@@ -1069,6 +1069,7 @@ extension LocalAPIServer {
             "mostLookedSquare": m.mostLookedSquare ?? -1,
             "likenessReady": m.likeness != nil,
             "lightScale": m.lightScale,
+            "pictureScale": m.pictureScale,
             "squareLightMax": m.squareLight?.max() ?? -1,
             "openSquare": m.openSquare ?? -1,
         ]))
