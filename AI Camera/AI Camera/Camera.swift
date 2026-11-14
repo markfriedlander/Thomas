@@ -145,6 +145,9 @@ final class Lens: NSObject {
             "devicePosition":    device.map { $0.position == .front ? "front" : $0.position == .back ? "back" : "unspecified" } ?? "",
             "isiOSAppOnMac":     ProcessInfo.processInfo.isiOSAppOnMac,
             "canFlip":           canFlip,
+            "previewMirrored":   previewLayer?.connection?.isVideoMirrored ?? false,
+            "photoMirrored":     output.connection(with: .video)?.isVideoMirrored ?? false,
+            "position":          position == .front ? "front" : "back",
             // Every camera the flip could choose between, by name and the way it says it faces.
             "backPick":          backDevice().map { "\($0.localizedName) [\($0.deviceType.rawValue)]" } ?? "",
             "frontPick":         frontDevice().map { "\($0.localizedName) [\($0.deviceType.rawValue)]" } ?? "",
@@ -312,6 +315,7 @@ final class Lens: NSObject {
         // the coordinator has to be made again against it. An early-return guard here
         // was the bug: it kept the useless layer-less coordinator.
         rotationObservers.removeAll()
+        applyMirroring()   // the camera (or the layer) just changed; the mirror follows it
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device,
                                                               previewLayer: previewLayer)
         rotation = coordinator
@@ -332,6 +336,25 @@ final class Lens: NSObject {
                 Task { @MainActor in lens.apply(captureAngle: angle) }
             }
         ]
+    }
+
+    /// Mirror the PREVIEW of a camera that faces the person (so it moves like a mirror), never the
+    /// saved photo: the iPhone Camera app's default (Settings > Camera > Mirror Front Camera is off
+    /// unless turned on), and what FaceTime does. A camera faces the person when it is the front
+    /// camera, or on a Mac, where the built-in camera looks at whoever is at the screen even though
+    /// it calls itself "back" (Mark, 2026-11-13: "do what FaceTime does or whatever the ... most common
+    /// standard is"). Set explicitly rather than left to automatic adjustment, which keyed on the
+    /// camera's own position and so never mirrored the Mac.
+    private func applyMirroring() {
+        let facesPerson = position == .front || ProcessInfo.processInfo.isiOSAppOnMac
+        if let c = previewLayer?.connection, c.isVideoMirroringSupported {
+            c.automaticallyAdjustsVideoMirroring = false
+            c.isVideoMirrored = facesPerson
+        }
+        if let c = output.connection(with: .video), c.isVideoMirroringSupported {
+            c.automaticallyAdjustsVideoMirroring = false
+            c.isVideoMirrored = false
+        }
     }
 
     private func apply(previewAngle angle: CGFloat) {
