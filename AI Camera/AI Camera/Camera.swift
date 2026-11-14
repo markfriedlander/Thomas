@@ -223,7 +223,8 @@ final class Lens: NSObject {
             "focusPoint":   focusPoint.map { [Double($0.x), Double($0.y)] } ?? [],
             "focusLocked":  focusLocked,
             "exposureBias": Double(exposureBias),
-            "canAdjustExposure": canAdjustExposure
+            "canAdjustExposure": canAdjustExposure,
+            "lastTouch": lastTouch
         ]
         if let device {
             d["deviceFocusMode"] = mode(device.focusMode)
@@ -587,6 +588,23 @@ final class Lens: NSObject {
         exposureBias = 0
         return true
     }
+
+    /// A finger's point in WINDOW coordinates (SwiftUI's `.global`), converted by the preview's own
+    /// view into the layer's points: the points the square is drawn in and the layer converts for
+    /// the camera. Measuring the finger in SwiftUI's local or named spaces put the square ~59 points
+    /// from the fingertip on a landscape iPhone (Mark, 2026-11-13: "about 2/3 of the box is to the
+    /// left of where I touch"); the window is the one space both sides agree on.
+    func previewPoint(fromWindowPoint p: CGPoint) -> CGPoint? {
+        guard let view = previewLayer?.delegate as? UIView, view.window != nil else { return nil }
+        return view.convert(p, from: nil)
+    }
+
+    #if DEBUG
+    /// The last real finger on the viewfinder, for `POST /focus` to show: where it landed in the
+    /// window, where that is on the preview, and where the square went. The antenna cannot touch the
+    /// screen, so this is how a finger's tap gets checked.
+    var lastTouch: [String: Any] = [:]
+    #endif
 
     /// Brighter (positive) or darker (negative), in stops, kept within `biasLimit` and what the
     /// camera allows.

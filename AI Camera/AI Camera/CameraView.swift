@@ -125,9 +125,6 @@ struct CameraView: View {
             if lens.isAuthorized {
                 Viewfinder(lens: lens)
                     .ignoresSafeArea()
-                    // The viewfinder's own points, edge to edge, which are the preview layer's points:
-                    // a finger is measured here so the camera focuses exactly under it.
-                    .coordinateSpace(.named(Self.viewfinderSpace))
 #if DEBUG
                     // Screenshot still (see `AntennaUIBridge.viewfinderStill`). Under the square guide and
                     // all chrome, exactly where the live preview sits, so the screenshot is the real screen.
@@ -404,7 +401,7 @@ struct CameraView: View {
     /// One finger on the viewfinder: a tap, a press and hold, or (while the square shows) a drag
     /// for brightness. A pinch's fingers also arrive here; any touch a pinch joined does nothing.
     private var focusGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.viewfinderSpace))
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
                 if touchStart == nil {
                     touchStart = value.startLocation
@@ -414,7 +411,7 @@ struct CameraView: View {
                         try? await Task.sleep(for: .milliseconds(600))
                         guard !Task.isCancelled, !pinching else { return }
                         held = true
-                        lens.focus(atScreenPoint: start, lock: true)
+                        focusUnderFinger(atWindowPoint: start, lock: true)
                     }
                 }
                 let t = value.translation
@@ -430,12 +427,24 @@ struct CameraView: View {
                 holdTask?.cancel()
                 let t = value.translation
                 if !pinching, !held, biasAtDragStart == nil, hypot(t.width, t.height) <= 10 {
-                    lens.focus(atScreenPoint: value.startLocation, lock: false)
+                    focusUnderFinger(atWindowPoint: value.startLocation, lock: false)
                 }
                 touchStart = nil
                 biasAtDragStart = nil
                 pinching = false
             }
+    }
+
+    /// The finger is measured in window points and the preview converts them (see
+    /// `Lens.previewPoint(fromWindowPoint:)`), so focus and the square land under the fingertip.
+    private func focusUnderFinger(atWindowPoint w: CGPoint, lock: Bool) {
+        guard let p = lens.previewPoint(fromWindowPoint: w) else { return }
+        let accepted = lens.focus(atScreenPoint: p, lock: lock)
+#if DEBUG
+        lens.lastTouch = ["window": [Double(w.x), Double(w.y)], "preview": [Double(p.x), Double(p.y)],
+                          "lock": lock, "accepted": accepted]
+#endif
+        _ = accepted
     }
 
     /// Show the square, and let it go after a moment unless focus is locked.
@@ -448,8 +457,6 @@ struct CameraView: View {
             withAnimation(.easeOut(duration: 0.4)) { focusSquareVisible = false }
         }
     }
-
-    static let viewfinderSpace = "viewfinder"
 
     /// Apple's yellow square where you tapped, with the sun beside it riding up and down with the
     /// brightness when this camera can change it. Drawn in an edge-to-edge frame, like the square
