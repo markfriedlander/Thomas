@@ -956,6 +956,17 @@ final class TrayModel {
         return "The hand can only read about 50 words. The eye said \(said), so Thomas asked the same eye to say it again in fewer, keeping everything that could be drawn: the things, their colors, textures, and where they are. It worked from its own words; it didn't look at your photograph again. The hand received \(kept) words."
     }
 
+    /// The moment's name when the full one doesn't fit (large text, a phone held sideways): the slider
+    /// already shows where the moment sits, so the counts can go.
+    var shortTitle: String {
+        switch current {
+        case .numbers: return comparedSquare.map { "Square \($0 + 1)" } ?? "The numbers"
+        case .gaze(let i): return eyeWords.indices.contains(i) ? "\u{201C}\(eyeWords[i].bare)\u{201D}" : "Where it looked"
+        case .step(let k): return "Step \(k)"
+        default: return title
+        }
+    }
+
     /// One short line of fact for moments that need one; the rest lives behind "?".
     var fact: String? {
         switch current {
@@ -1409,9 +1420,14 @@ struct DeveloperTrayView: View {
     private var eyeFacts: some View {
         if let s = model.comparedSquare {
             VStack(alignment: .leading, spacing: 10) {
-                Text(model.eyeWords.isEmpty
-                     ? "Lit: squares whose numbers are like square \(s + 1)'s. Tap square \(s + 1) to see its numbers."
-                     : "Lit: squares whose numbers are like square \(s + 1)'s, and the words that looked there. Tap square \(s + 1) to see its numbers.")
+                Text(short
+                     ? (model.eyeWords.isEmpty
+                        ? "Lit: squares like \(s + 1). Tap \(s + 1) for its numbers."
+                        : "Lit: squares like \(s + 1), and words that looked there. Tap \(s + 1) for its numbers.")
+                     : (model.eyeWords.isEmpty
+                        ? "Lit: squares whose numbers are like square \(s + 1)'s. Tap square \(s + 1) to see its numbers."
+                        : "Lit: squares whose numbers are like square \(s + 1)'s, and the words that looked there. Tap square \(s + 1) to see its numbers."))
+                    .fixedSize(horizontal: false, vertical: true)
                     .font(short ? .caption : .footnote).foregroundStyle(.white.opacity(0.75))
                 if model.selectedSquare != nil, let w = model.currentWord {
                     Button { model.selectedSquare = nil } label: {
@@ -1422,6 +1438,7 @@ struct DeveloperTrayView: View {
             }
         } else if let look = model.currentLook {
             TraySplitBar(look: look, oneLine: short)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)   // a gauge, like the controls; see topBar
         } else if let fact = model.fact {
             Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.75))
         } else if model.current == .numbers, let e = model.trace?.eye {
@@ -1477,24 +1494,36 @@ struct DeveloperTrayView: View {
                     let on = model.current.chapter == c
                     let has = model.has(c)
                     Button { model.jump(to: c) } label: {
+                        // One line always; if a screen is ever too narrow, the label shrinks a little
+                        // rather than breaking ("LE/NS") or spilling out of its pill (Mark, 2026-11-13).
                         Text(c.label).font(.caption.weight(.bold)).tracking(short ? 0.2 : 0.6)
-                            .lineLimit(1).fixedSize()
+                            .lineLimit(1).minimumScaleFactor(0.7)
                             .foregroundStyle(on ? Color.black : Color.white.opacity(has ? 0.8 : 0.3))
                             .padding(.horizontal, short ? 9 : 14).padding(.vertical, 7)
                             .background(on ? Color.white : Color.clear, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(!has)
+                    .accessibilityShowsLargeContentViewer {
+                        Text(c.label)
+                    }
                 }
             }
             .padding(3)
             .background(.ultraThinMaterial.opacity(0.85), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
             .environment(\.colorScheme, .dark)
+            .layoutPriority(1)   // the gaps around it give way first
             Spacer(minLength: 8)
             roundPill("questionmark") { model.helpOpen.toggle() }
         }
         .padding(.horizontal, short ? 8 : 16)
+        // The controls grow with the person's text size up to the largest standard size, which fits
+        // every supported screen; past that (Accessibility sizes) they stop growing and a long press
+        // shows the label large instead (the Large Content Viewer, as Apple's own bars do). The reading
+        // content, the sentence, the words and "?", keeps growing all the way. (Mark, 2026-11-13: he uses
+        // larger text himself: "I wanna make sure it works for everybody.")
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     /// Bottom: the moment, then ‹ the slider › (and Live while the shot is still developing).
@@ -1523,20 +1552,28 @@ struct DeveloperTrayView: View {
         }
         .padding(.horizontal, short ? 8 : 16)
         .padding(.bottom, 4)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)   // see topBar
     }
 
     @ViewBuilder
     private func momentName(_ font: Font) -> some View {
-        Group {
-            if isDeveloping && model.following {
-                Label(model.title, systemImage: "circle.fill").labelStyle(LiveDot())
-            } else {
-                Text(model.title)
-            }
+        // The full name if it fits; otherwise the short one (large text, Mark 2026-11-13: "make sure it
+        // works for everybody"), shrinking a little before it would ever be cut off.
+        ViewThatFits(in: .horizontal) {
+            momentLabel(model.title)
+            momentLabel(model.shortTitle)
         }
         .font(font.weight(.semibold))
-        .lineLimit(1)
         .minimumScaleFactor(0.8)
+    }
+
+    @ViewBuilder
+    private func momentLabel(_ text: String) -> some View {
+        if isDeveloping && model.following {
+            Label(text, systemImage: "circle.fill").labelStyle(LiveDot()).lineLimit(1)
+        } else {
+            Text(text).lineLimit(1)
+        }
     }
 
     /// Behind "?": this moment, explained.
@@ -1567,6 +1604,7 @@ struct DeveloperTrayView: View {
     private func pill<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         content()
             .lineLimit(1)
+            .minimumScaleFactor(0.75)
             .padding(.horizontal, 13).padding(.vertical, 8)
             .background(.ultraThinMaterial.opacity(0.85), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
@@ -1656,14 +1694,22 @@ struct TraySplitBar: View {
             }
             .frame(height: oneLine ? 6 : 8)
             if oneLine {
-                HStack(spacing: 10) {
-                    ForEach(parts.indices, id: \.self) { i in
-                        (Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)
-                         + Text(" " + ["picture", "instructions", "already said"][i]).font(.caption).foregroundColor(.white.opacity(0.7)))
-                            .lineLimit(1)
+                // Labeled if it fits; otherwise just the three percentages in the bar's colors (large text).
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        ForEach(parts.indices, id: \.self) { i in
+                            (Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)
+                             + Text(" " + ["picture", "instructions", "already said"][i]).font(.caption).foregroundColor(.white.opacity(0.7)))
+                                .lineLimit(1).fixedSize()
+                        }
+                    }
+                    HStack(spacing: 14) {
+                        ForEach(parts.indices, id: \.self) { i in
+                            Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)
+                                .lineLimit(1).minimumScaleFactor(0.75)
+                        }
                     }
                 }
-                .minimumScaleFactor(0.75)
             } else {
             HStack(alignment: .top, spacing: 0) {
                 ForEach(parts.indices, id: \.self) { i in
@@ -1791,6 +1837,10 @@ struct TrayStepButton: View {
                 })
             .accessibilityElement()
             .accessibilityLabel(label)
+            .accessibilityShowsLargeContentViewer {
+                Image(systemName: symbol)
+                Text(label)
+            }
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { _ = step() }
     }
