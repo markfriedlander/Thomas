@@ -10,6 +10,7 @@ import CoreML
 import Foundation
 import MachO
 import SwiftUI
+import UIKit
 
 // ==== LEGO START: 41 Preparing The Hand (Download, Then Prepare) ====
 
@@ -41,7 +42,15 @@ final class HandPreparation {
     private(set) var now = Date()
     private var ticker: Task<Void, Never>?
 
-    private init() {}
+    private init() {
+        // Remember when Thomas last went to the background, so a timing taken across it isn't kept
+        // as "how long this takes" (see markPrepared). Registered here because the camera screen
+        // touches `shared` at launch (prepareAfterLaunchIfNeeded).
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: nil) { _ in
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "handPrepLastBackgrounded")
+        }
+    }
 
     var isPreparing: Bool { phase == .preparing }
     var elapsed: TimeInterval { started.map { now.timeIntervalSince($0) } ?? 0 }
@@ -97,7 +106,14 @@ final class HandPreparation {
     /// load slow enough to have been a real preparation.
     nonisolated static func markPrepared(_ repoID: String, seconds: Double?) {
         UserDefaults.standard.set(currentBuild, forKey: "handPreparedFor.\(repoID)")
-        if let seconds, seconds > 20 { UserDefaults.standard.set(seconds, forKey: "handPrepSeconds.\(repoID)") }
+        // Keep the time only when Thomas stayed in front the whole way. A phone call during the
+        // preparation (Mark, 2026-11-13) sent Thomas to the background, where iOS gives it little
+        // time: it took 7:48 instead of about 1:30, and that would have become the next "of about".
+        let backgrounded = UserDefaults.standard.double(forKey: "handPrepLastBackgrounded")
+        if let seconds, seconds > 20,
+           backgrounded < Date().timeIntervalSince1970 - seconds {
+            UserDefaults.standard.set(seconds, forKey: "handPrepSeconds.\(repoID)")
+        }
     }
 
     #if DEBUG
