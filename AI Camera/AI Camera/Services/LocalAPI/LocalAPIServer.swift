@@ -2054,7 +2054,21 @@ extension LocalAPIServer {
             "appGroup": SharedModelStore.appGroupID,
             "root":     SharedModelStore.root.path,
             "thisApp":  SharedModelStore.thisAppID,
-            "models":   entries
+            "models":   entries,
+            // The Model Library's own view: each catalog model, whether Thomas counts it as
+            // installed (finished, isRepoReady since SharedModelStoreKit 1.4.0), whether its files are
+            // merely on disk, and whether it is the selected eye or hand. Added 2026-11-13 so the
+            // regression check can see what a person sees in the library.
+            "catalog":  ModelCatalog.all.map { m -> [String: Any] in
+                let key = sharedStoreKey(forRepoID: m.id)
+                let s = Settings.shared
+                let selected = m.job == .seeing ? s.seer.modelID == m.id : s.selectedDrawer == m.id
+                return ["id": m.id, "name": m.displayName,
+                        "job": m.job == .seeing ? "eye" : "hand",
+                        "installed": m.isInstalled,
+                        "filesOnDisk": m.isBuiltIn ? true : SharedModelStore.isRepoDownloaded(key),
+                        "selected": selected]
+            }
         ]))
     }
 
