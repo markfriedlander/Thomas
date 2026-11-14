@@ -84,6 +84,12 @@ final class Lens: NSObject {
     /// an iPad, or a Mac using an iPhone as its camera has two (Mark, 2026-11-13).
     private(set) var canFlip = false
 
+    /// The shape of the picture the camera delivers, upright (width / height). The viewfinder shows the
+    /// WHOLE picture (aspect-fit, bands where the screen is another shape), so this is also the shape
+    /// of the picture on screen, and the square guide is drawn inside it. Mark, 2026-11-13: you must
+    /// always know exactly what is captured; a full-screen preview hid up to 46% of every photo.
+    private(set) var pictureAspect: CGFloat = 3.0 / 4.0
+
     /// Current optical/digital zoom factor. On a virtual device this is one continuous
     /// scale spanning every lens — crossing a seam swaps the physical camera silently.
     private(set) var zoom: CGFloat = 1
@@ -156,6 +162,15 @@ final class Lens: NSObject {
                     return "\(dim.width)x\(dim.height)" })).sorted() } ?? [],
             "maxPhoto":          "\(output.maxPhotoDimensions.width)x\(output.maxPhotoDimensions.height)",
             "sessionPreset":     session.sessionPreset.rawValue,
+            // Where the WHOLE captured picture lies relative to the preview on screen (Apple's own
+            // conversion), and the screen area the preview occupies, in points. A picture rect larger
+            // than the layer means part of every photo is off screen (2026-11-13, Mark: "There is a
+            // portion of image that is captured that isn't actually visible through the view finder?").
+            "pictureRectOnScreen": previewLayer.map { l -> [Double] in
+                let r = l.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return [r.minX, r.minY, r.width, r.height].map { Double($0) } } ?? [],
+            "previewBounds":     previewLayer.map { [Double($0.bounds.width), Double($0.bounds.height)] } ?? [],
+            "pictureAspect":     Double(pictureAspect),
             "previewMirrored":   previewLayer?.connection?.isVideoMirrored ?? false,
             "photoMirrored":     output.connection(with: .video)?.isVideoMirrored ?? false,
             "position":          position == .front ? "front" : "back",
@@ -387,7 +402,19 @@ final class Lens: NSObject {
         }
     }
 
+
+    /// Recompute `pictureAspect` from the format in use and the preview's rotation.
+    private func updatePictureAspect() {
+        guard let device else { return }
+        let d = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        guard d.width > 0, d.height > 0 else { return }
+        let angle = previewLayer?.connection?.videoRotationAngle ?? 0
+        let quarter = Int(angle.rounded()) % 180 == 90
+        pictureAspect = quarter ? CGFloat(d.height) / CGFloat(d.width) : CGFloat(d.width) / CGFloat(d.height)
+    }
+
     private func apply(previewAngle angle: CGFloat) {
+        defer { updatePictureAspect() }
         let angle = macAngle ?? angle
         guard let connection = previewLayer?.connection,
               connection.isVideoRotationAngleSupported(angle) else { return }

@@ -30,25 +30,44 @@ import UIKit
 struct Viewfinder: UIViewRepresentable {
     let lens: Lens
 
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.backgroundColor = .black
-        view.layer.videoGravity = .resizeAspectFill
-        // Hand the layer its session just AFTER this view update, never inside it. On a Mac,
+    func makeUIView(context: Context) -> ViewfinderView {
+        let view = ViewfinderView()
+        // Hand the layers their session just AFTER this view update, never inside it. On a Mac,
         // setting `session` starts the capture graph synchronously and AVFoundation spins the run
         // loop while it waits; events handled during that spin re-entered SwiftUI's view update
         // until AttributeGraph aborted (Thomas 1.0 crash on launch, MacBook Air M2, 2026-11-06).
         // An iPhone doesn't block there, but the deferred hand-off is just as correct for it.
         DispatchQueue.main.async {
-            view.layer.session = lens.session
+            view.picture.layer.session = lens.session
             // The coordinator needs the layer to compute a preview angle at all — with no
             // layer it reports 0 forever, which is exactly the sideways bug.
-            lens.attach(previewLayer: view.layer)
+            lens.attach(previewLayer: view.picture.layer)
         }
         return view
     }
 
-    func updateUIView(_ uiView: PreviewView, context: Context) {}
+    func updateUIView(_ uiView: ViewfinderView, context: Context) {}
+
+    /// The viewfinder: the camera's WHOLE picture, fitted, so everything captured is visible (Mark's
+    /// rule, 2026-11-13: a full-screen preview hid up to 46% of every photo off the edges). Where the
+    /// screen is another shape the bands are plain black (Mark: "if we're just gonna have a backdrop, it
+    /// should be black"). A live blur of the scene was tried: a second preview layer on the same session
+    /// got no frames on a Mac, and blurring the camera's own frames wasn't worth the cost (Mark: "It's
+    /// not worth half an hour").
+    final class ViewfinderView: UIView {
+        let picture = PreviewView()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .black
+            picture.layer.videoGravity = .resizeAspect
+            picture.backgroundColor = .clear
+            picture.frame = bounds
+            picture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(picture)
+        }
+        required init?(coder: NSCoder) { fatalError("Viewfinder is made in code") }
+    }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
@@ -104,7 +123,7 @@ struct CameraView: View {
                     .overlay {
                         if let still = bridge.viewfinderStill {
                             GeometryReader { geo in
-                                Image(uiImage: still).resizable().scaledToFill()
+                                Image(uiImage: still).resizable().scaledToFit()
                                     .frame(width: geo.size.width, height: geo.size.height)
                                     .clipped()
                             }
@@ -268,8 +287,13 @@ struct CameraView: View {
             .accessibilityLabel("Preferences")   // the glyph's own name read "Edit"
     }
 
-    /// Selfie flip — the standard camera-flip loop. ⚠️ Front-camera mirroring is a device-tuning
-    /// question (see `Lens.flip`).
+    /// Selfie flip — the standard camera-flip loop (its preview mirrors, its photo doesn't; see
+    /// `Lens.applyMirroring`). Shown only when there is a second camera to flip to.
+    ///
+    /// (Tried and taken out, 2026-11-13: on a Mac this corner chose a wide or tall picture by switching
+    /// the camera's format, and square layouts used the square format, which shows the most of the
+    /// room. Switching formats shortly after launch left the preview black, though photos still came;
+    /// the same switch triggered later by hand worked. Not understood yet; see NEXT.md.)
     private var flipButton: some View {
         Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
             // Only when there is a second camera (a Mac's built-in camera is the only one). Hidden by
@@ -310,22 +334,26 @@ struct CameraView: View {
     /// drawer's shape. It dims everything outside the centred square and outlines it, so you
     /// compose *for the square the crop keeps* rather than being surprised by it later.
     ///
-    /// ⚠️ This is a *framing* guide, not a pixel-exact crop preview: the preview layer fills the
-    /// screen (`aspectFill`), so the on-screen square and the sensor's centre square line up
-    /// closely but not perfectly. `Darkroom.centerCropSquare` takes the sensor's true centre.
-    /// Alignment is worth a device check once the phone's free.
+    /// Exact since 2026-11-13: the preview shows the whole picture (aspect-fit), and the square is
+    /// drawn inside that picture, so it is the very centre square `Darkroom.centerCropSquare` keeps.
+    /// (Before, the preview filled the screen and the guide only approximated the crop.)
     @ViewBuilder
     private var squareGuide: some View {
+        // The picture on screen: the camera's whole frame, fitted (aspect-fit, like the preview layer).
+        // For the square layouts the part outside the saved square is dimmed INSIDE the picture, so
+        // the clear square is exactly the photo's centre square that Darkroom.centerCropSquare keeps
+        // (Mark, 2026-11-13: you must always know exactly what is captured).
         if settings.layout.isSquareFormat {
             GeometryReader { geo in
-                let side = min(geo.size.width, geo.size.height)
-                let square = CGRect(x: (geo.size.width - side) / 2,
-                                    y: (geo.size.height - side) / 2,
+                let picture = AVMakeRect(aspectRatio: CGSize(width: lens.pictureAspect, height: 1),
+                                         insideRect: CGRect(origin: .zero, size: geo.size))
+                let side = min(picture.width, picture.height)
+                let square = CGRect(x: picture.midX - side / 2, y: picture.midY - side / 2,
                                     width: side, height: side)
                 ZStack {
-                    // Dim outside the square (even-odd: the whole area minus the square).
+                    // Dim the picture outside the square (even-odd: the picture minus the square).
                     Path { p in
-                        p.addRect(CGRect(origin: .zero, size: geo.size))
+                        p.addRect(picture)
                         p.addRect(square)
                     }
                     .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
