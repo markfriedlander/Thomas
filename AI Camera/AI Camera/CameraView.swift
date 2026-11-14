@@ -372,10 +372,17 @@ struct CameraView: View {
 
     /// The zoom factor, said plainly. Principle 2: a real number, not five dots.
     /// Only while it's changing — the capture screen owes you nothing at rest.
+    /// Apple's way of writing a zoom: "1x", "2x", "0.5x", "2.4x" (a whole number has no
+    /// decimal). The number is already in Apple's scale (`Lens.displayZoom`).
+    static func appleZoomLabel(_ z: CGFloat) -> String {
+        let tenths = (z * 10).rounded() / 10
+        return tenths == tenths.rounded() ? String(format: "%.0f×", tenths) : String(format: "%.1f×", tenths)
+    }
+
     @ViewBuilder
     private var zoomReadout: some View {
         if zoomAnchor != nil {
-            Text(String(format: "%.1f×", lens.zoom))
+            Text(Self.appleZoomLabel(lens.displayZoom))
                 .font(.footnote.monospacedDigit().weight(.medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10).padding(.vertical, 5)

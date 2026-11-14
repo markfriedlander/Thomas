@@ -101,11 +101,33 @@ final class Lens: NSObject {
         device?.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat(truncating: $0) } ?? []
     }
 
+    /// What Apple's own Camera calls a zoom factor, relative to ours. The device's raw scale
+    /// starts at its widest lens (1.0 = the ultra-wide on a phone that has one), but Apple's
+    /// Camera calls the main lens 1x and the ultra-wide 0.5x. The SDK documents this multiplier
+    /// as the way to stay consistent with Apple's system UI (iOS 18+). Mark, 2026-11-13: Thomas
+    /// read 1.0 to 12.0 where Apple's Camera reads 0.5 to 10 on the same phone; "let's match
+    /// Apple so it feels consistent."
+    var displayMultiplier: CGFloat {
+        guard let m = device?.displayVideoZoomFactorMultiplier, m > 0 else { return 1 }
+        return m
+    }
+
+    /// The zoom as Apple's Camera would label it (0.5x, 1x, 2x...).
+    var displayZoom: CGFloat { zoom * displayMultiplier }
+
     var zoomRange: ClosedRange<CGFloat> {
         guard let device else { return 1...1 }
-        // Cap the top: a device will happily offer 100×+ of pure digital upscaling, which
-        // is not zoom, it's cropping. 12× is past every optical seam on current phones.
-        return device.minAvailableVideoZoomFactor...min(device.maxAvailableVideoZoomFactor, 12)
+        // Cap the top where Apple's Camera stops, in Apple's numbers: 10x on a phone without a
+        // telephoto (Mark's 16 Plus, measured by him in Apple's Camera), and 5x the telephoto on
+        // a phone with one (Apple's published "digital zoom up to" for its Pro phones: a 2x tele
+        // reaches 10x, 3x reaches 15x, 5x reaches 25x). Past that a device offers 100x+ of pure
+        // upscaling, which is cropping, not zoom. Only Mark's phone is measured; a newer Pro may
+        // let Apple's Camera go further than this rule.
+        let longestLens = (switchOverZoomFactors.last ?? 1) * displayMultiplier
+        let appleTop = max(10, 5 * longestLens)
+        let low = device.minAvailableVideoZoomFactor
+        let high = max(low, min(device.maxAvailableVideoZoomFactor, appleTop / displayMultiplier))
+        return low...high
     }
 
     // DEBUG-only diagnostics. Every member below is read ONLY by the DEBUG antenna's diagnostic
@@ -117,14 +139,20 @@ final class Lens: NSObject {
     /// `ClosedRange` traps the instant `minAvailableVideoZoomFactor` exceeds the 12× cap
     /// (`low...high` with low > high). This is the antenna's way to SEE those numbers, and
     /// spot exactly that condition, without triggering the crash it's hunting for. `cap` is the
-    /// 12 the range clamps to; if `deviceMin > cap`, `zoomRange` above will crash on read.
+    /// top the range clamps to (raw). `zoomRange` now guards low > high itself; the numbers stay
+    /// for seeing. The display* entries are what a person reads on screen (Apple's numbers).
     var rawZoomBounds: [String: Double]? {
         guard let device else { return nil }
+        let range = zoomRange
         return [
             "deviceMin": Double(device.minAvailableVideoZoomFactor),
             "deviceMax": Double(device.maxAvailableVideoZoomFactor),
-            "cap": 12.0,
-            "current": Double(zoom)
+            "cap": Double(range.upperBound),
+            "current": Double(zoom),
+            "displayMultiplier": Double(displayMultiplier),
+            "displayMin": Double(range.lowerBound * displayMultiplier),
+            "displayMax": Double(range.upperBound * displayMultiplier),
+            "displayCurrent": Double(displayZoom)
         ]
     }
 
@@ -271,9 +299,7 @@ final class Lens: NSObject {
             session.addInput(input)
             self.device = device
             self.position = device.position == .front ? .front : .back
-            // Start at 1× — the wide lens on every modern iPhone, not the ultra-wide. On a
-            // virtual device the zoom scale is continuous ACROSS lenses, so 1.0 is not
-            // necessarily the minimum; `switchOverZoomFactors` says where the seams are.
+            // Start at Apple's 1x, the main lens, not the ultra-wide (see `defaultZoom`).
             zoom = defaultZoom(for: device)
             applyZoom(zoom)
         }
@@ -449,10 +475,13 @@ final class Lens: NSObject {
 
     // MARK: - Zoom
 
-    /// 1× on a virtual device isn't the minimum — on a triple camera the ultra-wide sits
-    /// below it. Open where the native camera opens.
+    /// Open where Apple's Camera opens: its 1x, the main lens. On a virtual device with an
+    /// ultra-wide the raw scale starts AT the ultra-wide (raw 1.0 = Apple's 0.5x), so Apple's 1x
+    /// is raw 1 / displayMultiplier (2.0 on Mark's 16 Plus). Until 2026-11-13 this returned raw
+    /// 1.0 and so opened on the ultra-wide, believing raw 1.0 was the main lens.
     private func defaultZoom(for device: AVCaptureDevice) -> CGFloat {
-        max(device.minAvailableVideoZoomFactor, min(1.0, device.maxAvailableVideoZoomFactor))
+        let range = zoomRange
+        return min(max(1 / displayMultiplier, range.lowerBound), range.upperBound)
     }
 
     /// Pinch. `scale` is the gesture's cumulative magnification since it began, so the
