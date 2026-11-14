@@ -1041,11 +1041,13 @@ final class TrayModel {
         if let s = comparedSquare {
             var parts: [String] = []
             if current == .numbers {
-                if e.tileSide > 0 {
-                    parts.append("Before it has a single word, this eye cuts your photograph into \((e.rows / e.tileSide) * (e.cols / e.tileSide)) tiles, \(e.tileSide) by \(e.tileSide) squares each, \(e.squares) squares in all, and describes each square with \(e.width.formatted()) numbers. It also looks once at the whole picture, small. That is its whole understanding of the picture.")
-                } else {
-                    parts.append("Before it has a single word, the eye turns your photograph into a grid of \(e.squares) squares, \(e.rows) by \(e.cols), and describes each square with \(e.width.formatted()) numbers. That grid is its whole understanding of the picture.")
-                }
+                // Mark, 2026-11-14: explain what the numbers are, what their count means, and what big,
+                // small and negative mean; "on its map" is his wording.
+                let cut = e.tileSide > 0
+                    ? "It cuts your photograph into \((e.rows / e.tileSide) * (e.cols / e.tileSide)) tiles of \(e.tileSide) by \(e.tileSide) squares, \(e.squares) squares in all, and also looks once at the whole picture, small."
+                    : "Your photograph became \(e.squares) squares, \(e.rows) by \(e.cols)."
+                parts.append("Before it says a word, the eye translates each square of your photo into its own inner language: a list of \(e.width.formatted()) numbers, the same size it uses for every word it reads or writes. That size is set by how the model was built, not by your photo. " + cut)
+                parts.append("No single number means anything we can name. Together they place the square on the model's map of ideas, the way coordinates place a city on a map; researchers call such a list a vector, or an embedding. Squares it sees as alike sit close together on its map. A minus sign is a direction, not a lack, like west instead of east; a big number, either way, means far out in that direction.")
                 if selectedSquare == nil { parts.append("It opens on square \(s + 1), the one the eye looked at most while it spoke.") }
             }
             parts.append("The lit squares are the ones whose \(e.width.formatted()) numbers are most like square \(s + 1)'s: brighter means more alike; dark means unlike, or opposite. Every number counts in the comparison; nothing is summarized. " + (e.tileSide > 0
@@ -1082,7 +1084,7 @@ final class TrayModel {
         case .reality:
             return "What the lens saw, exactly as you shot it. Everything after this is the machine's: the eye reads the photograph, then the hand draws from the eye's words alone."
         case .numbers:
-            return "Before it has a single word, the eye turns your photograph into a grid of squares, each described by a long list of numbers. Tap any square to light the squares whose numbers are like it."
+            return "Before it says a word, the eye translates each square of your photo into a list of numbers, a vector: a place on the model's map of ideas. Squares it sees as alike sit close together on its map. Tap any square to light the squares whose numbers are like it."
         case .gaze:
             return "Where the eye's attention went as it chose this word."
         case .words:
@@ -2078,7 +2080,7 @@ struct SquareNumbersSheet: View {
 
     private func help(_ numbers: [Float]) -> String {
         let lo = numbers.min().map(fmt) ?? "", hi = numbers.max().map(fmt) ?? ""
-        return "This is how \(eye.model)'s eye holds square \(square + 1) of your photograph, before it has a single word for it: \(numbers.count.formatted()) numbers straight out of its vision encoder, shown to 3 decimal places. Here they run from \(lo) to \(hi).\n\nEach number is tinted by its value: warm above zero, cool below, brighter the further from zero.\n\nA single number doesn't mean anything nameable on its own; the meaning is spread across all of them together. That's why the tray compares squares using all \(numbers.count.formatted()) at once."
+        return "This is how \(eye.model) holds square \(square + 1) of your photograph, before it has a single word for it: \(numbers.count.formatted()) numbers, shown to 3 decimal places, in the same inner language it uses for every word. Here they run from \(lo) to \(hi).\n\nTogether they are one vector, also called an embedding: the square's place on the model's map of ideas, the way coordinates place a city on a map. No single number means anything we can name; the meaning is in all of them at once, which is why the tray compares squares using all \(numbers.count.formatted()).\n\nEach number is tinted by its value: warm above zero, cool below, brighter the further from zero. A minus sign is a direction, not a lack, like west instead of east."
     }
 
     private func tint(_ v: Float, peak: Float) -> Color {
