@@ -250,13 +250,45 @@ nonisolated struct Eye: Sendable {
         )
 
         do {
-            let response = try await session.respond(
+            // Streamed, not one reply (2026-11-14): the words reach the Developer Tray as they arrive,
+            // and Apple's own counts and timing are recorded for the shot (EyeIntake). Only the shot's
+            // own look reports; an antenna /look streams the same way and records nothing.
+            let shot = DevelopTrace.shared.shotWaitingForEye()
+            let started = Date()
+            var firstWords: Date?
+            var text = ""
+            var usage: LanguageModelSession.Usage?
+            let stream = session.streamResponse(
                 options: GenerationOptions(temperature: temperature)
             ) {
                 "Describe what you see."
                 Attachment(image)
             }
-            return .spoke(text: response.content, tokens: response.usage.totalTokenCount)
+            for try await snapshot in stream {
+                if firstWords == nil, !snapshot.content.isEmpty { firstWords = Date() }
+                text = snapshot.content
+                usage = snapshot.usage
+                if shot != nil { DevelopTrace.shared.noteEyeWordsArriving(text) }
+            }
+            let ended = Date()
+            if let shot, let usage {
+                let spoke = firstWords ?? ended
+                DevelopTrace.shared.noteEyeIntake(EyeIntake(
+                    pictureTokens: nil,
+                    inputTokens: usage.input.totalTokenCount,
+                    wordPieces: usage.output.totalTokenCount,
+                    lookSeconds: spoke.timeIntervalSince(started),
+                    writeSeconds: ended.timeIntervalSince(spoke)))
+                // What the photo alone cost: about half a second of Apple's own counting, done after
+                // the look and off the shot's path.
+                let eye = self
+                Task.detached(priority: .utility) {
+                    if let n = await eye.priceOfLooking(at: image) {
+                        DevelopTrace.shared.notePictureTokens(n, shotID: shot)
+                    }
+                }
+            }
+            return .spoke(text: text, tokens: usage?.totalTokenCount)
 
         } catch let error as LanguageModelError {
             // The machine wouldn't speak. WHY it wouldn't speak is the interesting part,

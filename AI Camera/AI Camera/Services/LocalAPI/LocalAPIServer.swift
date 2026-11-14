@@ -1026,6 +1026,7 @@ extension LocalAPIServer {
         let names = m.frames.map { f -> String in
             switch f {
             case .reality: return "reality"
+            case .intake: return "intake"
             case .numbers: return "numbers"
             case .gaze(let i): return "gaze\(i)"
             case .words: return "words"

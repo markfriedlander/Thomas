@@ -60,6 +60,20 @@ nonisolated enum DevelopmentKeepsake: String, CaseIterable, Codable, Sendable {
 /// live (polling `version`); the keepsakes read it when the shot is done. Small on purpose: a 20-step
 /// Core ML shot is 21 x 16,384 floats (~1.3 MB), and everything is replaced when the next shot starts.
 /// A lock, not an actor, because both engines report steps synchronously.
+/// How Apple's eye took in a shot's photograph, from what Apple's own tools report (iOS 27): the tokens
+/// it read (the photo, its instructions and the request together), how many of those were the photo
+/// (counted separately, a moment after the look, so a shot never waits for it), how long it worked
+/// before its first words, and how many word pieces it wrote in how long. Apple's eye shows no squares
+/// or gaze; these are what it does give (measured on the Mac, 2026-11-14: a sunset photo cost 131
+/// tokens of 243 read, 3.4 to 8.5 s before the first words, then words in bursts of about ten pieces).
+nonisolated struct EyeIntake: Codable, Sendable, Equatable {
+    var pictureTokens: Int?
+    var inputTokens: Int
+    var wordPieces: Int
+    var lookSeconds: Double
+    var writeSeconds: Double
+}
+
 nonisolated final class DevelopTrace: @unchecked Sendable {
     static let shared = DevelopTrace()
     private let lock = NSLock()
@@ -80,7 +94,8 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         let latents: [[Float]]     // one per completed step, in order
         let final: CGImage?        // the finished drawing at the model's own size, once drawn
         let eye: EyeWorkings?      // the eye's numbers and gaze, when the eye can show them (EyeWorkings.swift)
-        let eyeName: String?       // which eye looked, so the tray can say why there are no workings
+        let eyeName: String?       // which eye looked
+        var intake: EyeIntake? = nil   // Apple's eye: what its photo cost and how it spoke (EyeIntake)
     }
 
     private var version = 0
@@ -99,6 +114,7 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
     private var eye: EyeWorkings?
     private var eyeName: String?
     private var eyeOpen = false
+    private var intake: EyeIntake?
 
     /// A new shot begins developing: forget everything from the last one, so a shot that draws
     /// nothing can never inherit another shot's steps.
@@ -106,13 +122,35 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         lock.withLock {
             shotID = id; self.photo = photo; eyeWords = nil; wordsFromEye = true; prompt = ""; steps = 0
             isGuess = false; channelsLast = false; hand = ""; shape = []; latents = []; final = nil
-            eye = nil; eyeName = nil; eyeOpen = id != nil
+            eye = nil; eyeName = nil; eyeOpen = id != nil; intake = nil
             version += 1
         }
     }
 
     func noteEyeWords(_ words: String, fromEye: Bool = true) {
         lock.withLock { eyeWords = words; wordsFromEye = fromEye; eyeOpen = false; version += 1 }
+    }
+
+    /// The words so far, while the eye is still speaking (Apple's eye streams them), so the tray's Live
+    /// view shows them as they arrive. Only for the shot's own look: nothing else can write here.
+    func noteEyeWordsArriving(_ words: String) {
+        lock.withLock { if eyeOpen { eyeWords = words; version += 1 } }
+    }
+
+    /// The shot waiting for its eye, if one is (so a look can tell it is the shot's own, not an antenna
+    /// /look or a condense call).
+    func shotWaitingForEye() -> UUID? {
+        lock.withLock { eyeOpen ? shotID : nil }
+    }
+
+    func noteEyeIntake(_ i: EyeIntake) {
+        lock.withLock { if eyeOpen { intake = i; version += 1 } }
+    }
+
+    /// The photo's token count arrives a moment after the look; it is filed only if the same shot is
+    /// still the one being traced.
+    func notePictureTokens(_ n: Int, shotID id: UUID) {
+        lock.withLock { if shotID == id, intake != nil { intake?.pictureTokens = n; version += 1 } }
     }
 
     /// Which eye is about to look at this shot (any eye, including Apple's, which shows no workings).
@@ -188,7 +226,7 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
             return Snapshot(version: version, shotID: shotID, photo: photo, eyeWords: eyeWords,
                             wordsFromEye: wordsFromEye, prompt: prompt, steps: steps, isGuess: isGuess, channelsLast: channelsLast,
                             hand: hand, shape: shape, latents: latents, final: final,
-                            eye: eye, eyeName: eyeName)
+                            eye: eye, eyeName: eyeName, intake: intake)
         }
     }
 }
@@ -399,14 +437,14 @@ extension DeveloperTray {
 /// no eye stage when the eye was off, no drawing stages when the hand did not draw, and no numbers
 /// or gaze unless the eye could show them (Qwen 3.5, through `EyeRecorder`).
 nonisolated enum TrayFrame: Hashable, Sendable {
-    case reality, numbers, gaze(Int), words, mixing, step(Int), finished
+    case reality, intake, numbers, gaze(Int), words, mixing, step(Int), finished
 
     /// What fills the canvas: the photograph (lens and eye), the words (the eye's words, then the words
     /// handed to the hand), or the drawing. The flow photograph -> words -> drawing is Mark's
     /// (2026-11-13): the words replace the picture, then dissolve into the hand's first noise.
     var phase: TrayPhase {
         switch self {
-        case .reality, .numbers, .gaze: return .picture
+        case .reality, .intake, .numbers, .gaze: return .picture
         case .words, .mixing: return .words
         case .step, .finished: return .drawing
         }
@@ -416,7 +454,7 @@ nonisolated enum TrayFrame: Hashable, Sendable {
     var chapter: TrayChapter {
         switch self {
         case .reality: return .lens
-        case .numbers, .gaze, .words: return .eye
+        case .intake, .numbers, .gaze, .words: return .eye
         case .mixing, .step, .finished: return .hand
         }
     }
@@ -779,6 +817,7 @@ final class TrayModel {
 
     private func rebuild(_ t: DevelopTrace.Snapshot?, mixingNow: Bool) {
         var f: [TrayFrame] = [.reality]
+        if t?.intake != nil, t?.wordsFromEye ?? true { f.append(.intake) }
         if let e = t?.eye, e.squares > 0 {
             f.append(.numbers)
             for i in eyeWords.indices { f.append(.gaze(i)) }
@@ -962,6 +1001,7 @@ final class TrayModel {
     var title: String {
         switch current {
         case .reality: return "Your photograph"
+        case .intake: return "How it took in your photo"
         case .numbers:
             return comparedSquare.map { "The numbers \u{00B7} square \($0 + 1)" } ?? "The numbers"
         case .gaze(let i):
@@ -1006,6 +1046,11 @@ final class TrayModel {
     /// One short line of fact for moments that need one; the rest lives behind "?".
     var fact: String? {
         switch current {
+        case .intake:
+            guard let i = trace?.intake else { return nil }
+            let look = String(format: "%.1f", i.lookSeconds)
+            return i.pictureTokens.map { "Your photo became \($0) tokens \u{00B7} it looked for \(look) s" }
+                ?? "It looked for \(look) s before its first words"
         case .gaze(let i):
             guard currentLook == nil, eyeWords.indices.contains(i) else { return nil }
             return "\(Self.percent(eyeWords[i].imageShare)) of its attention on the picture"
@@ -1081,6 +1126,17 @@ final class TrayModel {
 
     private var plainHelp: String {
         switch current {
+        case .intake:
+            guard let i = trace?.intake else { return "" }
+            var parts: [String] = []
+            if let pic = i.pictureTokens {
+                parts.append("Apple's eye takes in your whole photo as \(pic) tokens, the same units it reads words in. Of the \(i.inputTokens) tokens it read for this shot, \(pic) were your photo; the rest were its instructions and the request to describe what it sees.")
+            } else {
+                parts.append("Apple's eye read \(i.inputTokens) tokens for this shot: your photo, its instructions, and the request to describe what it sees, all in the same units it reads words in.")
+            }
+            parts.append("It worked silently for \(String(format: "%.1f", i.lookSeconds)) seconds before its first words appeared, then wrote \(i.wordPieces) word pieces in \(String(format: "%.1f", i.writeSeconds)) seconds. Apple hands its words over a handful at a time, so they arrive in a rush.")
+            parts.append("These numbers come from Apple's own tools.")
+            return parts.joined(separator: "\n\n")
         case .reality:
             return "What the lens saw, exactly as you shot it. Everything after this is the machine's: the eye reads the photograph, then the hand draws from the eye's words alone."
         case .numbers:
@@ -1371,7 +1427,7 @@ struct DeveloperTrayView: View {
     private var stage: some View {
         Group {
             switch model.current {
-            case .reality, .words, .mixing:
+            case .reality, .intake, .words, .mixing:
                 if let photo = model.trace?.photo {
                     picture(photo)
                 } else {
