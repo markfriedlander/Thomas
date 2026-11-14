@@ -358,6 +358,8 @@ private struct ModelLibraryRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 8)
+                    TrayScorecardView(model: model)
+                        .padding(.bottom, 8)
                     if let licence = model.licence {
                         // Named, not hidden behind an "i". Principle 2 — a user about to
                         // spend 2 GB is entitled to know what they're accepting.
@@ -842,5 +844,46 @@ struct ModelLicenseSheet: View {
     var trayTap: String? = nil
 }
 #endif
+
+/// What the Developer Tray shows of this model, row by row (Hal's Five Maxims scorecard, Hal4
+/// ModelLibraryView, for the look: icon spanning two lines, the name and its word on the first, the
+/// caption under it). "Shows" or "Not shown", never pass and fail: a model that keeps its workings
+/// inside hasn't failed anything (Mark, 2026-11-14).
+struct TrayScorecardView: View {
+    let model: CameraModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("In the Developer Tray", systemImage: "rectangle.stack")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(TrayFeature.allCases.filter { $0.forEye == (model.job == .seeing) }, id: \.self) { f in
+                row(f, shows: model.trayShows.contains(f))
+            }
+        }
+    }
+
+    private func row(_ f: TrayFeature, shows: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: shows ? "checkmark.circle.fill" : "minus.circle")
+                .foregroundStyle(shows ? Color.green : Color.secondary)
+                .font(.caption)
+                .frame(width: 14)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(f.name).font(.caption2.weight(.semibold))
+                        .foregroundStyle(shows ? Color.primary : Color.secondary)
+                    Spacer()
+                    Text(shows ? "Shows" : "Not shown").font(.caption2)
+                        .foregroundStyle(shows ? Color.green : Color.secondary)
+                }
+                Text(f.caption(for: model)).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
 
 // ==== LEGO END: 25 ModelLibraryView (The Model Library) ====

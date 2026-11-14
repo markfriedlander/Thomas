@@ -112,6 +112,41 @@ nonisolated struct DrawStepSpec: Hashable, Sendable {
 }
 
 /// One thing the camera can load.
+/// Something the Developer Tray can show of a model's work. Each model lists what it really gives
+/// (`CameraModel.trayShows`), and its Model Library card says so, row by row, in the style of Hal's
+/// Five Maxims (Mark, 2026-11-14: what each model shows belongs where people choose it, never in the
+/// tray as something missing).
+nonisolated enum TrayFeature: CaseIterable, Hashable, Sendable {
+    case words, intake, numbers, gaze, attention   // an eye's
+    case steps, bestGuess                          // a hand's
+
+    var forEye: Bool { [.words, .intake, .numbers, .gaze, .attention].contains(self) }
+    var name: String {
+        switch self {
+        case .words: return "Its words"
+        case .intake: return "What your photo cost it"
+        case .numbers: return "Its numbers"
+        case .gaze: return "Where it looked"
+        case .attention: return "Where its attention went"
+        case .steps: return "Every step"
+        case .bestGuess: return "Its best guess"
+        }
+    }
+    func caption(for model: CameraModel) -> String {
+        switch self {
+        case .words: return "Live, as it writes them."
+        case .intake: return "Tokens read, and time spent looking."
+        case .numbers: return "How it holds every square of your photo."
+        case .gaze: return "On your photo, for every word."
+        case .attention: return "The picture, its instructions, its own words."
+        case .steps:
+            if let r = model.drawSteps?.range { return "The drawing as it forms, in \(r.lowerBound) to \(r.upperBound) steps." }
+            return "The drawing as it forms."
+        case .bestGuess: return "What it expects to draw, at every step."
+        }
+    }
+}
+
 /// A setting Preferences can offer for a model. A model lists the ones it truly takes
 /// (`CameraModel.controls`), and Preferences shows only those.
 nonisolated enum ModelControl: Hashable, Sendable {
@@ -179,6 +214,11 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
     /// before 2026-11-14 it was a separate `VisionRecipe` switch in Qwen.swift). `nil` for Apple's eye,
     /// which takes temperature alone, and for a hand. See `SamplerRecipe`.
     let sampler: SamplerRecipe?
+
+    /// What the Developer Tray shows of this model's work (`TrayFeature`), as its Model Library card
+    /// lists it. Kept true by hand when the tray changes: checked 2026-11-14 on the Mac for every
+    /// model (Qwen and SmolVLM through EyeRecorder, Apple through EyeIntake, both hands' best guess).
+    let trayShows: Set<TrayFeature>
 
     /// Whether the weights are on the phone — the DISPLAY copy of the download state, refreshed
     /// centrally by `ModelCatalogService.refreshDownloadStates()` (Hal's pattern: the catalog holds
@@ -337,7 +377,8 @@ nonisolated enum ModelCatalog {
         engine: .mlx,        // unused for an eye
         drawSteps: nil,
         controls: [.temperature],   // GenerationOptions(temperature:)
-        sampler: nil                // Apple's eye takes temperature alone
+        sampler: nil,               // Apple's eye takes temperature alone
+        trayShows: [.words, .intake]
     )
 
     /// The fast prime. Downloaded, richer, unguarded.
@@ -362,7 +403,8 @@ nonisolated enum ModelCatalog {
         // presence 1.5; thinking-VISION = temp 0.6 / presence 0.0 (us). Do NOT copy Hal's text recipe:
         // temp 1.0 / presence 1.5 loops on deterministic tasks. If descriptions start repeating, the
         // card says to adjust presence_penalty 0-2. Temperature itself is the user's (default 0.6).
-        sampler: SamplerRecipe(topP: 0.95, topK: 20, minP: 0, presencePenalty: 0)
+        sampler: SamplerRecipe(topP: 0.95, topK: 20, minP: 0, presencePenalty: 0),
+        trayShows: [.words, .numbers, .gaze, .attention]
     )
 
     /// The small eye. A second downloadable eye, and the proof that the eye loader really is
@@ -399,7 +441,8 @@ nonisolated enum ModelCatalog {
         controls: [.temperature],
         // No published vision recipe of its own: the conservative floor (top_p/top_k filtering ON,
         // so the decoder can't wander the whole vocabulary), until we learn its own.
-        sampler: .conservative
+        sampler: .conservative,
+        trayShows: [.words, .numbers, .gaze, .attention]
     )
 
     /// The hand — frame 3.
@@ -447,7 +490,8 @@ nonisolated enum ModelCatalog {
         // without leaving turbo's comfortable range.
         drawSteps: DrawStepSpec(range: 1...6, default: 4),
         controls: [.steps],
-        sampler: nil
+        sampler: nil,
+        trayShows: [.steps, .bestGuess]
     )
 
     /// The second hand — CoreML on the Neural Engine.
@@ -483,7 +527,8 @@ nonisolated enum ModelCatalog {
         // useful range. Fewer is faster and rougher, more is slower and cleaner.
         drawSteps: DrawStepSpec(range: 15...30, default: 20),
         controls: [.steps],
-        sampler: nil
+        sampler: nil,
+        trayShows: [.steps, .bestGuess]
     )
 
     static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo, coreMLSD21]
