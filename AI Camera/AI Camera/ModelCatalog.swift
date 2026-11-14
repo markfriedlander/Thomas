@@ -222,7 +222,8 @@ nonisolated struct CameraModel: Identifiable, Hashable, Sendable {
 
     /// How long this model took on Mark's iPhone 16 Plus (eye: one look, loading included; hand: one
     /// drawing at its default steps), shown on its card until it has been used on this device
-    /// (`ModelTimings`). `nil` until measured; never estimated.
+    /// (`ModelTimings`). `nil` until measured; never estimated. Measured 2026-11-14 with the phone cooled to
+    /// nominal before every shot, six shots pairing each eye with each hand: the middle of each model's shots.
     var measuredSeconds: Double? = nil
 
     /// Whether the weights are on the phone — the DISPLAY copy of the download state, refreshed
@@ -383,7 +384,8 @@ nonisolated enum ModelCatalog {
         drawSteps: nil,
         controls: [.temperature],   // GenerationOptions(temperature:)
         sampler: nil,               // Apple's eye takes temperature alone
-        trayShows: [.words, .intake]
+        trayShows: [.words, .intake],
+        measuredSeconds: 4.9
     )
 
     /// The fast prime. Downloaded, richer, unguarded.
@@ -409,7 +411,8 @@ nonisolated enum ModelCatalog {
         // temp 1.0 / presence 1.5 loops on deterministic tasks. If descriptions start repeating, the
         // card says to adjust presence_penalty 0-2. Temperature itself is the user's (default 0.6).
         sampler: SamplerRecipe(topP: 0.95, topK: 20, minP: 0, presencePenalty: 0),
-        trayShows: [.words, .numbers, .gaze, .attention]
+        trayShows: [.words, .numbers, .gaze, .attention],
+        measuredSeconds: 5.2
     )
 
     /// The small eye. A second downloadable eye, and the proof that the eye loader really is
@@ -447,7 +450,8 @@ nonisolated enum ModelCatalog {
         // No published vision recipe of its own: the conservative floor (top_p/top_k filtering ON,
         // so the decoder can't wander the whole vocabulary), until we learn its own.
         sampler: .conservative,
-        trayShows: [.words, .numbers, .gaze, .attention]
+        trayShows: [.words, .numbers, .gaze, .attention],
+        measuredSeconds: 14.6
     )
 
     /// The hand — frame 3.
@@ -496,7 +500,8 @@ nonisolated enum ModelCatalog {
         drawSteps: DrawStepSpec(range: 1...6, default: 4),
         controls: [.steps],
         sampler: nil,
-        trayShows: [.steps, .bestGuess]
+        trayShows: [.steps, .bestGuess],
+        measuredSeconds: 12.0
     )
 
     /// The second hand — CoreML on the Neural Engine.
@@ -533,7 +538,8 @@ nonisolated enum ModelCatalog {
         drawSteps: DrawStepSpec(range: 15...30, default: 20),
         controls: [.steps],
         sampler: nil,
-        trayShows: [.steps, .bestGuess]
+        trayShows: [.steps, .bestGuess],
+        measuredSeconds: 10.5
     )
 
     static let all: [CameraModel] = [apple, qwen, smolVLM2, sdTurbo, coreMLSD21]
