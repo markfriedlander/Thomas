@@ -224,6 +224,10 @@ final class Settings {
     var upscaler: UpscaleMethod {
         didSet { store(upscaler.rawValue, "upscaler") }
     }
+    /// The photograph's shape (item 17): 4:3, the whole sensor (default), or 16:9, taller and narrower.
+    var pictureShape: PictureShape {
+        didSet { store(pictureShape.rawValue, "pictureShape") }
+    }
     /// Which decoder develops the drawing — the full VAE (Detailed) or the tiny bundled TAESD
     /// (Fast). A preference, not an absolute: on a device too tight to afford the full decode this
     /// shot, Detailed quietly falls back to Fast rather than crash (disclosed in `decoderSection`).
@@ -277,6 +281,7 @@ final class Settings {
         frameTwoShows = FrameTwoWords(rawValue: d.string(forKey: "frameTwoShows") ?? "") ?? .sentToHand
         drawingSize = DrawingSize(rawValue: d.string(forKey: "drawingSize") ?? "") ?? .native
         upscaler = UpscaleMethod(rawValue: d.string(forKey: "upscaler") ?? "") ?? .metalFX
+        pictureShape = PictureShape(rawValue: d.string(forKey: "pictureShape") ?? "") ?? .fourThree
         decoderChoice = DecoderChoice(rawValue: d.string(forKey: "decoderChoice") ?? "") ?? .detailed
         stampRawCoordinates = d.bool(forKey: "stampRawCoordinates")   // default false
         developView = DevelopView(rawValue: d.string(forKey: "developView") ?? "") ?? .working
@@ -351,6 +356,7 @@ final class Settings {
         frameTwoShows = .sentToHand
         drawingSize = .native
         upscaler = .metalFX
+        pictureShape = .fourThree
         decoderChoice = .detailed
         stampRawCoordinates = false
         developView = .working
@@ -470,6 +476,7 @@ struct PreferencesView: View {
                 decoderSection.id("decoder")
                 sizeSection.id("size")
                 layoutSection.id("layout")
+                if Lens.offersSixteenNine { shapeSection.id("shape") }
                 locationSection.id("location")
                 darkRoomSection.id("darkroom")
                 resetSection.id("reset")
@@ -1098,6 +1105,25 @@ struct PreferencesView: View {
     private var layoutHasEye: Bool { settings.useEye }
     private var layoutHasHand: Bool {
         settings.drawsThirdFrame && DrawerLoader.isAvailable(settings.selectedDrawer)
+    }
+
+    /// Item 17: both shapes, each with what it gives and what it costs (Mark: "with an explanation next to
+    /// what each one does, its pluses and minuses"). Only where the camera really takes 16:9 photos.
+    private var shapeSection: some View {
+        Section {
+            Picker("Picture shape", selection: $settings.pictureShape) {
+                ForEach(PictureShape.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("**4:3** is the camera's whole sensor: the widest view. In the square layouts the square sees the most of the scene. On a tall screen the viewfinder has black bands above and below.")
+                Text("**16:9** is taller and narrower, like a video frame, and fills more of the screen. In the square layouts the square sees about a quarter less of the scene, as if zoomed in a little.")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } header: {
+            Text("Picture shape")
+        }
     }
 
     private var layoutSection: some View {

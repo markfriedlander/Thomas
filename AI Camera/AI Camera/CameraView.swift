@@ -163,6 +163,7 @@ struct CameraView: View {
                     // 2026-11-13: "Tap to focus and drag for exposure would be awesome"). Gestures,
                     // not buttons: the capture screen stays viewfinder and shutter.
                     .simultaneousGesture(focusGesture)
+                    .onChange(of: settings.pictureShape) { _, shape in lens.use(shape) }   // item 17
                     .onChange(of: lens.focusPoint) { _, point in
                         if point != nil { showFocusSquare() } else { focusSquareVisible = false }
                     }

@@ -50,6 +50,13 @@ extension CGImage {
 /// Deliberately knows nothing about models, perception, or text. It takes photographs.
 /// Everything downstream is somebody else's problem — which is the whole point of the
 /// shot being atomic: the lens does its job and the interpretation is already loaded.
+/// The shape of the photograph (item 17, Mark, 2026-11-14: "offer both as a setting... with an
+/// explanation next to what each one does, its pluses and minuses").
+nonisolated enum PictureShape: String, CaseIterable, Hashable, Sendable {
+    case fourThree, sixteenNine
+    var name: String { self == .fourThree ? "4:3" : "16:9" }
+}
+
 @MainActor
 @Observable
 final class Lens: NSObject {
@@ -83,6 +90,12 @@ final class Lens: NSObject {
     /// platform: a Mac with only its built-in camera has none (the flip button hides), while an iPhone,
     /// an iPad, or a Mac using an iPhone as its camera has two (Mark, 2026-11-13).
     private(set) var canFlip = false
+    /// Whether this camera can take full-size 16:9 photos (item 17), so Preferences offers the choice.
+    /// Decided by asking the camera, never assumed; never on a Mac, where switching the camera's format
+    /// left the preview black (item 8, parked).
+    static private(set) var offersSixteenNine = false
+    /// The shape in use (`Settings.pictureShape`, or 4:3 when this camera can't do the other).
+    private(set) var shape: PictureShape = .fourThree
 
     /// The shape of the picture the camera delivers, upright (width / height). The viewfinder shows the
     /// WHOLE picture (aspect-fit, bands where the screen is another shape), so this is also the shape
@@ -190,6 +203,8 @@ final class Lens: NSObject {
                     return "\(dim.width)x\(dim.height)" })).sorted() } ?? [],
             "maxPhoto":          "\(output.maxPhotoDimensions.width)x\(output.maxPhotoDimensions.height)",
             "sessionPreset":     session.sessionPreset.rawValue,
+            "shape":             shape.rawValue,
+            "offersSixteenNine": Self.offersSixteenNine,
             // Where the WHOLE captured picture lies relative to the preview on screen (Apple's own
             // conversion), and the screen area the preview occupies, in points. A picture rect larger
             // than the layer means part of every photo is off screen (2026-11-13, Mark: "There is a
@@ -344,7 +359,11 @@ final class Lens: NSObject {
             canFlip = back.uniqueID != front.uniqueID && back.localizedName != front.localizedName
         }
         beginTrackingRotation()
-        if let device { startFocusFresh(on: device) }
+        if let device {
+            Self.offersSixteenNine = !ProcessInfo.processInfo.isiOSAppOnMac && Self.bestSixteenNine(device) != nil
+            use(Settings.shared.pictureShape)
+            startFocusFresh(on: device)
+        }
     }
 
     /// Flip between the back and front cameras — the selfie toggle.
@@ -380,7 +399,10 @@ final class Lens: NSObject {
         }
         session.commitConfiguration()
         beginTrackingRotation()   // the new device faces the other way; its angles must be remade
-        if let current = self.device { startFocusFresh(on: current) }
+        if let current = self.device {
+            use(Settings.shared.pictureShape)   // the new camera may not offer 16:9; then it's 4:3
+            startFocusFresh(on: current)
+        }
     }
 
     #if DEBUG
@@ -652,6 +674,64 @@ final class Lens: NSObject {
         }
     }
 
+    // MARK: - Picture shape (item 17)
+
+    /// The 16:9 format with the largest 16:9 photo this camera takes, preferring the lighter preview and
+    /// 8-bit video when sizes tie. Nil when the camera has none (then the choice isn't offered).
+    private static func bestSixteenNine(_ device: AVCaptureDevice) -> (format: AVCaptureDevice.Format, photo: CMVideoDimensions)? {
+        var best: (format: AVCaptureDevice.Format, photo: CMVideoDimensions, video: CMVideoDimensions, eightBit: Bool)?
+        for f in device.formats {
+            let v = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+            guard v.width > 0, Int(v.width) * 9 == Int(v.height) * 16 else { continue }
+            guard let p = f.supportedMaxPhotoDimensions
+                .filter({ Int($0.width) * 9 == Int($0.height) * 16 })
+                .max(by: { $0.width < $1.width }) else { continue }
+            let eightBit = CMFormatDescriptionGetMediaSubType(f.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            if let b = best {
+                // The preview: the smallest video size that is still at least 1920 wide, so the live
+                // viewfinder stays sharp (measured 2026-11-14: without this the phone picked 960x540).
+                func previewRank(_ w: Int32) -> Int { w >= 1920 ? Int(w) : 100_000 - Int(w) }
+                let better = p.width > b.photo.width
+                    || (p.width == b.photo.width && previewRank(v.width) < previewRank(b.video.width))
+                    || (p.width == b.photo.width && v.width == b.video.width && eightBit && !b.eightBit)
+                if !better { continue }
+            }
+            best = (f, p, v, eightBit)
+        }
+        return best.map { ($0.format, $0.photo) }
+    }
+
+    /// Use a picture shape: 4:3 is the `.photo` preset, the whole sensor; 16:9 is the camera's best 16:9
+    /// format with its largest 16:9 photo. Either way the photo output is set to the largest photo the
+    /// format takes. A camera without 16:9 stays at 4:3. Zoom and focus start fresh on the new format.
+    func use(_ wanted: PictureShape) {
+        guard let device else { return }
+        let sixteen = wanted == .sixteenNine && Self.offersSixteenNine ? Self.bestSixteenNine(device) : nil
+        session.beginConfiguration()
+        if let sixteen, (try? device.lockForConfiguration()) != nil {
+            session.sessionPreset = .inputPriority
+            device.activeFormat = sixteen.format
+            device.unlockForConfiguration()
+            output.maxPhotoDimensions = sixteen.photo
+            shape = .sixteenNine
+        } else {
+            session.sessionPreset = .photo
+            // The 12-megapixel photo 4:3 has always taken (4032 wide), not the format's largest: on Mark's
+            // 16 Plus the largest is 24 MP (5712x4284), double the file and memory per shot, and nobody
+            // asked for that (measured 2026-11-14). Set explicitly so a return from 16:9 never keeps a
+            // 16:9 size this format can't take.
+            let sizes = device.activeFormat.supportedMaxPhotoDimensions
+            if let p = sizes.filter({ $0.width <= 4032 }).max(by: { $0.width < $1.width }) ?? sizes.max(by: { $0.width < $1.width }) {
+                output.maxPhotoDimensions = p
+            }
+            shape = .fourThree
+        }
+        session.commitConfiguration()
+        zoom = defaultZoom(for: device)
+        applyZoom(zoom)
+        updatePictureAspect()
+    }
+
     // MARK: - The shutter
 
     /// Press the shutter. Returns an **upright** frame, or nil if the capture failed.
@@ -662,7 +742,10 @@ final class Lens: NSObject {
     func capture() async -> CGImage? {
         let photo: AVCapturePhoto? = await withCheckedContinuation { cont in
             pending = cont
-            output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+            // Explicitly the largest photo the format takes (item 17: a 16:9 format's full 16:9 size).
+            let settings = AVCapturePhotoSettings()
+            settings.maxPhotoDimensions = output.maxPhotoDimensions
+            output.capturePhoto(with: settings, delegate: self)
         }
         guard let photo, let cg = photo.cgImageRepresentation() else { return nil }
         let raw = photo.metadata[kCGImagePropertyOrientation as String] as? UInt32 ?? 1

@@ -510,6 +510,8 @@ extension LocalAPIServer {
         let drawsThird = queued.first { $0.id == id }?.config.drawsThirdFrame
         return (200, json([
             "captured":     true,
+            "width":        photograph.width,    // the upright photo's real size (item 17 checks 16:9)
+            "height":       photograph.height,
             "held":         hold,
             "id":           id.uuidString,
             "seer":         seerName,
@@ -647,6 +649,7 @@ extension LocalAPIServer {
             if let v = obj["frameTwoShows"] as? String, let x = FrameTwoWords(rawValue: v) { s.frameTwoShows = x; changed.append("frameTwoShows=\(v)") }
             if let v = obj["drawingSize"] as? String, let x = DrawingSize(rawValue: v) { s.drawingSize = x; changed.append("drawingSize=\(v)") }
             if let v = obj["upscaler"] as? String, let x = UpscaleMethod(rawValue: v) { s.upscaler = x; changed.append("upscaler=\(v)") }
+            if let v = obj["pictureShape"] as? String, let x = PictureShape(rawValue: v) { s.pictureShape = x; changed.append("pictureShape=\(v)") }
             if let v = obj["decoderChoice"] as? String, let x = DecoderChoice(rawValue: v) { s.decoderChoice = x; changed.append("decoderChoice=\(v)") }
             if let v = obj["stampRawCoordinates"] as? Bool { s.stampRawCoordinates = v; changed.append("stampRawCoordinates=\(v)") }
             if let v = (obj["developView"] as? String).flatMap(DevelopView.init) { s.developView = v; changed.append("developView=\(v.rawValue)") }
@@ -669,6 +672,7 @@ extension LocalAPIServer {
     private struct SettingsSnapshot: Sendable {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let developView, developmentKeepsake: String
+        let pictureShape: String
         let negativesToKeep: Int
         let drawsThirdFrame: Bool
         let stampRawCoordinates: Bool
@@ -690,6 +694,7 @@ extension LocalAPIServer {
              "stampRawCoordinates": stampRawCoordinates,
              "temperature": temperature, "frameTwoShows": frameTwoShows,
              "drawingSize": drawingSize, "upscaler": upscaler, "decoderChoice": decoderChoice,
+             "pictureShape": pictureShape,
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt,
@@ -722,6 +727,7 @@ extension LocalAPIServer {
             systemPrompt: s.systemPrompt,
             developView: s.developView.rawValue,
             developmentKeepsake: s.developmentKeepsake.rawValue,
+            pictureShape: s.pictureShape.rawValue,
             negativesToKeep: s.negativesToKeep,
             drawsThirdFrame: s.drawsThirdFrame,
             stampRawCoordinates: s.stampRawCoordinates,
@@ -2226,11 +2232,23 @@ extension LocalAPIServer {
         let modelName = req.headers["x-model"] ?? "afm"
         if case .mlx(let repoID) = Seer(token: modelName) {
             let mlxEye = MLXVLMEye(repoID: repoID, systemPrompt: eye.systemPrompt, temperature: eye.temperature)
+            // X-Record: 1 (measuring instrument, 2026-11-14): record this look exactly as a developing
+            // shot's look is recorded, by opening a throwaway trace first, so a pair of looks differs in
+            // recording alone and its cost can be measured. Without it, an antenna look records nothing.
+            let record = req.headers["x-record"] == "1"
+            if record { DevelopTrace.shared.startShot(id: UUID(), photo: cgImage) }
             let started = Date()
             let perception = await ModelLane.shared.run("look:mlx") {
                 await mlxEye.look(at: cgImage)
             }
             let now = Date()
+            var recorded: [String: Any] = ["recorded": false]
+            if record {
+                DevelopTrace.shared.noteEyeWords(perception.wireText)   // closes the throwaway trace's eye
+                if let e = DevelopTrace.shared.snapshot()?.eye {
+                    recorded = ["recorded": true, "recorderMS": e.recorderMS, "pieces": e.pieces.count, "squares": e.squares]
+                }
+            }
             var payload: [String: Any] = [
                 "model":        seerWire(.mlx(repoID: repoID)),
                 "repo":         repoID,
@@ -2246,6 +2264,7 @@ extension LocalAPIServer {
                 "totalSeconds": round(now.timeIntervalSince(started) * 1000) / 1000
             ]
             payload["modelLoaded"] = await MLXEyeLoader.shared.isLoaded
+            payload.merge(recorded) { _, new in new }
             return (200, json(payload))
         }
 
