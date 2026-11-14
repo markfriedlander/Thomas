@@ -806,6 +806,9 @@ struct ModelLicenseSheet: View {
     /// real `showingPrivacy`, exactly as tapping the lock does, so the antenna can open (and screenshot)
     /// the privacy explanation a human sees.
     var tapPrivacyLock = false
+    /// = tapping the "Preparing for shooting" pill to show its card. `StatusFeedView` mirrors this into
+    /// its real `showingPreparation`, exactly as tapping the pill does.
+    var tapPreparingPill = false
     /// = tapping the Photos glyph, which opens the system Photos app. `CameraView` calls the same
     /// `openPhotos()` the button calls. A human can leave to Photos; so can the antenna.
     var tapPhotos = false

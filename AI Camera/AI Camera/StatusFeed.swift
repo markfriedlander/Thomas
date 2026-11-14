@@ -49,7 +49,7 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
 
     /// What a tap does. An enum, not a closure, so the message stays a value; the renderer maps
     /// each case to a behavior (present the privacy explanation, or open the Dark Room).
-    enum Tap: Equatable { case explainPrivacy, openDarkRoom }
+    enum Tap: Equatable { case explainPrivacy, openDarkRoom, explainPreparation }
 
     let kind: Kind
     /// An SF Symbol name, or `nil` when a spinner stands in for the icon.
@@ -183,6 +183,7 @@ struct StatusFeedView: View {
     @State private var settings = Settings.shared
     @State private var network = PrivacyMonitor.shared
     @State private var showingPrivacy = false
+    @State private var showingPreparation = false
     #if DEBUG
     /// The antenna's UI bridge, so `POST /open privacy` opens the popover through the lock's own state.
     /// DEBUG-only. (The Dark Room verbs are honored by `CameraView`, which owns that sheet.)
@@ -212,6 +213,10 @@ struct StatusFeedView: View {
         // Human-parity: the antenna's privacy verb opens the popover through the lock's own state.
         .onChange(of: antennaBridge.tapPrivacyLock) { _, want in
             if want { showingPrivacy = true; antennaBridge.tapPrivacyLock = false }
+        }
+        // Human-parity: the antenna's preparing verb opens the card through the pill's own state.
+        .onChange(of: antennaBridge.tapPreparingPill) { _, want in
+            if want { showingPreparation = true; antennaBridge.tapPreparingPill = false }
         }
         #endif
     }
@@ -251,6 +256,18 @@ struct StatusFeedView: View {
         case .openDarkRoom:
             Button { onOpenDarkRoom() } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
+        case .explainPreparation:
+            // The "Preparing for shooting" pill opens the same card the Model Library row shows: the
+            // real stage, the clock, and "Keep Thomas open until it finishes" (Mark, 2026-11-13). It
+            // closes on its own when the preparation ends, because the pill it hangs from goes away.
+            Button { showingPreparation = true } label: { capsuleBody(message) }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showingPreparation) {
+                    HandPreparationCard(repoID: HandPreparation.shared.repoID ?? Settings.shared.selectedDrawer)
+                        .padding(16)
+                        .frame(width: 300)
+                        .presentationCompactAdaptation(.popover)
+                }
         case .none:
             capsuleBody(message)
         }

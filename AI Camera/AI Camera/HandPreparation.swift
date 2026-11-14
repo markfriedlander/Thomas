@@ -180,7 +180,8 @@ final class HandPreparation {
         guard isPreparing, let repoID else { return }
         var text = "Preparing for shooting · \(Self.clock(elapsed))"
         if let last = Self.lastSeconds(repoID) { text += " of about \(Self.clock(last))" }
-        StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: nil, showsSpinner: true, text: text, tap: nil))
+        StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: nil, showsSpinner: true, text: text,
+                                                tap: .explainPreparation))
     }
 }
 

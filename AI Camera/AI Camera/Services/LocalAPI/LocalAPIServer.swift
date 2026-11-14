@@ -1099,7 +1099,7 @@ extension LocalAPIServer {
     /// each view onstage as its own sheet — a false path no human ever produced (Model Library, especially,
     /// lives INSIDE Preferences, never as a lone sheet over the viewfinder).
     ///
-    ///   X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos | about
+    ///   X-Screen: preferences | darkroom | modellibrary | capture | privacy | preparing | photos | about
     /// (`capture` backs all the way out to the bare capture screen, the way tapping Done does — so the
     /// antenna can return home, not only open interior screens. `privacy` taps the lock to reveal its
     /// popover; `photos` taps the Photos glyph, which leaves for the system Photos app; `about` pushes
@@ -1148,6 +1148,13 @@ extension LocalAPIServer {
             bridge.tapPrivacyLock = true
             return (200, json(["screen": "privacy", "opened": true,
                                "message": "Tapped the privacy lock; its popover is showing on the capture screen. Screenshot with devicectl. (The lock lives on the capture screen - open there first.)"]))
+        case "preparing", "preparation":
+            guard HandPreparation.shared.isPreparing else {
+                return (409, #"{"error":"Nothing is preparing, so there is no Preparing pill to tap."}"#)
+            }
+            bridge.tapPreparingPill = true
+            return (200, json(["screen": "preparing", "opened": true,
+                               "message": "Tapped the Preparing for shooting pill; its card is showing on the capture screen. Screenshot with devicectl."]))
         case "photos":
             bridge.tapPhotos = true
             return (200, json(["screen": "photos", "opened": true,
@@ -1157,7 +1164,7 @@ extension LocalAPIServer {
             return (200, json(["screen": "about", "opened": true,
                                "message": "Opened Preferences and pushed the About screen, the way tapping About Thomas does. Screenshot with devicectl."]))
         default:
-            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | photos | about"}"#)
+            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | preparing | photos | about"}"#)
         }
     }
 
