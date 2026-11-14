@@ -329,8 +329,11 @@ struct CameraView: View {
                         p.addRect(square)
                     }
                     .fill(Color.black.opacity(0.45), style: FillStyle(eoFill: true))
-                    // Outline the square itself, quietly.
-                    Path { p in p.addRect(square) }
+                    // Outline the square itself, quietly, drawn just INSIDE its edge. Centred on the edge,
+                    // half the line fell outside the content: on a Mac (wider than tall, so the square runs
+                    // the full height) that half sat in the title bar's strip and showed as a stray line
+                    // above every full-window screen (Mark spotted it, 2026-11-13).
+                    Path { p in p.addRect(square.insetBy(dx: 0.5, dy: 0.5)) }
                         .stroke(Color.white.opacity(0.55), lineWidth: 1)
                 }
             }
