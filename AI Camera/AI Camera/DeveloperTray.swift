@@ -562,7 +562,7 @@ actor TrayPreviewDecoder {
         // the tray's iPad layout there). The Simulator only checks layouts, so it shows no previews.
         #if targetEnvironment(simulator)
         return nil
-        #endif
+        #else
         if taesd == nil { taesd = try? TAESDDecoder.bundled() }
         guard let taesd, shape.count == 4 else { return nil }
         var z = MLXArray(values, shape)
@@ -570,6 +570,7 @@ actor TrayPreviewDecoder {
         let raster = (taesd.decodePixels(z) * 255).asType(.uint8).squeezed()
         eval(raster)
         return Picture(image: SDImage(raster).asCGImage())
+        #endif
     }
 
     func release() {
@@ -1103,7 +1104,10 @@ struct DeveloperTrayView: View {
             // column of words. Decided by the window's own shape, never by device or orientation: an
             // iPad window can be any size, and the Duo's inner screen ignores orientation (Apple,
             // "Prepare your app for iPhone Duo", 2026). Safe areas are respected per edge by SwiftUI.
-            let wide = geo.size.width > geo.size.height && geo.size.width >= 640
+            // A short window (phone held sideways) goes side by side even when narrower than that: the
+            // Duo's outer screen held sideways is about 580 points wide inside its safe areas, and the upright
+            // layout squashed flat left a tiny drawing and two lines of words (2026-11-13).
+            let wide = geo.size.width > geo.size.height && (geo.size.width >= 640 || short)
             ZStack {
                 backdrop
                 if wide { sideLayout(geo.size) } else { tallLayout(geo.size) }
@@ -1166,6 +1170,7 @@ struct DeveloperTrayView: View {
         let stageHeight = min(size.width / max(aspect, 0.1), size.height * 0.5)
         let phase = model.current.phase
         let open = phase == .words || (phase == .picture && model.current != .reality)
+            || (phase == .drawing && !model.handWords.isEmpty)
         return VStack(spacing: 12) {
             topBar
                 .opacity(model.chromeVisible ? 1 : 0)
@@ -1204,7 +1209,7 @@ struct DeveloperTrayView: View {
     /// controls, so nothing ever covers the squares that light up. On the words moments the words take the
     /// picture's place; on the hand's moments the column keeps the words the drawing is made from, beside it.
     private func sideLayout(_ size: CGSize) -> some View {
-        let column = min(max(size.width * 0.36, 300), 440)
+        let column = min(max(size.width * 0.36, short ? 260 : 300), 440)
         let phase = model.current.phase
         return HStack(spacing: 16) {
             ZStack {
@@ -1218,6 +1223,9 @@ struct DeveloperTrayView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A margin on the outer edge to match the gap beside the column, so the picture doesn't
+            // touch one edge of the screen while floating free of the other (open Duo, 2026-11-13).
+            .padding(.leading, short ? 8 : 16)
             VStack(spacing: 12) {
                 topBar.opacity(model.chromeVisible ? 1 : 0).allowsHitTesting(model.chromeVisible)
                 // The middle always takes the space, even when this moment has nothing to put there, so
@@ -1234,7 +1242,9 @@ struct DeveloperTrayView: View {
                 bottomBar.opacity(model.chromeVisible ? 1 : 0).allowsHitTesting(model.chromeVisible)
             }
             .frame(width: column)
-            .padding(.vertical, 6)
+            // The open Duo held wide puts its status bar on the side, so nothing above the pills keeps
+            // them off the top edge; give them room of their own (2026-11-13). A sideways phone stays tight.
+            .padding(.vertical, short ? 6 : 14)
         }
         .animation(.smooth(duration: 0.55), value: phase)
     }
@@ -1256,19 +1266,27 @@ struct DeveloperTrayView: View {
         case .words:
             EmptyView()
         case .drawing:
-            if !model.handWords.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text((model.trace?.wordsFromEye ?? true)
-                         ? (model.wasShortened ? "Drawing from these words (shortened)" : "Drawing from these words")
-                         : "Drawing from your instruction")
-                        .font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
-                    ScrollView {
-                        Text(model.handWords).font(roomy ? .title3 : .callout)
-                            .foregroundStyle(.white.opacity(0.9))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
+            handWordsView
+        }
+    }
+
+    /// The words the hand is drawing from, with where they came from. Shown beside the drawing when
+    /// wide and under it when upright (Mark, 2026-11-13, after the open Duo upright left the bottom
+    /// third empty on the hand's moments: "show the hand's words under the drawing").
+    @ViewBuilder
+    private var handWordsView: some View {
+        if !model.handWords.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text((model.trace?.wordsFromEye ?? true)
+                     ? (model.wasShortened ? "Drawing from these words (shortened)" : "Drawing from these words")
+                     : "Drawing from your instruction")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                ScrollView {
+                    Text(model.handWords).font(roomy ? .title3 : .callout)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
     }
@@ -1375,6 +1393,8 @@ struct DeveloperTrayView: View {
                 if wide { RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial.opacity(0.9)) }
             }
             .environment(\.colorScheme, .dark)
+        case .step, .finished:
+            handWordsView
         default:
             EmptyView()
         }
@@ -1698,8 +1718,8 @@ struct TraySplitBar: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) {
                         ForEach(parts.indices, id: \.self) { i in
-                            (Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)
-                             + Text(" " + ["picture", "instructions", "already said"][i]).font(.caption).foregroundColor(.white.opacity(0.7)))
+                            let label = ["picture", "instructions", "already said"][i]
+                            Text("\(Text(TrayModel.percent(parts[i].1)).font(.caption.weight(.bold)).foregroundColor(parts[i].2)) \(Text(label).font(.caption).foregroundColor(.white.opacity(0.7)))")
                                 .lineLimit(1).fixedSize()
                         }
                     }
@@ -1743,6 +1763,12 @@ struct TrayScrubber: View {
             let total = count + upcoming
             let x: (Double) -> CGFloat = { i in inset + (total > 1 ? CGFloat(i / Double(total - 1)) : 0) * w }
             let edge = x(Double(max(0, count - 1)))
+            // A chapter is labeled once its stretch of the slider is a finger wide, and the label is kept
+            // inside the slider's ends. At 30 points the hand lost its label on the Duo's outer screen held
+            // sideways, so the finished drawing read "eye" under a slider at the hand end (2026-11-13).
+            // The lens is one moment wide and stays unlabeled.
+            let minLabelSpan: CGFloat = 16
+            let inBounds: (CGFloat) -> CGFloat = { min(max($0, 14), geo.size.width - 14) }
             ZStack(alignment: .topLeading) {
                 Capsule().fill(.white.opacity(0.25)).frame(width: max(0, edge - inset), height: 4).offset(x: inset, y: 13)
                 if upcoming > 0 {
@@ -1763,19 +1789,19 @@ struct TrayScrubber: View {
                 if let h = upcomingHandStart {
                     Capsule().fill(.white.opacity(0.35)).frame(width: 2, height: 14)
                         .offset(x: x(Double(h) - 0.5) - 1, y: 8)
-                    if x(Double(total - 1)) - x(Double(h)) >= 30 {
+                    if x(Double(total - 1)) - x(Double(h)) >= minLabelSpan {
                         Text(TrayChapter.hand.rawValue).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.35))
                             .fixedSize()
-                            .position(x: (x(Double(h)) + x(Double(total - 1))) / 2, y: 38)
+                            .position(x: inBounds((x(Double(h)) + x(Double(total - 1))) / 2), y: 38)
                     }
                 }
                 Circle().fill(.white).frame(width: 22, height: 22).shadow(radius: 2)
                     .offset(x: x(Double(index)) - 11, y: 4)
                 ForEach(spans) { s in
-                    if x(Double(s.last)) - x(Double(s.first)) >= 30 {
+                    if x(Double(s.last)) - x(Double(s.first)) >= minLabelSpan {
                         Text(s.chapter.rawValue).font(.caption2.weight(.medium)).foregroundStyle(.white.opacity(0.55))
                             .fixedSize()
-                            .position(x: (x(Double(s.first)) + x(Double(s.last))) / 2, y: 38)
+                            .position(x: inBounds((x(Double(s.first)) + x(Double(s.last))) / 2), y: 38)
                     }
                 }
             }
