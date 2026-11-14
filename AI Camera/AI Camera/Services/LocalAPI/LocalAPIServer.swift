@@ -1071,6 +1071,9 @@ extension LocalAPIServer {
             "likenessReady": m.likeness != nil,
             "lightScale": m.lightScale,
             "pictureScale": m.pictureScale,
+            "intake": m.trace?.intake.map { ["pictureTokens": $0.pictureTokens as Any, "inputTokens": $0.inputTokens,
+                                             "wordPieces": $0.wordPieces, "lookSeconds": $0.lookSeconds,
+                                             "writeSeconds": $0.writeSeconds] } ?? [:],
             "squareLightMax": m.squareLight?.max() ?? -1,
             "openSquare": m.openSquare ?? -1,
         ]))

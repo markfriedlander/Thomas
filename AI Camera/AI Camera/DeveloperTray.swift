@@ -1047,10 +1047,7 @@ final class TrayModel {
     var fact: String? {
         switch current {
         case .intake:
-            guard let i = trace?.intake else { return nil }
-            let look = String(format: "%.1f", i.lookSeconds)
-            return i.pictureTokens.map { "Your photo became \($0) tokens \u{00B7} it looked for \(look) s" }
-                ?? "It looked for \(look) s before its first words"
+            return nil   // the moment's own panel shows its numbers, large (intakePanel)
         case .gaze(let i):
             guard currentLook == nil, eyeWords.indices.contains(i) else { return nil }
             return "\(Self.percent(eyeWords[i].imageShare)) of its attention on the picture"
@@ -1355,7 +1352,10 @@ struct DeveloperTrayView: View {
     private var columnContent: some View {
         switch model.current.phase {
         case .picture:
-            if model.current != .reality {
+            if model.current == .intake {
+                intakePanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            } else if model.current != .reality {
                 VStack(alignment: .leading, spacing: 14) {
                     if !model.eyeWords.isEmpty {
                         sentence(wide: false).matchedGeometryEffect(id: "words", in: canvas)
@@ -1496,8 +1496,45 @@ struct DeveloperTrayView: View {
             .environment(\.colorScheme, .dark)
         case .step, .finished:
             handWordsView
+        case .intake:
+            intakePanel
         default:
             EmptyView()
+        }
+    }
+
+    /// Apple's eye, "How it took in your photo" (Mark, 2026-11-14: the only numbers this moment has, so
+    /// give them prominence, centered beside the photo, with bars). Token COUNTS, labeled as counts: the
+    /// split bar on Qwen's and SmolVLM's words is attention, a different measurement, so these bars say
+    /// "tokens" and "seconds", never percentages, and a reader can't mistake one for the other.
+    @ViewBuilder
+    private var intakePanel: some View {
+        if let i = model.trace?.intake {
+            let big: Font = roomy ? .largeTitle : (short ? .title3 : .title)
+            VStack(alignment: .leading, spacing: short ? 18 : 28) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(i.inputTokens) tokens read").font(big.weight(.bold))
+                    if let pic = i.pictureTokens {
+                        TrayCountBar(parts: [
+                            .init(value: Double(pic), figure: "\(pic)", label: "your photo",
+                                  color: Color(red: 1, green: 0.84, blue: 0.55)),
+                            .init(value: Double(max(0, i.inputTokens - pic)), figure: "\(max(0, i.inputTokens - pic))",
+                                  label: "its instructions and request", color: Color(white: 0.62))
+                        ], short: short)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(i.wordPieces) word pieces written").font(big.weight(.bold))
+                    TrayCountBar(parts: [
+                        .init(value: i.lookSeconds, figure: String(format: "%.1f s", i.lookSeconds),
+                              label: "looking, before its first words", color: Color(white: 0.85)),
+                        .init(value: i.writeSeconds, figure: String(format: "%.1f s", i.writeSeconds),
+                              label: "writing", color: Color(red: 1, green: 0.59, blue: 0.24))
+                    ], short: short)
+                }
+            }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .environment(\.colorScheme, .dark)
         }
     }
 
@@ -1786,6 +1823,45 @@ struct TrayWordLabel: View {
         case .current: return .white
         case .future: return .white.opacity(0.32)
         case .lit: return level > 0.12 ? Color(red: 1, green: 0.9, blue: 0.75).opacity(0.62 + 0.38 * level) : .white.opacity(0.62)
+        }
+    }
+}
+
+/// A bar of real amounts with their figures under it (Apple's eye's tokens and seconds). Same look as
+/// `TraySplitBar`, but each part is labeled with its own figure, not a percentage.
+struct TrayCountBar: View {
+    struct Part {
+        let value: Double
+        let figure: String
+        let label: String
+        let color: Color
+    }
+    let parts: [Part]
+    var short = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                let total = max(0.0001, parts.reduce(0) { $0 + $1.value })
+                HStack(spacing: 2) {
+                    ForEach(parts.indices, id: \.self) { i in
+                        Capsule().fill(parts[i].color)
+                            .frame(width: max(4, (geo.size.width - 2 * CGFloat(parts.count - 1)) * CGFloat(parts[i].value / total)))
+                    }
+                }
+            }
+            .frame(height: short ? 8 : 10)
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(parts.indices, id: \.self) { i in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(parts[i].figure).font((short ? Font.headline : Font.title3).weight(.bold))
+                            .foregroundStyle(parts[i].color)
+                        Text(parts[i].label).font(short ? .caption : .subheadline).foregroundStyle(.white.opacity(0.75))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
     }
 }
