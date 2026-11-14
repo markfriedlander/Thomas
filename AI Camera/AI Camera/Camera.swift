@@ -133,7 +133,14 @@ final class Lens: NSObject {
             "captureAngle":      rotation?.videoRotationAngleForHorizonLevelCapture ?? -1,
             "appliedPreview":    previewLayer?.connection?.videoRotationAngle ?? -1,
             "appliedCapture":    output.connection(with: .video)?.videoRotationAngle ?? -1,
-            "interfaceOrientation": Self.interfaceOrientationName
+            "interfaceOrientation": Self.interfaceOrientationName,
+            // Which camera this actually is, so a Mac's (or any new device's) camera is measured,
+            // not guessed: its name, its type, and which way it says it faces.
+            "deviceName":        device?.localizedName ?? "",
+            "deviceType":        device?.deviceType.rawValue ?? "",
+            "devicePosition":    device.map { $0.position == .front ? "front" : $0.position == .back ? "back" : "unspecified" } ?? "",
+            "isiOSAppOnMac":     ProcessInfo.processInfo.isiOSAppOnMac,
+            "macAngle":          macAngle ?? -1
         ]
     }
 
@@ -219,12 +226,14 @@ final class Lens: NSObject {
         session.beginConfiguration()
         session.sessionPreset = .photo
 
-        if let device = backDevice(),
+        // An iPhone opens on its back camera. A Mac (the same app, run as "Designed for iPad") has no
+        // back camera, so it falls back to whatever camera is there rather than showing nothing.
+        if let device = backDevice() ?? frontDevice() ?? AVCaptureDevice.default(for: .video),
            let input = try? AVCaptureDeviceInput(device: device),
            session.canAddInput(input) {
             session.addInput(input)
             self.device = device
-            self.position = .back
+            self.position = device.position == .front ? .front : .back
             // Start at 1× — the wide lens on every modern iPhone, not the ultra-wide. On a
             // virtual device the zoom scale is continuous ACROSS lenses, so 1.0 is not
             // necessarily the minimum; `switchOverZoomFactors` says where the seams are.
@@ -312,15 +321,33 @@ final class Lens: NSObject {
     }
 
     private func apply(previewAngle angle: CGFloat) {
+        let angle = macAngle ?? angle
         guard let connection = previewLayer?.connection,
               connection.isVideoRotationAngleSupported(angle) else { return }
         connection.videoRotationAngle = angle
     }
 
     private func apply(captureAngle angle: CGFloat) {
+        let angle = macAngle ?? angle
         guard let connection = output.connection(with: .video),
               connection.isVideoRotationAngleSupported(angle) else { return }
         connection.videoRotationAngle = angle
+    }
+
+    /// The angle to use on a Mac, or nil everywhere else (iPhone and iPad keep the coordinator's live,
+    /// horizon-level answer).
+    ///
+    /// On a Mac this same app runs as "Designed for iPad" and believes it is an iPad held in portrait,
+    /// while a Mac never turns, so the horizon-level angle comes back 0 and the picture was a quarter
+    /// turn counterclockwise (Mark's face sideways, seen in Thomas's own window, 2026-11-13). A quarter
+    /// turn (90) puts it upright: what an iPad held in portrait gives its camera, and a Mac's camera is
+    /// fixed to its screen, so it never needs to change.
+    ///
+    /// ⚠️ Not `videoRotationAngleRelative(toDeviceOrientation:)`, Apple's iOS 27 "angle for an orientation
+    /// the app provides": it is iPhone/iPad only and does NOT exist in the Mac's AVFoundation (checked
+    /// with class_getInstanceMethod on macOS 27.2). Calling it crashed Thomas on the Mac, 2026-11-13.
+    private var macAngle: CGFloat? {
+        ProcessInfo.processInfo.isiOSAppOnMac ? 90 : nil
     }
 
     // MARK: - Zoom

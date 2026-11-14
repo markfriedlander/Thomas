@@ -33,11 +33,18 @@ struct Viewfinder: UIViewRepresentable {
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.backgroundColor = .black
-        view.layer.session = lens.session
         view.layer.videoGravity = .resizeAspectFill
-        // The coordinator needs the layer to compute a preview angle at all — with no
-        // layer it reports 0 forever, which is exactly the sideways bug.
-        lens.attach(previewLayer: view.layer)
+        // Hand the layer its session just AFTER this view update, never inside it. On a Mac,
+        // setting `session` starts the capture graph synchronously and AVFoundation spins the run
+        // loop while it waits; events handled during that spin re-entered SwiftUI's view update
+        // until AttributeGraph aborted (Thomas 1.0 crash on launch, MacBook Air M2, 2026-11-06).
+        // An iPhone doesn't block there, but the deferred hand-off is just as correct for it.
+        DispatchQueue.main.async {
+            view.layer.session = lens.session
+            // The coordinator needs the layer to compute a preview angle at all — with no
+            // layer it reports 0 forever, which is exactly the sideways bug.
+            lens.attach(previewLayer: view.layer)
+        }
         return view
     }
 
@@ -164,8 +171,8 @@ struct CameraView: View {
         }
         .onDisappear { lens.stop(); place.stop() }
         .statusBarHidden()
-        .sheet(isPresented: $showingPreferences) { PreferencesView() }
-        .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
+        .macResizablePresentation(isPresented: $showingPreferences) { PreferencesView() }
+        .macResizablePresentation(isPresented: $showingDarkRoom) { DarkRoomView() }
 #if DEBUG
         // Antenna-driven license sheet: the same `ModelLicenseSheet` the Model Library shows, presented
         // from the capture screen so the antenna can walk (and screenshot) the Download → license →
@@ -362,6 +369,30 @@ struct CameraView: View {
         // Room's "load a picture" uses too, so both doors develop a shot identically. The place is
         // stamped now so the footer testifies to where it was taken even if it develops hours later.
         await worker.enqueue(photograph, place: place.placeStamp)
+    }
+}
+
+// Copied verbatim from Hal (Hal Universal/ChatViews.swift, 2026-11-13) at Mark's request: on the Mac the
+// Preferences and Dark Room cards were small fixed cards in a big window; Hal solved it this way.
+extension View {
+    /// Presents `content` as a sheet on iPhone/iPad, but as a window-filling full-screen cover on a
+    /// "Designed for iPad" Mac (2026-08-05 Mac resizability). On Mac a `.sheet` is a fixed-size
+    /// floating card that ignores the window; a `.fullScreenCover` fills the window and resizes
+    /// with it, giving a modal container the same resizability as the main window. The
+    /// isiOSAppOnMac value is constant for the process, so this `if` picks one presentation once at
+    /// view-build time and never flips — the presentation identity stays stable. Same binding and
+    /// onDismiss in both cases; each container keeps its own dismiss control (Done, or Cancel/Save).
+    @ViewBuilder
+    func macResizablePresentation<PresentedContent: View>(
+        isPresented: Binding<Bool>,
+        onDismiss: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> PresentedContent
+    ) -> some View {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            self.fullScreenCover(isPresented: isPresented, onDismiss: onDismiss, content: content)
+        } else {
+            self.sheet(isPresented: isPresented, onDismiss: onDismiss, content: content)
+        }
     }
 }
 

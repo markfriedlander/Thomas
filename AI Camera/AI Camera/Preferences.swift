@@ -483,7 +483,7 @@ struct PreferencesView: View {
             .onChange(of: AntennaUIBridge.shared.scrollPreferencesTo) { scrollForAntenna(proxy) }
             #endif
             }
-            .sheet(isPresented: $showingDarkRoom) { DarkRoomView() }
+            .macResizablePresentation(isPresented: $showingDarkRoom) { DarkRoomView() }
             #if DEBUG
             // Human-parity for the antenna's model-library verb: push the SAME `ModelLibraryView` the
             // "Browse Model Library" row pushes, onto Preferences' own nav stack — not a parallel
