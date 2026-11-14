@@ -317,6 +317,9 @@ private struct ModelLibraryRow: View {
 
     @State private var isExpanded = false
     @State private var prep = HandPreparation.shared
+#if DEBUG
+    @State private var bridge = AntennaUIBridge.shared
+#endif
 
     private var state: MLXModelDownloader.DownloadState? { downloader.downloadStates[model.id] }
     /// The download's second half: Core ML preparing this hand (HandPreparation).
@@ -324,6 +327,14 @@ private struct ModelLibraryRow: View {
     private var isDownloading: Bool { state?.isDownloading == true }
 
     var body: some View {
+        rowBody
+#if DEBUG
+            .onAppear { if bridge.expandModel == model.id { isExpanded = true } }
+            .onChange(of: bridge.expandModel) { _, id in if id == model.id { isExpanded = true } }
+#endif
+    }
+
+    private var rowBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
@@ -799,6 +810,10 @@ struct ModelLicenseSheet: View {
     /// `CameraView` opens Preferences; `PreferencesView` pushes the library onto its own nav stack while
     /// this stays true, and clears it when the library is popped.
     var tapModelLibrary = false
+    /// = tapping a model's row in the Model Library to open its card (`POST /open` with `X-Model`), so the
+    /// antenna can see what the card shows, the Developer Tray scorecard included. The row flips its
+    /// own `isExpanded` exactly as the tap does.
+    var expandModel: String?
     /// = tapping "Done" / backing all the way out to the bare capture screen.
     /// `CameraView` drops `showingPreferences` (which also drops any Model Library pushed inside it) and
     /// `showingDarkRoom`, exactly as the Done button / a back-swipe does. Without

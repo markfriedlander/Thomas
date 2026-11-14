@@ -1182,6 +1182,7 @@ extension LocalAPIServer {
                                "message": "Opened the Dark Room the way its button on the camera screen does. Screenshot with devicectl."]))
         case "modellibrary", "model-library", "library":
             bridge.tapModelLibrary = true
+            bridge.expandModel = req.headers["x-model"]   // optional: also open that model's card
             return (200, json(["screen": "modellibrary", "opened": true,
                                "message": "Opened Preferences and pushed the Model Library, the way tapping Browse Model Library does. Screenshot with devicectl."]))
         case "capture", "camera", "home":
