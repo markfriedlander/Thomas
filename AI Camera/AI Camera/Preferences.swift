@@ -586,6 +586,9 @@ struct PreferencesView: View {
     @State private var confirmingReset = false
     @State private var showingLayerOneInfo = false
     @State private var showingDarkRoom = false
+    /// The Thomas Guide (Guide.swift), opened from its row or a "?" card's "More in the guide", at a section.
+    @State private var showingGuide = false
+    @State private var guideSection: String?
     @FocusState private var promptFocused: Bool
     #if DEBUG
     /// Which antenna field last flashed "copied" (nil = none). See antennaCard.
@@ -608,12 +611,28 @@ struct PreferencesView: View {
                 )) { AboutView.thomas }
             #endif
         }
-        .overlay { if let help { PrefHelpCard(help: help) { self.help = nil }.transition(.opacity) } }
+        .overlay {
+            if let help {
+                PrefHelpCard(help: help, onGuide: {
+                    guideSection = Self.guideSection(for: help.id)
+                    self.help = nil
+                    showingGuide = true
+                }) { self.help = nil }
+                .transition(.opacity)
+            }
+        }
         .animation(.easeInOut(duration: 0.2), value: help)
         // Thomas's own look (Mark: "colorful, artistic, and celebratory"), the tray's dark ground.
         .preferredColorScheme(.dark)
         .tint(.white)
         .macResizablePresentation(isPresented: $showingDarkRoom) { DarkRoomView() }
+        .macResizablePresentation(isPresented: $showingGuide) { GuideReaderView(openAt: guideSection) }
+        #if DEBUG
+        // Human parity: the antenna's "open the guide" is the row's tap (POST /open X-Screen: guide).
+        .onChange(of: AntennaUIBridge.shared.tapGuide) { _, want in if want { openGuideFromAntenna() } }
+        // The flag is usually already set when Preferences appears (the camera opened it for the antenna).
+        .onAppear { if AntennaUIBridge.shared.tapGuide { openGuideFromAntenna() } }
+        #endif
         // Alerts hang off a stable parent, never a view that re-renders as `settings` changes (a sheet or
         // alert bound to a rebuilt view dismisses itself; learned with the old presets sheet, 2026-07-16).
         .alert("Why can't I change this line?", isPresented: $showingLayerOneInfo) {
@@ -662,6 +681,11 @@ struct PreferencesView: View {
                     // Reachable even when nothing is developing: the only door to shots waiting on a model.
                     Button { showingDarkRoom = true } label: {
                         doorRow(title: "The Dark Room", subtitle: "What's developing, and the negatives it keeps")
+                    }
+                    .buttonStyle(.plain)
+                    Divider().overlay(Color.white.opacity(0.12))
+                    Button { guideSection = nil; showingGuide = true } label: {
+                        doorRow(title: "The Thomas Guide", subtitle: "How everything works, in plain words, with search")
                     }
                     .buttonStyle(.plain)
                 }
@@ -1351,6 +1375,26 @@ struct PreferencesView: View {
 
     // MARK: - The deeper story behind each "?"
 
+    #if DEBUG
+    private func openGuideFromAntenna() {
+        guideSection = AntennaUIBridge.shared.guideSection
+        AntennaUIBridge.shared.tapGuide = false
+        showingGuide = true
+    }
+    #endif
+
+    /// The guide section that tells a help topic's longer story (its heading's anchor in THOMAS_GUIDE.md).
+    static func guideSection(for topic: String) -> String {
+        switch topic {
+        case "frame.lens", "shape", "location": return "lens-what-the-camera-takes"
+        case "frame.eye", "eye", "prompt", "temperature", "frametwo": return "eye-how-it-sees"
+        case "silentloop": return "the-silent-loop"
+        case "frame.hand", "hand", "steps", "decoder", "size", "developview": return "hand-how-it-draws"
+        case "frame.print", "layout", "wordspanel", "keepsake": return "print-what-lands-in-photos"
+        default: return "preferences-the-front-door"
+        }
+    }
+
     private func helpTopic(_ key: String) -> PrefHelp {
         let device = ThisDevice.deviceKind
         switch key {
@@ -1496,6 +1540,8 @@ struct PreferencesView: View {
 /// The deeper story, over the screen (the tray's help card). Shared by Preferences and the Dark Room.
 struct PrefHelpCard: View {
     let help: PrefHelp
+    /// Opens the Thomas Guide at this topic's section; nil hides the link.
+    var onGuide: (() -> Void)? = nil
     let done: () -> Void
 
     var body: some View {
@@ -1512,6 +1558,10 @@ struct PrefHelpCard: View {
                 .frame(maxHeight: 420)
                 .fixedSize(horizontal: false, vertical: true)
                 HStack {
+                    if let onGuide {
+                        Button("More in the guide", action: onGuide)
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                    }
                     Spacer()
                     Button("Done", action: done)
                         .font(.subheadline.weight(.bold)).foregroundStyle(.black)

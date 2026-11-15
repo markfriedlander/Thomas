@@ -480,6 +480,10 @@ final class DarkRoomWorker {
     /// handler that sets `suspended` may not have run yet. Every "abandon without saving" check reads this.
     private var leaving: Bool { suspended || ForegroundGate.isLeaving }
 
+    /// True while the model lane holds the next job until the phone cools (ThermalGovernor.pace), so the pill
+    /// says "Cooling down", not "Developing".
+    var laneHeldForHeat = false { didSet { if laneHeldForHeat != oldValue { syncStatusFeed() } } }
+
     /// Set when `develop` abandons a shot to be tried again at once: a trip to the background the app is
     /// already back from, or a model removed while the shot waited (not a failure).
     private var abandonedToRetry = false
@@ -552,7 +556,7 @@ final class DarkRoomWorker {
             StatusFeed.shared.publish(.couldNotKeep)
         } else if photosRefused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.photosRefused)
-        } else if isCoolingDown {
+        } else if isCoolingDown || (laneHeldForHeat && developingCount > 0) {
             // Only one pill speaks about heat (review round 2): while the preparation's pill says "Cooling
             // down", this one says the shot is waiting.
             let preparationSaysIt = HandPreparation.shared.isPreparing && HandPreparation.shared.waitingToCool

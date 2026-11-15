@@ -1243,12 +1243,20 @@ extension LocalAPIServer {
             bridge.tapPhotos = true
             return (200, json(["screen": "photos", "opened": true,
                                "message": "Tapped the Photos glyph, which opens the system Photos app (leaves the camera, same as a human tap)."]))
+        case "guide":
+            // X-Section: a heading's anchor (e.g. the-developer-tray); X-Query: find-in-page, as typed.
+            bridge.guideSection = req.headers["x-section"]
+            GuideState.shared.query = req.headers["x-query"] ?? ""
+            bridge.tapGuide = true
+            return (200, json(["screen": "guide", "opened": true, "section": req.headers["x-section"] ?? "",
+                               "query": req.headers["x-query"] ?? "",
+                               "message": "Opened Preferences and the Thomas Guide, the way tapping its row does."]))
         case "about":
             bridge.tapAbout = true
             return (200, json(["screen": "about", "opened": true,
                                "message": "Opened Preferences and pushed the About screen, the way tapping About Thomas does. Screenshot with devicectl."]))
         default:
-            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | preparing | photos | about"}"#)
+            return (400, #"{"error":"Pass X-Screen: preferences | darkroom | modellibrary | capture | privacy | preparing | photos | about | guide"}"#)
         }
     }
 

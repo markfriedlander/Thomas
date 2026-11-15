@@ -111,6 +111,10 @@
 //  HandPreparation.swift
 //   41  Preparing The Hand (Download, Then Prepare)
 //
+//  Guide.swift
+//   42  MarkdownView (Block-Level Markdown Renderer)
+//   43  GuideReaderView (The Thomas Guide, In-App)
+//
 //  Created by Mark Friedlander on 7/14/26.
 //
 

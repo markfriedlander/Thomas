@@ -882,6 +882,9 @@ struct ModelLicenseSheet: View {
     /// = tapping "About Thomas" in Preferences. `PreferencesView` pushes `AboutView` onto its own nav
     /// stack, the same push the row does. Cleared when the About screen is popped.
     var tapAbout = false
+    /// = tapping "The Thomas Guide" in Preferences (or a "?" card's "More in the guide" with a section).
+    var tapGuide = false
+    var guideSection: String? = nil
     /// A still photograph shown IN the viewfinder in place of the live sensor, for App Store screenshots
     /// (Mark, 2026-11-05: "make us look as good as possible"). The July store shots were mockups with the
     /// chrome redrawn by a script, and they went stale when the real buttons changed. With this, a

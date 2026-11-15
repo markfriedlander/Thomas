@@ -86,6 +86,10 @@ actor ThermalGovernor {
         if isCool(currentState()) { return }
 
         cameraLog("THERMAL: \(thermalStateLabel(currentState())) — holding the next shot until the phone cools")
+        // Say so on the camera screen: this hold used to sit under a "Developing" pill (seen on Mark's phone,
+        // 2026-11-15, at "serious").
+        await MainActor.run { DarkRoomWorker.shared.laneHeldForHeat = true }
+        defer { Task { @MainActor in DarkRoomWorker.shared.laneHeldForHeat = false } }
         var waited = 0.0
         while !Task.isCancelled {
             let state = currentState()
