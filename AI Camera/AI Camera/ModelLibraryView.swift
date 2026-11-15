@@ -692,6 +692,10 @@ struct ModelLicenseSheet: View {
                             }
                             Text("Requires \(String(format: "%.1f", gb)) GB of storage and bandwidth. Wi-Fi recommended.")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if PrivacyMonitor.shared.isOnCellular {
+                                Text("You're on cellular data right now.")
+                                    .font(.caption).fontWeight(.semibold).foregroundStyle(.orange)
+                            }
                         }
                     }
 

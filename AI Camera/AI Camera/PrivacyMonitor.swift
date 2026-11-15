@@ -65,6 +65,10 @@ final class PrivacyMonitor: NSObject {
     var isNetworkAvailable: Bool { pathAvailable ?? true }
     private var pathAvailable: Bool?
 
+    /// True when the network in use right now is cellular (no Wi-Fi or wired path), so a download would
+    /// spend mobile data. The download sheet says so in one line (Mark, 2026-11-14: one line, no box).
+    private(set) var isOnCellular = false
+
     /// True when the user has granted this app Location access. When false there is no coordinate at
     /// all, so the place axis can never leak regardless of the reverse-geocode setting.
     private(set) var isLocationAuthorized: Bool = false
@@ -96,11 +100,14 @@ final class PrivacyMonitor: NSObject {
             // `.requiresConnection` (Airplane Mode, Wi-Fi up but unreachable, cellular off) mean
             // not available, so both leak paths close.
             let available = (path.status == .satisfied)
+            let cellular = available && path.usesInterfaceType(.cellular)
+                && !path.usesInterfaceType(.wifi) && !path.usesInterfaceType(.wiredEthernet)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if self.pathAvailable != available {
                     self.pathAvailable = available
                 }
+                if self.isOnCellular != cellular { self.isOnCellular = cellular }
             }
         }
         monitor.start(queue: queue)

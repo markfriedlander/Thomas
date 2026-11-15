@@ -36,6 +36,7 @@ import SwiftUI
 enum OpenSourceLicense: String {
     case mit = "MIT License"
     case apache2 = "Apache License 2.0"
+    case bsd3 = "BSD 3-Clause License"
 
     var displayName: String { rawValue }
 
@@ -47,6 +48,7 @@ enum OpenSourceLicense: String {
         switch self {
         case .mit: return Self.mitBody
         case .apache2: return Self.apache2Body
+        case .bsd3: return Self.bsd3Body
         }
     }
 }
@@ -109,7 +111,7 @@ struct AboutView: View {
     /// Grouped by license so identical terms sit together (all the MIT projects,
     /// then all the Apache ones), each group in the order the app declared them.
     private var groups: [(license: OpenSourceLicense, items: [Acknowledgement])] {
-        let order: [OpenSourceLicense] = [.mit, .apache2]
+        let order: [OpenSourceLicense] = [.mit, .apache2, .bsd3]
         return order.compactMap { lic in
             let items = acknowledgements.filter { $0.license == lic }
             return items.isEmpty ? nil : (lic, items)
@@ -271,6 +273,19 @@ private struct AcknowledgementDetail: View {
 extension OpenSourceLicense {
     /// The MIT permission text, without a copyright line — each component's own
     /// copyright is shown above it in the detail view.
+    /// The BSD 3-Clause permission text, as PocketFFT carries it (its copyright lines shown above it).
+    static let bsd3Body = """
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+    * Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    """
+
     static let mitBody = """
     Permission is hereby granted, free of charge, to any person obtaining a copy \
     of this software and associated documentation files (the "Software"), to deal \
@@ -508,7 +523,9 @@ private func thomasActiveModels() -> [ModelCredit] {
         case ModelCatalog.apple.id:
             return ModelCredit(
                 name: model.displayName,
-                terms: "Apple on-device foundation model, built into \(ThisDevice.deviceKind == "Mac" ? "macOS" : ThisDevice.deviceKind == "iPad" ? "iPadOS" : "iOS")",
+                // Not "on-device": with a network, Apple may handle a request on Private Cloud Compute, as the
+                // privacy lock says (independent review, 2026-11-14).
+                terms: "Apple's foundation model, part of Apple Intelligence in \(ThisDevice.deviceKind == "Mac" ? "macOS" : ThisDevice.deviceKind == "iPad" ? "iPadOS" : "iOS")",
                 attribution: nil,
                 url: nil
             )
@@ -530,10 +547,10 @@ private func thomasActiveModels() -> [ModelCredit] {
 private let thomasAcknowledgements: [Acknowledgement] = [
     // — MIT —
     Acknowledgement(name: "MLX", license: .mit,
-                    copyright: "Copyright (c) 2023 Apple / ml-explore",
+                    copyright: "Copyright (c) 2023 ml-explore",
                     url: "https://github.com/ml-explore/mlx-swift"),
     Acknowledgement(name: "MLX Swift Examples / LM", license: .mit,
-                    copyright: "Copyright (c) 2024 Apple / ml-explore",
+                    copyright: "Copyright (c) 2024 ml-explore",
                     url: "https://github.com/ml-explore/mlx-swift-lm"),
     Acknowledgement(name: "StableDiffusion (mlx-swift-examples)", license: .mit,
                     copyright: "Copyright (c) 2024 ml-explore",
@@ -553,6 +570,11 @@ private let thomasAcknowledgements: [Acknowledgement] = [
     Acknowledgement(name: "yyjson", license: .mit,
                     copyright: "Copyright (c) 2020 YaoYuan",
                     url: "https://github.com/ibireme/yyjson"),
+    // Inside MLX's C++ core (mlx-swift Source/Cmlx), compiled into the binary; found missing by the
+    // independent review, 2026-11-14, and read from the files on disk (json 3.11.3's header).
+    Acknowledgement(name: "JSON for Modern C++ (nlohmann/json)", license: .mit,
+                    copyright: "Copyright (c) 2013-2023 Niels Lohmann",
+                    url: "https://github.com/nlohmann/json"),
 
     // — Apache-2.0 —
     Acknowledgement(name: "swift-transformers", license: .apache2,
@@ -606,6 +628,21 @@ private let thomasAcknowledgements: [Acknowledgement] = [
     Acknowledgement(name: "SwiftSyntax", license: .apache2,
                     copyright: "Copyright The Swift Project Authors",
                     url: "https://github.com/swiftlang/swift-syntax"),
+    // Inside MLX (Source/Cmlx/metal-cpp), the C++ interface to Metal its GPU code is written in.
+    Acknowledgement(name: "metal-cpp", license: .apache2,
+                    copyright: "Copyright © 2024 Apple Inc.",
+                    url: "https://developer.apple.com/metal/cpp/"),
+
+    // — BSD 3-Clause —
+    // Inside MLX (mlx/3rdparty/pocketfft.h), its fast Fourier transforms on the CPU and GPU backends.
+    Acknowledgement(name: "PocketFFT", license: .bsd3,
+                    copyright: """
+                    Copyright (C) 2010-2022 Max-Planck-Society
+                    Copyright (C) 2019-2020 Peter Bell
+                    Copyright (C) 2003, 2007-14 Matteo Frigo
+                    Copyright (C) 2003, 2007-14 Massachusetts Institute of Technology
+                    """,
+                    url: "https://gitlab.mpcdf.mpg.de/mtr/pocketfft"),
 ]
 
 // ==== LEGO END: 30 About (Who Made This, And On Whose Shoulders) ====

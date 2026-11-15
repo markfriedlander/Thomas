@@ -490,7 +490,7 @@ nonisolated enum ModelCatalog {
         ]),
         sizeGB: 2.40,
         blurb: "Draws the third frame - the machine's re-imagining, made from its own words. Never sees your photograph; it only reads what the eye said about it.",
-        licence: "Stability AI Community License - free under $1M revenue",
+        licence: "Stability AI Community License - free for users under $1M revenue",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
         layerOnePrompt: nil,
         engine: .mlx,
