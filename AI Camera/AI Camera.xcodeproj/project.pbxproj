@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		326643D2A3DD371AD5A06424 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F7F98329F4537EB5738DDFE3 /* Foundation.framework */; };
+		5EB5188B8274942B72C9ED66 /* ThomasAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAB9937E37EED8AC485C735 /* ThomasAuditTests.swift */; };
 		851C6E8D3013F6B100362DA9 /* SharedModelStoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 851C6E8C3013F6B100362DA9 /* SharedModelStoreKit */; };
 		856031CB301715600059F17E /* StableDiffusion in Frameworks */ = {isa = PBXBuildFile; productRef = 856031CA301715600059F17E /* StableDiffusion */; };
 		85F3B66D300740F300DA91ED /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 85F3B66C300740F300DA91ED /* MLXLMCommon */; };
@@ -18,18 +20,31 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		58EB63A24394F06234637DA4 /* ThomasUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ThomasUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		85F3B6373007128400DA91ED /* AI Camera.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AI Camera.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DCAB9937E37EED8AC485C735 /* ThomasAuditTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ThomasAuditTests.swift; sourceTree = "<group>"; };
+		F7F98329F4537EB5738DDFE3 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		85F3B6393007128400DA91ED /* AI Camera */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = "AI Camera";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0551EB6A18307315AD40E856 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				326643D2A3DD371AD5A06424 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		85F3B6343007128400DA91ED /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -46,12 +61,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		6A70326DB29604DD42152710 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				F7F98329F4537EB5738DDFE3 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		85F3B62E3007128400DA91ED = {
 			isa = PBXGroup;
 			children = (
 				85F3B6393007128400DA91ED /* AI Camera */,
 				85F3B6703007434600DA91ED /* Frameworks */,
 				85F3B6383007128400DA91ED /* Products */,
+				D701F56CEEA20ED6BA932CA7 /* ThomasUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -59,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				85F3B6373007128400DA91ED /* AI Camera.app */,
+				58EB63A24394F06234637DA4 /* ThomasUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,13 +91,40 @@
 		85F3B6703007434600DA91ED /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				6A70326DB29604DD42152710 /* iOS */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D701F56CEEA20ED6BA932CA7 /* ThomasUITests */ = {
+			isa = PBXGroup;
+			children = (
+				DCAB9937E37EED8AC485C735 /* ThomasAuditTests.swift */,
+			);
+			name = ThomasUITests;
+			path = ThomasUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0B21DA970FF5C635B0FFA80B /* ThomasUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 198F5E9F48B57D653394EE6E /* Build configuration list for PBXNativeTarget "ThomasUITests" */;
+			buildPhases = (
+				8E808581A73A0C1691343E25 /* Sources */,
+				0551EB6A18307315AD40E856 /* Frameworks */,
+				DDCA1670ED375015882AEAE3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ThomasUITests;
+			productName = ThomasUITests;
+			productReference = 58EB63A24394F06234637DA4 /* ThomasUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		85F3B6363007128400DA91ED /* AI Camera */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 85F3B6423007128B00DA91ED /* Build configuration list for PBXNativeTarget "AI Camera" */;
@@ -82,6 +134,8 @@
 				85F3B6353007128400DA91ED /* Resources */,
 			);
 			buildRules = (
+			);
+			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
 				85F3B6393007128400DA91ED /* AI Camera */,
@@ -137,6 +191,7 @@
 			projectRoot = "";
 			targets = (
 				85F3B6363007128400DA91ED /* AI Camera */,
+				0B21DA970FF5C635B0FFA80B /* ThomasUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -147,6 +202,13 @@
 			files = (
 			);
 		};
+		DDCA1670ED375015882AEAE3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -155,10 +217,34 @@
 			files = (
 			);
 		};
+		8E808581A73A0C1691343E25 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5EB5188B8274942B72C9ED66 /* ThomasAuditTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		85F3B6403007128B00DA91ED /* Debug configuration for PBXProject "AI Camera" */ = {
+		66AB779479ACC3D0DC46E86F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = FBUNBDS7R7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MarkFriedlander.ThomasUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		85F3B6403007128B00DA91ED /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -222,7 +308,7 @@
 			};
 			name = Debug;
 		};
-		85F3B6413007128B00DA91ED /* Release configuration for PBXProject "AI Camera" */ = {
+		85F3B6413007128B00DA91ED /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -279,7 +365,7 @@
 			};
 			name = Release;
 		};
-		85F3B6433007128B00DA91ED /* Debug configuration for PBXNativeTarget "AI Camera" */ = {
+		85F3B6433007128B00DA91ED /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -290,7 +376,7 @@
 				DEVELOPMENT_TEAM = FBUNBDS7R7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Thomas";
+				INFOPLIST_KEY_CFBundleDisplayName = Thomas;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Thomas uses the camera to take your photographs.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Stamps each shot with where it was taken, the way a date-back camera does.";
@@ -317,7 +403,7 @@
 			};
 			name = Debug;
 		};
-		85F3B6443007128B00DA91ED /* Release configuration for PBXNativeTarget "AI Camera" */ = {
+		85F3B6443007128B00DA91ED /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -328,7 +414,7 @@
 				DEVELOPMENT_TEAM = FBUNBDS7R7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Thomas";
+				INFOPLIST_KEY_CFBundleDisplayName = Thomas;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Thomas uses the camera to take your photographs.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Stamps each shot with where it was taken, the way a date-back camera does.";
@@ -355,22 +441,48 @@
 			};
 			name = Release;
 		};
+		F69614A62303F9197184824E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = FBUNBDS7R7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MarkFriedlander.ThomasUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		198F5E9F48B57D653394EE6E /* Build configuration list for PBXNativeTarget "ThomasUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F69614A62303F9197184824E /* Release */,
+				66AB779479ACC3D0DC46E86F /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		85F3B6323007128400DA91ED /* Build configuration list for PBXProject "AI Camera" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				85F3B6403007128B00DA91ED /* Debug configuration for PBXProject "AI Camera" */,
-				85F3B6413007128B00DA91ED /* Release configuration for PBXProject "AI Camera" */,
+				85F3B6403007128B00DA91ED /* Debug */,
+				85F3B6413007128B00DA91ED /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		85F3B6423007128B00DA91ED /* Build configuration list for PBXNativeTarget "AI Camera" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				85F3B6433007128B00DA91ED /* Debug configuration for PBXNativeTarget "AI Camera" */,
-				85F3B6443007128B00DA91ED /* Release configuration for PBXNativeTarget "AI Camera" */,
+				85F3B6433007128B00DA91ED /* Debug */,
+				85F3B6443007128B00DA91ED /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
