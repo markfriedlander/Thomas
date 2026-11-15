@@ -211,8 +211,31 @@ struct AboutView: View {
                 }
             }
         }
+        .readableListWidth()
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A phone-like reading width for a list in a wide window (iPad, a Mac), centered, while the list still
+/// scrolls edge to edge (Mark, 2026-11-14: About and the Model Library ran the full width of the Mac's
+/// window while Preferences and the Dark Room were already narrowed). On a phone the window is narrower
+/// than the limit, so nothing changes. Part of the shared About code: other studio apps can use it on any
+/// list screen.
+struct ReadableListWidth: ViewModifier {
+    var maxWidth: CGFloat = 640
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .contentMargins(.horizontal, max(0, (width - maxWidth) / 2), for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+extension View {
+    func readableListWidth(_ maxWidth: CGFloat = 640) -> some View {
+        modifier(ReadableListWidth(maxWidth: maxWidth))
     }
 }
 

@@ -115,6 +115,7 @@ struct ModelLibraryView: View {
                     .font(.caption2)
             }
         }
+        .readableListWidth()
         .navigationTitle("Model Library")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadQueuedUsage() }
