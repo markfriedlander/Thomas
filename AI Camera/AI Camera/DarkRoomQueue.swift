@@ -478,6 +478,9 @@ final class DarkRoomWorker {
     /// handler that sets `suspended` may not have run yet. Every "abandon without saving" check reads this.
     private var leaving: Bool { suspended || ForegroundGate.isLeaving }
 
+    /// Set when `develop` abandons a shot because of a trip to the background (not a failure).
+    private var abandonedForInterruption = false
+
     /// How many looks a shot gets when the eye breaks, before it is saved with no words.
     nonisolated static let eyeTries = 3
 
@@ -529,6 +532,10 @@ final class DarkRoomWorker {
     /// clears when it ends. Called from the `didSet`s above, so there is one code path and it can't
     /// drift from the real state. `publish` is a no-op when the message is unchanged, so the extra
     /// calls from same-value assignments cost nothing.
+    /// Re-read the pill when something outside the worker changes what it should say (the preparation
+    /// starting or stopping its wait for the phone to cool).
+    func resyncPill() { syncStatusFeed() }
+
     private func syncStatusFeed() {
         // One pill, five states, by precedence (Mark, 2026-07-21):
         //   1. cooling down — this is WHY nothing is progressing, so it speaks over the rest
@@ -540,10 +547,11 @@ final class DarkRoomWorker {
             StatusFeed.shared.publish(.couldNotKeep)
         } else if photosRefused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.photosRefused)
-        } else if isCoolingDown && !(HandPreparation.shared.isPreparing && HandPreparation.shared.waitingToCool) {
-            // Only one pill speaks about heat: while the preparation's pill says "Cooling down", this one
-            // shows the count instead (review round 2).
-            StatusFeed.shared.publish(.cooling)
+        } else if isCoolingDown {
+            // Only one pill speaks about heat (review round 2): while the preparation's pill says "Cooling
+            // down", this one says the shot is waiting.
+            let preparationSaysIt = HandPreparation.shared.isPreparing && HandPreparation.shared.waitingToCool
+            StatusFeed.shared.publish(preparationSaysIt ? .waitingToDevelop(count: max(1, developingCount)) : .cooling)
         } else if isPaused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.paused)
         } else if developingCount > 0 && waitingForLane {
@@ -680,6 +688,28 @@ final class DarkRoomWorker {
             let after = await DarkRoomStore.shared.pending()
             developingCount = after.filter { $0.status == .pending }.count
             blockedCount = after.filter { $0.status == .blocked }.count
+            watchAppleReadiness(after)
+        }
+    }
+
+    /// Nothing announces Apple Intelligence becoming ready, so while a shot waits for it, look again every
+    /// 10 s and kick when it is (review, 2026-11-15: the Dark Room promises it develops on its own, and it
+    /// only did on the next foreground or shot).
+    private var readinessWatch: Task<Void, Never>?
+    private func watchAppleReadiness(_ records: [ShotRecord]) {
+        let waiting = records.contains { $0.status == .blocked && $0.blockedModel == Self.appleIntelligenceName }
+        guard waiting else { readinessWatch?.cancel(); readinessWatch = nil; return }
+        guard readinessWatch == nil else { return }
+        readinessWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled else { return }
+                if Readiness.current.isReady {
+                    self?.readinessWatch = nil
+                    self?.kick()
+                    return
+                }
+            }
         }
     }
 
@@ -723,6 +753,10 @@ final class DarkRoomWorker {
                 // rather than burn the battery re-developing the same shot. Nothing is lost — it
                 // stays on disk — and the next foreground kick retries. `develop` also returns false
                 // when suspended mid-flight, which stops the loop cleanly for the same reason.
+                // Abandoned because of a trip to the background, and the app is already back: develop it again
+                // now (the return's kick found this loop still running, so it started nothing).
+                if !saved, abandonedForInterruption, !leaving { abandonedForInterruption = false; continue }
+                abandonedForInterruption = false
                 guard saved else { return }
             }
         }
@@ -790,6 +824,10 @@ final class DarkRoomWorker {
         // Bail before touching anything heavy if the app has been backgrounded. The shot stays
         // pending on disk and re-develops whole on the next foreground kick.
         if leaving { return false }
+        // Any trip to the background from here on means this develop was interrupted, even if the app is
+        // back by the time the work returns (ForegroundGate.backgroundEntries).
+        let tripsAtStart = ForegroundGate.backgroundEntries
+        let interrupted = { self.leaving || ForegroundGate.backgroundEntries != tripsAtStart }
 
         // Decode the saved reality frame. If the photo is gone or unreadable there is nothing to
         // develop and nothing to recover — drop the record so the loop can't spin on it forever.
@@ -820,7 +858,10 @@ final class DarkRoomWorker {
                 announcedHold = true
             }
             isCoolingDown = true
-            try? await Task.sleep(nanoseconds: 2_000_000_000)   // re-check every 2 s
+            // Every 2 s, the same cadence as ThermalGovernor. Tried 0.5 s (2026-11-15) so the pill would drop
+            // "Cooling down" sooner; Mark: a pill up to 2 s late doesn't matter to anyone, extra work while the
+            // phone is trying to cool does. (The read itself is cheap, but the gain isn't worth any cost.)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
         // The hold ends two ways; say which. Logging "cooled" when the loop actually exited because
         // the app went to the background (phone locked) sent a 2026-11-05 reading down the wrong path.
@@ -829,7 +870,7 @@ final class DarkRoomWorker {
                                 : "DARKROOM: phone cooled, resuming develop")
         }
         isCoolingDown = false
-        if leaving { currentShotID = nil; currentStage = nil; return false }
+        if interrupted() { abandonedForInterruption = true; currentShotID = nil; currentStage = nil; return false }
 
         // The heavy pipeline — see, tear the eye down, draw — through the ONE lane shared with the
         // antenna. Only Sendable values cross back; the cheap compositor + save stay out here. The
@@ -839,6 +880,11 @@ final class DarkRoomWorker {
             await ModelLane.shared.run("darkroom") { @MainActor in
                 // The lane has started this shot: only now is it developing.
                 self.waitingForLane = false
+                // Its turn came while Thomas is in the background (it queued before): touch no model; the
+                // develop is abandoned below and done whole on return (review, 2026-11-15).
+                if ForegroundGate.isLeaving {
+                    return (Perception.broke(reason: MLXVLMEye.interruptedReason), nil, "")
+                }
                 self.currentStage = .seeing
                 // A fresh trace for this shot (the Developer Tray watches it live); a shot that draws
                 // nothing must never inherit another shot's steps.
@@ -854,7 +900,7 @@ final class DarkRoomWorker {
         var keepsakeImages: [UIImage] = []
         var keepsakeVideos: [URL] = []
         let keepsake = config.effectiveKeepsake
-        if keepsake != .off, result.drawn != nil, !leaving,
+        if keepsake != .off, result.drawn != nil, !interrupted(),
            let trace = DevelopTrace.shared.snapshot() {
             let frames = await ModelLane.shared.run("keepsake") { DeveloperTray.decode(trace) }
             if let frames {
@@ -880,8 +926,10 @@ final class DarkRoomWorker {
         // Interrupted by a background transition while the heavy op ran? Abandon WITHOUT saving —
         // the record is untouched and still pending, so foregrounding redoes the whole shot. This
         // is why a suspended app never saves a half-finished develop.
-        if leaving {
+        if interrupted() {
+            cameraLog("DARKROOM: shot \(shot.id) was interrupted by a trip to the background; it develops again, whole")
             for url in keepsakeVideos { try? FileManager.default.removeItem(at: url) }
+            abandonedForInterruption = true
             currentShotID = nil; currentStage = nil; return false
         }
 

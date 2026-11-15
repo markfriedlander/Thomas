@@ -176,6 +176,9 @@ nonisolated func processAvailableMemoryMB() -> Double {
     // memory isn't capped this way), or the app is already at its limit. Reading every 0 as "unlimited"
     // let a phone at its limit start a multi-GB load straight into a jetsam kill (review round 3,
     // 2026-11-14). On a phone it now reads as no room at all.
+    #if targetEnvironment(simulator)
+    if bytes == 0 { return .infinity }   // the Simulator reports 0 and runs no models
+    #endif
     if bytes == 0 { return ProcessInfo.processInfo.isiOSAppOnMac ? .infinity : 0 }
     return Double(bytes) / (1024.0 * 1024.0)
     #else

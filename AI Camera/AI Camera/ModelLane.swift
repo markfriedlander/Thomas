@@ -156,6 +156,24 @@ nonisolated enum ForegroundGate {
 
     private static let state = Atomic<Int>(State.active.rawValue)
     private static let started = Atomic<Bool>(false)
+    private static let departures = Atomic<Int>(0)
+    /// When the app last became inactive (seconds since 1970, as bits), for the bounded wait below.
+    private static let inactiveSinceBits = Atomic<UInt64>(0)
+
+    /// How many times the app has gone to the background since launch. Work that spans a trip there
+    /// (even one the app is already back from) was interrupted: the Dark Room redoes it whole (review of
+    /// round 3's fix, 2026-11-15: a quick lock and unlock used to save the shot without its drawing).
+    static var backgroundEntries: Int { departures.load(ordering: .relaxed) }
+
+    /// Inactive this long or more is not a screen locking (that reaches the background within a second):
+    /// an iPad window in the background of Stage Manager, say. GPU work is allowed while inactive, so past
+    /// this the work goes on rather than waiting forever (same review).
+    static let lockingGrace: TimeInterval = 3
+
+    private static var inactiveLongEnough: Bool {
+        let since = Double(bitPattern: inactiveSinceBits.load(ordering: .relaxed))
+        return since > 0 && Date().timeIntervalSince1970 - since > lockingGrace
+    }
 
     static var current: State { State(rawValue: state.load(ordering: .relaxed)) ?? .active }
 
@@ -183,6 +201,10 @@ nonisolated enum ForegroundGate {
 
     static func set(_ s: State) {
         let before = state.exchange(s.rawValue, ordering: .relaxed)
+        if s == .background && before != State.background.rawValue { departures.add(1, ordering: .relaxed) }
+        if s == .inactive && before != State.inactive.rawValue {
+            inactiveSinceBits.store(Date().timeIntervalSince1970.bitPattern, ordering: .relaxed)
+        }
         if before != s.rawValue { cameraLog("GATE: \(State(rawValue: before).map { "\($0)" } ?? "?") -> \(s)") }
     }
 
@@ -190,7 +212,7 @@ nonisolated enum ForegroundGate {
     /// is in the background, meaning "stop now and abandon".
     static func mayContinue() async -> Bool {
         if !ProcessInfo.processInfo.isiOSAppOnMac {
-            while current == .inactive { try? await Task.sleep(nanoseconds: 100_000_000) }
+            while current == .inactive && !inactiveLongEnough { try? await Task.sleep(nanoseconds: 100_000_000) }
         }
         return current != .background
     }
@@ -198,8 +220,10 @@ nonisolated enum ForegroundGate {
     /// For work that can't wait between steps (the eye's words arrive from a stream that keeps going):
     /// true while it may keep running. On a phone it must stop as soon as the app is inactive.
     static var mayRunGPU: Bool {
-        ProcessInfo.processInfo.isiOSAppOnMac ? current != .background : current == .active
+        if ProcessInfo.processInfo.isiOSAppOnMac { return current != .background }
+        return current == .active || (current == .inactive && inactiveLongEnough)
     }
+
 }
 
 // ==== LEGO END: 9 The Model Lane (Serialization + Settle) ====

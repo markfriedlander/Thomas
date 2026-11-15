@@ -891,7 +891,10 @@ final class TrayModel {
         if live { liveInFlight = true }
         requested.insert(k)
         let values = t.latents[k - 1], shape = t.shape, channelsLast = t.channelsLast
-        let direct = !t.channelsLast && t.final == nil   // Core ML hand mid-draw: the GPU is idle
+        // Beside the lane only while a Core ML drawing is really stepping (the GPU is idle then). After a
+        // failed or interrupted drawing, or at the next shot's start, `final` is nil too, so that alone
+        // let a preview overlap the next job (review, 2026-11-15).
+        let direct = !t.channelsLast && t.final == nil && t.steps > 0 && DarkRoomWorker.shared.currentStage == .drawing
         let decoder = self.decoder
         Task {
             let started = Date()

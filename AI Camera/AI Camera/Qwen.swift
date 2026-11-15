@@ -116,12 +116,13 @@ nonisolated struct MLXVLMEye: Sendable {
 
     /// Ask, and collect the reply as it streams, stopping at the next word piece once the app may no longer
     /// run GPU work (ForegroundGate: on a phone, as soon as the screen starts to lock). If Thomas comes
-    /// straight back (a glance at Control Center), ask again from the start with a fresh session, up to
-    /// three times; nil when the app went to the background instead. Same words as `respond`, which is
+    /// straight back (a glance at Control Center), ask again from the start with a fresh session, as many
+    /// times as that happens; nil when the app went to the background instead. Same words as `respond`, which is
     /// this same stream collected (mlx-swift-lm ChatSession).
     private static func respondInFront(_ prompt: String, image: UserInput.Image? = nil,
                                        session makeSession: () throws -> ChatSession) async throws -> String? {
-        for attempt in 1...3 {
+        var attempt = 1
+        while true {
             let session = try makeSession()
             var out = ""
             var stopped = false
@@ -132,9 +133,9 @@ nonisolated struct MLXVLMEye: Sendable {
             if !stopped { return out }
             cameraLog("EYE: stopped mid-reply (\(ForegroundGate.current)), \(out.count) characters in")
             guard await ForegroundGate.mayContinue() else { return nil }
-            cameraLog("EYE: back in front; asking again (attempt \(attempt + 1))")
+            attempt += 1
+            cameraLog("EYE: back in front; asking again (attempt \(attempt))")
         }
-        return nil
     }
 
     /// The eye restating its own words in fewer of them. See `Eye.condense` for the why and

@@ -545,6 +545,8 @@ extension LocalAPIServer {
             "pendingCount":    pending.count,
             "developingCount": developing,
             "coolingDown":     cooling,
+            // Every pill on the camera screen right now, as a person sees them (the status area).
+            "pills": StatusFeed.shared.messages.map { ["kind": "\($0.kind)", "icon": $0.icon ?? "", "text": $0.text, "spinner": $0.showsSpinner] },
             "shots":           shots
         ]))
     }
@@ -975,11 +977,12 @@ extension LocalAPIServer {
         switch (req.headers["x-action"] ?? "").lowercased() {
         case "start": Task { await HandPreparation.shared.prepare(repo, reason: "antenna") }
         case "forget": HandPreparation.forget(repo)
+        case "failnext": HandPreparation.failNext = true
         case "afterlaunch": Task { await HandPreparation.shared.prepareAfterLaunchIfNeeded() }
         // The exact signal the downloader posts when the last file lands (MLXModelDownloader), so the
         // download-then-prepare path is exercised without re-downloading 1.1 GB.
         case "downloaded": NotificationCenter.default.post(name: .mlxModelDidDownload, object: nil, userInfo: ["modelID": repo])
-        default: return (400, #"{"error":"X-Action: start | forget | afterlaunch | downloaded"}"#)
+        default: return (400, #"{"error":"X-Action: start | forget | failnext | afterlaunch | downloaded"}"#)
         }
         return (200, json(["ok": true, "repo": repo]))
     }

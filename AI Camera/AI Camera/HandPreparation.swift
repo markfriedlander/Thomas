@@ -133,6 +133,9 @@ final class HandPreparation {
     }
 
     #if DEBUG
+    /// Antenna only: make the next preparation fail (POST /prepare X-Action: failnext).
+    static var failNext = false
+
     /// Antenna only: forget that this build was prepared, to exercise the after-update path.
     nonisolated static func forget(_ repoID: String) {
         UserDefaults.standard.removeObject(forKey: "handPreparedFor.\(repoID)")
@@ -157,13 +160,14 @@ final class HandPreparation {
         phase = .preparing; stage = 0; stageCount = 0; stageName = "Getting ready"
         started = nil; begun = false; now = Date()
         waitingToCool = await ThermalGovernor.shared.isHotNow()
+        DarkRoomWorker.shared.resyncPill()
         ticker?.cancel()
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if let self, !self.begun {
                     let hot = await ThermalGovernor.shared.isHotNow()
-                    if hot != self.waitingToCool { self.waitingToCool = hot }
+                    if hot != self.waitingToCool { self.waitingToCool = hot; DarkRoomWorker.shared.resyncPill() }
                 }
                 self?.now = Date()
                 self?.publishPill()
@@ -176,6 +180,14 @@ final class HandPreparation {
             // Past the lane's heat hold: the real work starts now, and so does the clock.
             await MainActor.run { HandPreparation.shared.beginWork() }
             do {
+                #if DEBUG
+                // Antenna only (POST /prepare X-Action: failnext): the next preparation fails as a real one
+                // can, so what follows a failure can be seen without breaking the model.
+                if await MainActor.run(body: { HandPreparation.failNext }) {
+                    await MainActor.run { HandPreparation.failNext = false }
+                    throw NSError(domain: "HandPreparation", code: 1, userInfo: [NSLocalizedDescriptionKey: "forced failure (antenna test)"])
+                }
+                #endif
                 let seconds = try await CoreMLDrawer.shared.prepare(repoID: repoID) { k, n, name in
                     Task { @MainActor in
                         HandPreparation.shared.stage = k
@@ -190,6 +202,8 @@ final class HandPreparation {
             }
         }
         ticker?.cancel(); ticker = nil
+        phase = .idle   // no longer preparing (set below to how it ended); lets the Dark Room's pill speak again
+        DarkRoomWorker.shared.resyncPill()
         switch result {
         case .success(let seconds):
             Self.markPrepared(repoID, seconds: seconds)

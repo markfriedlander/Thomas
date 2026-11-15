@@ -477,6 +477,12 @@ actor DrawerLoader {
         }
         guard let final = latent else { throw DrawingError.producedNothing }
 
+        // The decode below is GPU work too: not once the app is leaving (ForegroundGate).
+        guard await ForegroundGate.mayContinue() else {
+            cameraLog("DRAW: stopped before decoding, the app went to the background")
+            throw DrawingError.interrupted
+        }
+
         // ── Choose the developer. ──
         //
         // Two user choices (`decoderPreference`), plus one non-negotiable: the decode never

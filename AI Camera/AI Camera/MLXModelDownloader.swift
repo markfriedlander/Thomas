@@ -762,6 +762,7 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             if Date().timeIntervalSince(self.lockRefreshedAt[context.modelID] ?? .distantPast) > 60 {
                 self.lockRefreshedAt[context.modelID] = Date()
                 SharedModelStore.refreshDownloadLock(modelID: sharedStoreKey(forRepoID: context.modelID))
+                cameraLog("HALDEBUG-BGDL: refreshed the download lock for \(context.modelID) from transfer progress")
             }
             let prev = self.bytesWrittenByTask[key] ?? 0
             let delta = max(0, totalBytesWritten - prev)
@@ -1972,8 +1973,16 @@ class MLXModelDownloader: ObservableObject {
         Task {
             await BackgroundDownloadCoordinator.shared.cancelDownload(modelID: modelID)
             await MainActor.run {
-                // The partial copy goes, unless it is finished or another app holds it.
-                if !SharedModelStore.isRepoReady(key), SharedModelStore.claimants(modelID: key).isEmpty,
+                // The partial copy goes, unless it is finished, another app holds it, or another app is
+                // downloading into it right now (a fresh lock that isn't ours: Thomas may only have been
+                // waiting to adopt that app's download; review, 2026-11-15). Apps claim only on completion,
+                // so a claim alone doesn't show a download in progress.
+                let siblingDownloading: Bool = {
+                    guard let lock = SharedModelStore.downloadLock(modelID: key) else { return false }
+                    return lock.holder != SharedModelStore.thisAppID
+                        && Date().timeIntervalSince1970 - lock.since < SharedModelStore.downloadLockStaleSeconds
+                }()
+                if !SharedModelStore.isRepoReady(key), SharedModelStore.claimants(modelID: key).isEmpty, !siblingDownloading,
                    FileManager.default.fileExists(atPath: SharedModelStore.mlxModelDir(key).path) {
                     try? FileManager.default.removeItem(at: SharedModelStore.mlxModelDir(key))
                     cameraLog("HALDEBUG-DOWNLOAD: removed the partial \(modelID) after cancel")

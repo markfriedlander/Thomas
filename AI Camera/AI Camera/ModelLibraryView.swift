@@ -98,7 +98,7 @@ struct ModelLibraryView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Clear all family models")
                                 .foregroundColor(.red)
-                            Text("Removes every shared model for Hal, Posey, and Thomas at once. Each app re-downloads as needed. Last resort.")
+                            Text("Removes every shared model for Hal, Posey, and Thomas at once. Download any of them again here when you want it. Last resort.")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
@@ -780,7 +780,11 @@ struct ModelLicenseSheet: View {
 /// in progress, let go of a resident eye or hand, go back to Apple's eye, and let the layout rules see that
 /// no hand is left. Then the shared store is emptied for every app.
 @MainActor func clearAllFamilyModels() async {
-    for model in ModelCatalog.all where !model.isBuiltIn { MLXModelDownloader.shared.cancelDownload(modelID: model.id) }
+    // Only downloads actually under way: cancelling a finished model would mark it "Download canceled"
+    // (review, 2026-11-15).
+    for model in ModelCatalog.all where MLXModelDownloader.shared.downloadStates[model.id]?.isDownloading == true {
+        MLXModelDownloader.shared.cancelDownload(modelID: model.id)
+    }
     await MLXEyeLoader.shared.unload()
     await DrawerLoader.shared.unload()
     Settings.shared.seer = .apple

@@ -213,7 +213,11 @@ struct DarkRoomView: View {
                 // shots say so on their own row.) The pill shows the same condition from outside.
                 if worker.photosRefused {
                     VStack(alignment: .leading, spacing: 4) {
-                        Label("Thomas isn't allowed to add to Photos, so shots are waiting here.", systemImage: "photo.badge.exclamationmark")
+                        // Says shots are waiting only when some are (review, 2026-11-15).
+                        Label(worker.developingCount + worker.blockedCount > 0
+                              ? "Thomas isn't allowed to add to Photos, so shots are waiting here."
+                              : "Thomas isn't allowed to add to Photos, so a shot would wait here.",
+                              systemImage: "photo.badge.exclamationmark")
                             .font(.footnote).foregroundStyle(.orange)
                         if let url = URL(string: UIApplication.openSettingsURLString) {
                             Link("Allow it in Settings", destination: url).font(.footnote.weight(.semibold))
@@ -647,7 +651,8 @@ private struct LiveTiles: View {
                 if let f = snap.final, finished == nil { finished = UIImage(cgImage: f) }
                 // Only beside the Neural-Engine hand (the tray's rule): the MLX hand is using the GPU itself,
                 // so its steps show once its drawing is done.
-                if finished == nil, !snap.channelsLast, let latest = snap.latents.last,
+                if finished == nil, !snap.channelsLast, snap.steps > 0,
+                   DarkRoomWorker.shared.currentStage == .drawing, let latest = snap.latents.last,
                    Date().timeIntervalSince(lastDecode) > 1.5 {
                     lastDecode = Date()
                     let decoder = self.decoder, shape = snap.shape

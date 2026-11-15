@@ -244,6 +244,8 @@ enum Shot {
             // Enlarge after the draw — cheap, and it never touched the draw's memory peak. `.native`
             // returns the model's own resolution (512²) unchanged.
             DevelopTrace.shared.finish(drawing: drawn)
+            // Enlarging can be GPU work: not once the app is leaving (the Dark Room redoes the shot anyway).
+            guard await ForegroundGate.mayContinue() else { return (perception, nil, wordsForHand) }
             let sized = Upscaler.enlarge(drawn, to: size, method: method)
             return (perception, UIImage(cgImage: sized), wordsForHand)
         } catch {
@@ -302,6 +304,7 @@ enum Shot {
                 reportsGuess: config.effectiveDevelopView == .guess,
                 onFirstStep: { DarkRoomWorker.signalDrawingStarted() })
             DevelopTrace.shared.finish(drawing: drawn)
+            guard await ForegroundGate.mayContinue() else { return (perception, nil, handWords) }
             let sized = Upscaler.enlarge(drawn, to: config.drawingSize, method: config.upscaler)
             return (perception, UIImage(cgImage: sized), handWords)
         } catch {
