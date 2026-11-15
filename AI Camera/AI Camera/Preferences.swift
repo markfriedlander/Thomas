@@ -301,7 +301,8 @@ final class Settings {
         // the richest combined print their eye and hand can make (2026-11-14).
         if layout == .separateNative || layout == .separateSquare {
             separateFiles = layout == .separateSquare ? .square : .native
-            layout = Layout.fallback(hasEye: useEye, hasHand: handWillDraw)
+            // The triptych when the hand draws (the app's thesis), not words-on-photo (found on Mark's phone).
+            layout = handWillDraw ? Layout.drawingLayout(hasEye: useEye) : Layout.fallback(hasEye: useEye, hasHand: false)
             // didSet doesn't run inside init, so store the move by hand (once).
             d.set(layout.rawValue, forKey: "layout")
             d.set(separateFiles.rawValue, forKey: "separateFiles")

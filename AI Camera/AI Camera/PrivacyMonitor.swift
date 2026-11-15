@@ -60,7 +60,10 @@ final class PrivacyMonitor: NSObject {
 
     /// True when a usable network path exists (Wi-Fi, cellular, wired, or VPN). With a network up,
     /// an Apple eye's look, or a reverse-geocode place lookup, may leave the device.
-    private(set) var isNetworkAvailable: Bool = false
+    /// Until the first reading arrives this says "available": the lock must never claim privacy it hasn't
+    /// checked (independent review, 2026-11-14: starting at false showed a closed lock while online).
+    var isNetworkAvailable: Bool { pathAvailable ?? true }
+    private var pathAvailable: Bool?
 
     /// True when the user has granted this app Location access. When false there is no coordinate at
     /// all, so the place axis can never leak regardless of the reverse-geocode setting.
@@ -95,8 +98,8 @@ final class PrivacyMonitor: NSObject {
             let available = (path.status == .satisfied)
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if self.isNetworkAvailable != available {
-                    self.isNetworkAvailable = available
+                if self.pathAvailable != available {
+                    self.pathAvailable = available
                 }
             }
         }

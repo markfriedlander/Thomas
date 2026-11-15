@@ -176,6 +176,9 @@ struct AI_CameraApp: App {
     /// (no view to orphan it from). Compiled out of Release entirely.
     init() {
         SharedModelStore.configure(appGroupID: "group.com.MarkFriedlander.aifamily")
+        // The privacy lock watches the network from launch, not only once the camera's status area
+        // appears, so its first answer is a real reading (independent review, 2026-11-14).
+        PrivacyMonitor.shared.start()
         // ⭐ AI Camera's OWN curated pin — the CoreML SD-2.1 drawer (the Neural-Engine hand). Only
         // this app uses it, so it registers its own pin rather than waiting on the shared baseline
         // (the package is built for exactly this: "the family relies on the baseline; an outside
