@@ -141,6 +141,65 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
     private let taskContextDefaultsKey = "bgDownloadTaskContexts.v1"
 
+    // MARK: - What a download must contain (persisted)
+    //
+    // Independent review, 2026-11-14 (below SharedModelStoreKit 1.4.0's in-progress marker): the list of
+    // files still to come lived only in memory, so after iOS relaunched Thomas mid-download the FIRST file to
+    // land read as "all done" and wrote the completion mark; a restart from scratch forgot which files it
+    // needed; and nothing checked what arrived (an error page could be saved as weights). Now every download
+    // persists its files and their sizes from Hugging Face, the list survives a relaunch, and a model is
+    // finished only when every file is on disk at its expected size.
+    private let expectedFilesDefaultsKey = "bgDownloadExpectedFiles.v1"
+
+    /// modelID -> filename -> expected byte size (0 = unknown).
+    private var expectedFiles: [String: [String: Int64]] {
+        get { (UserDefaults.standard.dictionary(forKey: expectedFilesDefaultsKey) as? [String: [String: Int64]])
+              ?? (UserDefaults.standard.dictionary(forKey: expectedFilesDefaultsKey) as? [String: [String: NSNumber]])?
+                  .mapValues { $0.mapValues { $0.int64Value } } ?? [:] }
+        set { UserDefaults.standard.set(newValue.mapValues { $0.mapValues { NSNumber(value: $0) } }, forKey: expectedFilesDefaultsKey) }
+    }
+
+    /// The files a download of `modelID` is expected to contain, if one is on record.
+    func expectedFileNames(for modelID: String) -> [String]? {
+        expectedFiles[modelID].map { Array($0.keys).sorted() }
+    }
+
+    private func forgetExpected(_ modelID: String) {
+        var all = expectedFiles
+        all.removeValue(forKey: modelID)
+        expectedFiles = all
+    }
+
+    /// Is this file on disk whole? Its expected size when known, else simply not empty.
+    private func isWhole(_ filename: String, of modelID: String) -> Bool {
+        let url = modelDirectory(for: modelID).appendingPathComponent(filename)
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64 else { return false }
+        let expected = expectedFiles[modelID]?[filename] ?? 0
+        return expected > 0 ? size == expected : size > 0
+    }
+
+    /// The files still to come, rebuilt from the persisted list (after a relaunch the in-memory one is empty).
+    private func restoredPending(_ modelID: String) -> Set<String> {
+        guard let files = expectedFiles[modelID] else { return [] }
+        return Set(files.keys.filter { !isWhole($0, of: modelID) })
+    }
+
+    /// Every expected file present at its expected size, or the ones that aren't, with why.
+    private func verifyWhole(_ modelID: String) -> [String: String] {
+        guard let files = expectedFiles[modelID] else { return [:] }
+        var problems: [String: String] = [:]
+        for (name, expected) in files where !isWhole(name, of: modelID) {
+            let url = modelDirectory(for: modelID).appendingPathComponent(name)
+            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
+            problems[name] = size == nil ? "missing" : "\(size!) bytes, expected \(expected)"
+        }
+        return problems
+    }
+
+    /// Retries of a file whose transfer failed, keyed "modelID/filename".
+    private var retriesByFile: [String: Int] = [:]
+    private static let maxRetries = 3
+
     /// Background-session task contexts. Persisted across app launches.
     private var backgroundTaskContexts: [String: TaskContext] {
         get {
@@ -365,9 +424,17 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         }
         cameraLog("HALDEBUG-BGDL: Taking \(mlxFiles.count) file(s) for \(modelID)\(files == nil ? " (pattern)" : " (allowlist)"): \(mlxFiles.joined(separator: ", "))")
 
-        // Ensure target directory exists.
+        // Ensure target directory exists, and keep it out of iCloud backup from the first byte (it used to be
+        // excluded only on completion, so an overnight download's finished files could be backed up).
         let modelDir = modelDirectory(for: modelID)
         try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        SharedModelStore.excludeFromBackup(sharedStoreKey(forRepoID: modelID))
+
+        // What this download must contain, persisted so a relaunch or a restart can't lose it.
+        var all = expectedFiles
+        all[modelID] = Dictionary(mlxFiles.map { ($0, lastTreeSizes[$0] ?? 0) }, uniquingKeysWith: { a, _ in a })
+        expectedFiles = all
+        retriesByFile = retriesByFile.filter { !$0.key.hasPrefix(modelID + "/") }
 
         // Initialize per-model byte tracking so progress can be computed.
         bytesExpectedByModel[modelID] = 0
@@ -385,11 +452,12 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
         // Enqueue a download task per file.
         for filename in mlxFiles {
-            // Files already present at target with non-zero size: skip.
+            // Files already present at target, whole (their expected size): skip. A partial or wrong-size
+            // leftover is removed and fetched again.
             let targetURL = modelDir.appendingPathComponent(filename)
-            if let existingSize = try? FileManager.default.attributesOfItem(atPath: targetURL.path)[.size] as? Int64,
-               existingSize > 0 {
-                cameraLog("HALDEBUG-BGDL: \(filename) already present (\(existingSize) bytes); skipping")
+            if !isWhole(filename, of: modelID) { try? FileManager.default.removeItem(at: targetURL) }
+            if isWhole(filename, of: modelID) {
+                cameraLog("HALDEBUG-BGDL: \(filename) already present and whole; skipping")
                 var pending = filesPendingByModel[modelID] ?? []
                 pending.remove(filename)
                 filesPendingByModel[modelID] = pending
@@ -408,9 +476,9 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             cameraLog("HALDEBUG-BGDL: Enqueued \(chosenKind == .foreground ? "fg" : "bg") task \(task.taskIdentifier) for \(filename)")
         }
 
-        // If all files were already present, treat the model as complete now.
+        // If all files were already present, treat the model as complete now (after the same whole-file check).
         if (filesPendingByModel[modelID] ?? []).isEmpty {
-            await MainActor.run { self.notifyModelDownloadComplete(modelID: modelID) }
+            await MainActor.run { self.finishModel(modelID) }
         }
     }
 
@@ -477,13 +545,21 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             ])
         }
         struct TreeEntry: Decodable {
+            struct LFS: Decodable { let size: Int64? }
             let type: String
             let path: String
             let size: Int64?
+            let lfs: LFS?
         }
         let entries = try JSONDecoder().decode([TreeEntry].self, from: data)
-        return entries.filter { $0.type == "file" }.map { $0.path }
+        let files = entries.filter { $0.type == "file" }
+        // An LFS file's real size is in `lfs.size` (the plain `size` can be the pointer's).
+        lastTreeSizes = Dictionary(files.map { ($0.path, $0.lfs?.size ?? $0.size ?? 0) }, uniquingKeysWith: { a, _ in a })
+        return files.map { $0.path }
     }
+
+    /// The sizes from the most recent tree listing (path -> bytes), read by `startDownload`.
+    private var lastTreeSizes: [String: Int64] = [:]
 
     // MARK: - Pattern Matching
     //
@@ -569,12 +645,25 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
         try? FileManager.default.removeItem(at: target)
         var moveError: String?
-        do {
-            try FileManager.default.moveItem(at: location, to: target)
-            cameraLog("HALDEBUG-BGDL: Moved \(context.filename) → \(target.path) (\(kind == .foreground ? "fg" : "bg") task \(downloadTask.taskIdentifier))")
-        } catch {
-            moveError = error.localizedDescription
-            cameraLog("HALDEBUG-BGDL: ❌ Move failed for \(context.filename): \(error.localizedDescription)")
+        // A transfer can "finish" with an error page (rate limit, server error, an expired link). That is not
+        // the file: never save it in the file's place.
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            moveError = "the server answered \(http.statusCode)"
+            cameraLog("HALDEBUG-BGDL: ❌ \(context.filename): server answered \(http.statusCode); not saved")
+        } else {
+            do {
+                try FileManager.default.moveItem(at: location, to: target)
+                cameraLog("HALDEBUG-BGDL: Moved \(context.filename) → \(target.path) (\(kind == .foreground ? "fg" : "bg") task \(downloadTask.taskIdentifier))")
+                if !isWhole(context.filename, of: context.modelID) {
+                    let got = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? nil
+                    moveError = "arrived at \(got ?? 0) bytes, expected \(expectedFiles[context.modelID]?[context.filename] ?? 0)"
+                    try? FileManager.default.removeItem(at: target)
+                    cameraLog("HALDEBUG-BGDL: ❌ \(context.filename) is the wrong size; removed")
+                }
+            } catch {
+                moveError = error.localizedDescription
+                cameraLog("HALDEBUG-BGDL: ❌ Move failed for \(context.filename): \(error.localizedDescription)")
+            }
         }
 
         // Update bookkeeping. Note: didCompleteWithError will fire shortly
@@ -583,7 +672,9 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         // warning today and an error under Swift 6.
         let failure = moveError
         Task { @MainActor in
-            var pending = self.filesPendingByModel[context.modelID] ?? []
+            // After a relaunch the in-memory list is empty; rebuild it from the persisted one, so the first
+            // file to land is not mistaken for the last.
+            var pending = self.filesPendingByModel[context.modelID] ?? self.restoredPending(context.modelID)
             pending.remove(context.filename)
             self.filesPendingByModel[context.modelID] = pending
 
@@ -609,9 +700,22 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
                     self.notifyModelDownloadFailed(modelID: context.modelID, failures: failures)
                     self.filesFailedByModel[context.modelID] = nil
                 } else {
-                    self.notifyModelDownloadComplete(modelID: context.modelID)
+                    self.finishModel(context.modelID)
                 }
             }
+        }
+    }
+
+    /// The only road to "finished": every expected file whole on disk, then the completion bookkeeping;
+    /// otherwise a failure naming what's missing.
+    @MainActor
+    private func finishModel(_ modelID: String) {
+        let problems = verifyWhole(modelID)
+        if problems.isEmpty {
+            forgetExpected(modelID)
+            notifyModelDownloadComplete(modelID: modelID)
+        } else {
+            notifyModelDownloadFailed(modelID: modelID, failures: problems)
         }
     }
 
@@ -637,6 +741,8 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             cameraLog("HALDEBUG-BGDL: removed partial \(modelID) so nothing mistakes it for installed")
         }
         SharedModelStore.releaseDownloadLock(modelID: key)
+        forgetExpected(modelID)
+        filesPendingByModel.removeValue(forKey: modelID)
 
         let first = failures.first.map { "\($0.key) — \($0.value)" } ?? "unknown error"
         MLXModelDownloader.shared.reportDownloadFailure(
@@ -732,6 +838,10 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
                 cameraLog("HALDEBUG-BGDL: \(kindStr) task \(task.taskIdentifier) (\(context.filename)) cancelled")
             } else {
                 cameraLog("HALDEBUG-BGDL-ERROR: \(kindStr) task \(task.taskIdentifier) (\(context.filename)) failed: \(error.localizedDescription) (domain=\(error.domain), code=\(error.code))")
+                // A real failure (the network dropped mid-file). It used to only be logged, leaving the bar
+                // frozen and the cross-app lock held until a relaunch. Retry from where it stopped (or from the
+                // start) a few times, then fail the model so it can be tried again.
+                retryOrFail(task: task, error: error, context: context, session: session, kind: kind)
             }
         } else {
             cameraLog("HALDEBUG-BGDL: \(kindStr) task \(task.taskIdentifier) (\(context.filename)) completed")
@@ -742,6 +852,36 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             self.bytesExpectedByTask.removeValue(forKey: key)
             self.lastByteLogTimeByTask.removeValue(forKey: key)
             self.lastByteLogBytesByTask.removeValue(forKey: key)
+        }
+    }
+
+    private func retryOrFail(task: URLSessionTask, error: NSError, context: TaskContext, session: URLSession, kind: SessionKind) {
+        let retryKey = "\(context.modelID)/\(context.filename)"
+        let tries = (retriesByFile[retryKey] ?? 0) + 1
+        retriesByFile[retryKey] = tries
+        if tries <= Self.maxRetries, let url = task.originalRequest?.url {
+            let next: URLSessionDownloadTask
+            if let resume = error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+                next = session.downloadTask(withResumeData: resume)
+            } else {
+                next = session.downloadTask(with: url)
+            }
+            saveContext(context, session: kind, taskID: next.taskIdentifier)
+            // A short wait, longer each time, so a blip has passed before the next try.
+            DispatchQueue.global().asyncAfter(deadline: .now() + Double(tries * 3)) { next.resume() }
+            cameraLog("HALDEBUG-BGDL: retrying \(context.filename) (try \(tries) of \(Self.maxRetries))")
+            return
+        }
+        cameraLog("HALDEBUG-BGDL: ❌ \(context.filename) failed after \(Self.maxRetries) retries")
+        Task { @MainActor in
+            var pending = self.filesPendingByModel[context.modelID] ?? self.restoredPending(context.modelID)
+            pending.remove(context.filename)
+            self.filesPendingByModel[context.modelID] = pending
+            self.filesFailedByModel[context.modelID, default: [:]][context.filename] = error.localizedDescription
+            if pending.isEmpty, let failures = self.filesFailedByModel[context.modelID] {
+                self.notifyModelDownloadFailed(modelID: context.modelID, failures: failures)
+                self.filesFailedByModel[context.modelID] = nil
+            }
         }
     }
 
@@ -810,6 +950,8 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             self.filesPendingByModel.removeValue(forKey: modelID)
             self.bytesWrittenByModel.removeValue(forKey: modelID)
             self.bytesExpectedByModel.removeValue(forKey: modelID)
+            self.filesFailedByModel.removeValue(forKey: modelID)
+            self.forgetExpected(modelID)
         }
     }
 
@@ -1160,8 +1302,15 @@ class MLXModelDownloader: ObservableObject {
             let repoID = modelMeta["repoID"] as? String ?? modelID
             let sizeGB = modelMeta["sizeGB"] as? Double
             let size = (sizeGB ?? 0.0) > 0.0 ? sizeGB : nil
-            cameraLog("HALDEBUG-DOWNLOAD: Auto-resuming download for \(modelID) (no in-flight BGDL tasks found)")
-            Task { await self.startDownload(modelID: modelID, repoID: repoID, sizeGB: size) }
+            // The file list it was started with (a diffusion repo's allowlist must not fall back to the pattern
+            // rule: that over-fetched ~12 GB of SD-Turbo and missed its merges.txt; review, 2026-11-14).
+            let named: [String]? = {
+                if case .files(let f)? = ModelCatalog.model(id: modelID)?.delivery { return f }
+                return nil
+            }()
+            let files = BackgroundDownloadCoordinator.shared.expectedFileNames(for: modelID) ?? named
+            cameraLog("HALDEBUG-DOWNLOAD: Auto-resuming download for \(modelID) (no in-flight BGDL tasks found; \(files?.count.description ?? "pattern") files)")
+            Task { await self.startDownload(modelID: modelID, repoID: repoID, sizeGB: size, files: files) }
         }
     }
     
@@ -1820,9 +1969,26 @@ class MLXModelDownloader: ObservableObject {
             downloadQueue.removeAll { $0.modelID == modelID }
         }
 
+        // Stop the transfers themselves. Cancelling the waiting Task didn't reach them (its wait doesn't throw
+        // CancellationError), and after a relaunch there is no Task at all, so the files kept coming and the
+        // model could become installed after "canceled" (review, 2026-11-14).
+        let key = sharedStoreKey(forRepoID: modelID)
+        Task {
+            await BackgroundDownloadCoordinator.shared.cancelDownload(modelID: modelID)
+            await MainActor.run {
+                // The partial copy goes, unless it is finished or another app holds it.
+                if !SharedModelStore.isRepoReady(key), SharedModelStore.claimants(modelID: key).isEmpty,
+                   FileManager.default.fileExists(atPath: SharedModelStore.mlxModelDir(key).path) {
+                    try? FileManager.default.removeItem(at: SharedModelStore.mlxModelDir(key))
+                    cameraLog("HALDEBUG-DOWNLOAD: removed the partial \(modelID) after cancel")
+                }
+            }
+        }
+        clearInFlight(modelID)
+
         // Release the cross-app download lock if we held it (harmless no-op if we
         // didn't, or if we were only waiting to adopt a sibling's download).
-        SharedModelStore.releaseDownloadLock(modelID: sharedStoreKey(forRepoID: modelID))
+        SharedModelStore.releaseDownloadLock(modelID: key)
         
         // Update state
         if var state = downloadStates[modelID] {
