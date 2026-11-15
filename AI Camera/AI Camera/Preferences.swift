@@ -631,6 +631,12 @@ struct PreferencesView: View {
         .navigationTitle("Preferences")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // The same title treatment as the Dark Room (Mark, 2026-11-14): heavy capitals, tracked.
+            ToolbarItem(placement: .principal) {
+                Text("PREFERENCES").font(.headline.weight(.heavy)).tracking(2)
+                    .accessibilityLabel("Preferences")
+                    .accessibilityAddTraits(.isHeader)
+            }
             ToolbarItem(placement: .cancellationAction) {
                 Button(role: .close) { dismiss() }
             }
