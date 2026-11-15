@@ -644,6 +644,13 @@ final class Lens: NSObject {
         exposureBias = clamped
     }
 
+    /// Focus and expose on the middle of the picture: VoiceOver's "Focus on the middle" (accessibility,
+    /// 2026-11-15), the same as a tap there. In the preview layer's own coordinates, as a tap is converted.
+    @discardableResult func focusOnMiddle() -> Bool {
+        guard let layer = previewLayer else { return false }
+        return focus(atScreenPoint: CGPoint(x: layer.bounds.midX, y: layer.bounds.midY), lock: false)
+    }
+
     /// Hand focus and exposure back to the camera: continuous, centred, no brightness change.
     func resetFocus() {
         focusPoint = nil

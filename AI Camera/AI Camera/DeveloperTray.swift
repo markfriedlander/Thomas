@@ -1727,7 +1727,6 @@ struct DeveloperTrayView: View {
                     ], short: short)
                 }
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .environment(\.colorScheme, .dark)
         }
     }
@@ -1789,8 +1788,9 @@ struct DeveloperTrayView: View {
                 }
             }
         } else if let look = model.currentLook {
+            // Reading content, so it grows with the text size like the words do (accessibility review: it
+            // was capped like the controls).
             TraySplitBar(look: look, oneLine: short)
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)   // a gauge, like the controls; see topBar
         } else if let fact = model.fact {
             Text(fact).font(.footnote).foregroundStyle(.white.opacity(0.75))
         } else if model.current == .numbers, let e = model.trace?.eye {
@@ -1860,6 +1860,8 @@ struct DeveloperTrayView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!has)
+                    // The chapter you're in is shown by color; say it too (accessibility, 2026-11-15).
+                    .accessibilityAddTraits(on ? .isSelected : [])
                     .accessibilityShowsLargeContentViewer {
                         Text(c.label)
                     }
@@ -1904,6 +1906,9 @@ struct DeveloperTrayView: View {
                         pill { Text("Live").font(.caption.weight(.bold)).foregroundStyle(model.following ? .red : .white) }
                     }
                     .buttonStyle(.plain)
+                    // Red means following live; say it, not only show it.
+                    .accessibilityValue(model.following ? "Following the newest moment" : "Not following")
+                    .accessibilityAddTraits(model.following ? .isSelected : [])
                 }
             }
         }
@@ -2015,6 +2020,16 @@ struct TrayWordLabel: View {
             .overlay(alignment: .bottom) {
                 if isCurrent { Capsule().fill(.white).frame(height: 2).offset(y: 2) }
             }
+            // What the color and underline show, said (accessibility, 2026-11-15).
+            .accessibilityValue(spokenState(level))
+    }
+
+    private func spokenState(_ level: Double) -> String {
+        switch state {
+        case .current: return "the word being chosen"
+        case .future: return "not yet said"
+        case .lit: return level > 0.12 ? "lit, \(Int((level * 100).rounded())) percent" : "dim"
+        }
     }
 
     private func color(_ level: Double) -> Color {
@@ -2133,6 +2148,21 @@ struct TrayScrubber: View {
     let onScrub: (Int) -> Void
 
     var body: some View {
+        track
+            // A slider VoiceOver can use: swipe up or down to move one moment (accessibility, 2026-11-15).
+            .accessibilityElement()
+            .accessibilityLabel("Moments")
+            .accessibilityValue("\(index + 1) of \(count)")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: onScrub(min(count - 1, index + 1))
+                case .decrement: onScrub(max(0, index - 1))
+                @unknown default: break
+                }
+            }
+    }
+
+    private var track: some View {
         GeometryReader { geo in
             let inset: CGFloat = 11
             let w = max(1, geo.size.width - inset * 2)
@@ -2309,6 +2339,37 @@ struct EyeLightPhoto: View {
                     }
                 }
             }
+            // The squares, for VoiceOver (accessibility review, 2026-11-15: a tap target with no elements).
+            // One element: swipe up or down to move from square to square (each move compares from there,
+            // as a tap does); "Show its numbers" opens the selected square's numbers, as tapping it does.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Your photo, as \(rows * cols) squares")
+            .accessibilityValue(spokenValue)
+            .accessibilityAdjustableAction { direction in
+                guard let onTapSquare, rows * cols > 0 else { return }
+                let now = outlined ?? -1
+                switch direction {
+                case .increment: onTapSquare(min(rows * cols - 1, now + 1))
+                case .decrement: onTapSquare(max(0, now - 1))
+                @unknown default: break
+                }
+            }
+            .accessibilityAction(named: "Show its numbers") {
+                if let o = outlined { onTapSquare?(o) }
+            }
+    }
+
+    /// The selected square (and its row and column), and the brightest squares: what the light shows.
+    private var spokenValue: String {
+        var parts: [String] = []
+        if let o = outlined, cols > 0 {
+            parts.append("Square \(o + 1), row \(o / cols + 1), column \(o % cols + 1)")
+        }
+        if let light, light.count == rows * cols {
+            let top = light.enumerated().sorted { $0.element > $1.element }.prefix(3).filter { $0.element > 0.05 }
+            if !top.isEmpty { parts.append("brightest: " + top.map { "square \($0.offset + 1)" }.joined(separator: ", ")) }
+        }
+        return parts.isEmpty ? "Swipe up or down to choose a square" : parts.joined(separator: "; ")
     }
 
     /// One pixel per square: black, as opaque as the square is dark (1 - light).

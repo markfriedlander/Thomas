@@ -356,6 +356,11 @@ private struct ModelLibraryRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // The dot (or its absence) and the chevron, said (accessibility review, 2026-11-15: "not
+            // downloaded" was shown only by a missing dot).
+            .accessibilityValue([model.isDownloaded ? (isActive ? "downloaded, in use" : "downloaded") : "not downloaded",
+                                 isExpanded ? "open" : "closed"].joined(separator: ", "))
+            .accessibilityHint(isExpanded ? "Closes this model's card" : "Opens this model's card")
 
             if isPreparing {
                 Divider().padding(.vertical, 8)

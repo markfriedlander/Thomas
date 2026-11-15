@@ -163,6 +163,20 @@ struct CameraView: View {
                     // 2026-11-13: "Tap to focus and drag for exposure would be awesome"). Gestures,
                     // not buttons: the capture screen stays viewfinder and shutter.
                     .simultaneousGesture(focusGesture)
+                    // The gestures, for VoiceOver (accessibility review, 2026-11-15): swipe up or down to
+                    // zoom, and actions to focus on the middle or hand focus back to the camera.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Viewfinder")
+                    .accessibilityValue("Zoom \(Self.appleZoomLabel(lens.displayZoom))")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction {
+                        case .increment: lens.zoom(by: 1.25, from: lens.zoom)
+                        case .decrement: lens.zoom(by: 0.8, from: lens.zoom)
+                        @unknown default: break
+                        }
+                    }
+                    .accessibilityAction(named: "Focus on the middle") { lens.focusOnMiddle() }
+                    .accessibilityAction(named: "Let the camera focus") { lens.resetFocus() }
                     .onChange(of: settings.pictureShape) { _, shape in lens.use(shape) }   // item 17
                     .onChange(of: lens.focusPoint) { _, point in
                         if point != nil { showFocusSquare() } else { focusSquareVisible = false }
@@ -526,8 +540,11 @@ struct CameraView: View {
     private func shoot() async {
         guard let photograph = await lens.capture() else {
             DarkRoomWorker.shared.noteCouldNotKeepShot()   // said, not silently dropped (review, 2026-11-14)
+            AccessibilityNotification.Announcement("Couldn't keep that shot").post()
             return
         }
+        // The shutter makes no sound and shows no flash; VoiceOver hears that the shot was taken.
+        AccessibilityNotification.Announcement("Shot taken").post()
         await develop(photograph)
     }
 
