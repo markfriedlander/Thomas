@@ -519,7 +519,7 @@ private struct DarkRoomRow: View {
                 }
                 .opacity(0.85)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(record.status == .blocked ? "Waiting for a model" : "Waiting to develop")
+                .accessibilityLabel(record.status == .blocked ? "Needs a model" : "Waiting to develop")
             }
             HStack {
                 VStack(alignment: .leading, spacing: 1) {

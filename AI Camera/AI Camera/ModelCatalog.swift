@@ -396,7 +396,8 @@ nonisolated enum ModelCatalog {
         // An LLM repo: one model, so every MLX file in it IS the model.
         delivery: .wholeRepo,
         sizeGB: 1.63,
-        blurb: "Sees differently from Apple's model, and largely ignores instructions about how to speak. First look after launch takes about 9 seconds while it loads; after that about 3.",
+        // No seconds here: the card's measured line says how long a look takes (review round 2: the two disagreed).
+        blurb: "Sees differently from Apple's model, and largely ignores instructions about how to speak.",
         licence: "Apache 2.0",
         // The same shared gentle line Apple uses — Qwen keeps to it well enough. Explicit here
         // (not a hidden fallback) so every eye's record states its own Layer 1 plainly.
@@ -528,7 +529,7 @@ nonisolated enum ModelCatalog {
         job: .drawing,
         delivery: .folder("split_einsum_v2/compiled/"),
         sizeGB: 1.14,
-        blurb: "Draws the third frame on the Neural Engine - Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing. The only hand that can work with the eye switched off (the silent loop), reading your photo directly.",
+        blurb: "Draws the third frame on the Neural Engine - Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler. Right after it downloads, and once after each app update, Thomas prepares it for this device's Neural Engine, which takes a minute or two. The only hand that can work with the eye switched off (the silent loop), reading your photo directly.",
         licence: "CreativeML OpenRAIL++-M",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
         layerOnePrompt: nil,

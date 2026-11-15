@@ -200,6 +200,14 @@ final class HandPreparation {
             // Not fatal: the first shot will prepare it instead, as before.
             phase = .failed(error.localizedDescription)
             cameraLog("PREPARE: did not complete (\(error.localizedDescription)); the first shot will prepare it")
+            // Say so for a few seconds, rather than vanishing like a finished one (review round 2): the next
+            // shot will carry the minute or two of preparing.
+            StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: "exclamationmark.circle",
+                                                    text: "Couldn't prepare; the first shot will",
+                                                    tap: .explainPreparation))
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if !isPreparing { StatusFeed.shared.clear(.hand) }
+            return
         }
         StatusFeed.shared.clear(.hand)
     }
@@ -232,8 +240,10 @@ final class HandPreparation {
     private func publishPill() {
         guard isPreparing, let repoID else { return }
         if !begun {
-            let text = waitingToCool ? "Waiting for the \(ThisDevice.deviceKind) to cool, then preparing" : "Getting ready to prepare"
-            StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: waitingToCool ? "snowflake" : nil,
+            // One glyph and one phrase for heat across the camera (review round 2): the thermometer and
+            // "Cooling down", as the Dark Room's pill says it. While this pill says it, that one doesn't.
+            let text = waitingToCool ? "Cooling down, then preparing" : "Getting ready to prepare"
+            StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: waitingToCool ? "thermometer.high" : nil,
                                                     showsSpinner: !waitingToCool, text: text, tap: .explainPreparation))
             return
         }
@@ -254,8 +264,8 @@ struct HandPreparationCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 if prep.waitingToCool && !prep.begun {
-                    Image(systemName: "snowflake").font(.subheadline).foregroundStyle(.orange)
-                    Text("Waiting for the \(ThisDevice.deviceKind) to cool").font(.subheadline.weight(.medium))
+                    Image(systemName: "thermometer.high").font(.subheadline).foregroundStyle(.orange)
+                    Text("Cooling down").font(.subheadline.weight(.medium))
                 } else {
                     ProgressView().controlSize(.small)
                     Text("Preparing for shooting").font(.subheadline.weight(.medium))

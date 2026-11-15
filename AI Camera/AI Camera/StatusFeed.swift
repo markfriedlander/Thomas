@@ -100,6 +100,14 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
                                       text: "Mixing the developer…",
                                       tap: .openDarkRoom)
 
+    /// The next shot is waiting for the model lane (behind a preparation): not developing yet.
+    static func waitingToDevelop(count: Int) -> StatusMessage {
+        StatusMessage(kind: .darkRoom,
+                      icon: "hourglass",
+                      text: count == 1 ? "Waiting to develop" : "\(count) waiting to develop",
+                      tap: .openDarkRoom)
+    }
+
     /// State 3 — developing N: shots actively in the bath. A spinner, no icon, echoing the toast
     /// Mark called "beautiful and understated." Singular when there's one.
     static func developing(count: Int) -> StatusMessage {

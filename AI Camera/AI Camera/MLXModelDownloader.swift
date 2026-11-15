@@ -183,6 +183,9 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         SharedModelStore.problemFiles(sharedStoreKey(forRepoID: modelID))
     }
 
+    /// When each model's cross-app lock was last refreshed from transfer progress (didWriteData).
+    private var lockRefreshedAt: [String: Date] = [:]
+
     /// Retries of a file whose transfer failed, keyed "modelID/filename".
     private var retriesByFile: [String: Int] = [:]
     private static let maxRetries = 3
@@ -753,6 +756,13 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             // Because didWriteData fires repeatedly with cumulative totals
             // *for that single file*, we recompute by subtracting the
             // previous per-task contribution and adding the new one.
+            // Keep the cross-app download lock alive from the transfer itself, not only the foreground
+            // progress loop, so while Thomas is awake in the background a sibling doesn't read the lock as
+            // abandoned after 10 minutes and download the same files (review round 3). Once a minute.
+            if Date().timeIntervalSince(self.lockRefreshedAt[context.modelID] ?? .distantPast) > 60 {
+                self.lockRefreshedAt[context.modelID] = Date()
+                SharedModelStore.refreshDownloadLock(modelID: sharedStoreKey(forRepoID: context.modelID))
+            }
             let prev = self.bytesWrittenByTask[key] ?? 0
             let delta = max(0, totalBytesWritten - prev)
             self.bytesWrittenByTask[key] = totalBytesWritten

@@ -333,6 +333,17 @@ final class Settings {
         draws && DrawerLoader.isAvailable(drawer) && (eye || ModelCatalog.model(id: drawer)?.engine == .coreML)
     }
 
+    /// A hand was deleted (or every model cleared). If it was the selected hand, another downloaded hand
+    /// takes over when there is one; otherwise the layout rules see that nothing can draw.
+    func handRemoved(_ repoID: String) {
+        guard selectedDrawer == repoID else { snapLayoutIfNeeded(); return }
+        if let other = ModelCatalog.all.first(where: { $0.job == .drawing && $0.id != repoID && DrawerLoader.isAvailable($0.id) }) {
+            selectedDrawer = other.id
+        } else {
+            snapLayoutIfNeeded()
+        }
+    }
+
     private func snapLayoutIfNeeded() {
         let hasEye = useEye
         let hasHand = handWillDraw

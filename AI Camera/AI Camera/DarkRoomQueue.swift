@@ -486,6 +486,10 @@ final class DarkRoomWorker {
     /// and persists across foregrounds until the user resumes. Mirrors into the pill (state 4).
     private(set) var isPaused = false { didSet { syncStatusFeed() } }
 
+    /// True while the next shot waits for the model lane to start it (behind a preparation, say), so the
+    /// pill says "Waiting", not "Developing" (review round 2: two spinners claimed parallel work).
+    private(set) var waitingForLane = false { didSet { syncStatusFeed() } }
+
     /// True when Thomas may not add to Photos (refused or restricted). Checked before developing, so
     /// nothing is developed for nowhere: before, a refused permission left "Developing" spinning and
     /// re-ran every shot on each return to the app (independent review, 2026-11-14).
@@ -536,10 +540,15 @@ final class DarkRoomWorker {
             StatusFeed.shared.publish(.couldNotKeep)
         } else if photosRefused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.photosRefused)
-        } else if isCoolingDown {
+        } else if isCoolingDown && !(HandPreparation.shared.isPreparing && HandPreparation.shared.waitingToCool) {
+            // Only one pill speaks about heat: while the preparation's pill says "Cooling down", this one
+            // shows the count instead (review round 2).
             StatusFeed.shared.publish(.cooling)
         } else if isPaused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.paused)
+        } else if developingCount > 0 && waitingForLane {
+            // The shot is next, but the lane is busy (a preparation, say): waiting, not developing.
+            StatusFeed.shared.publish(.waitingToDevelop(count: developingCount))
         } else if developingCount > 0 && currentStage == .mixing {
             // The hand is loading/compiling before its first draw step - "Mixing the developer"
             // (the one-time Core ML compile lands here, so a long setup reads as setup, not a hang).
@@ -687,7 +696,7 @@ final class DarkRoomWorker {
         // Note: the counts are NOT reset here. The loop's last pass sets them to the true store
         // depth (0 developing when drained, but blockedCount stays > 0 if shots are held), so the
         // "N blocked" pill survives the loop exiting. Only the transient develop state is cleared.
-        defer { running = false; isCoolingDown = false; currentShotID = nil; currentStage = nil }
+        defer { running = false; isCoolingDown = false; waitingForLane = false; currentShotID = nil; currentStage = nil }
         _ = await DarkRoomStore.shared.rescueOrphans(config: ShotConfig.capture())
         while dirty && !suspended && !isPaused {
             dirty = false
@@ -825,9 +834,12 @@ final class DarkRoomWorker {
         // The heavy pipeline — see, tear the eye down, draw — through the ONE lane shared with the
         // antenna. Only Sendable values cross back; the cheap compositor + save stay out here. The
         // stage callback flips the row from "seeing" to "drawing" as the pipeline crosses frames.
-        currentStage = .seeing
+        waitingForLane = true
         let result: (perception: Perception, drawn: UIImage?, wordsForHand: String) =
             await ModelLane.shared.run("darkroom") { @MainActor in
+                // The lane has started this shot: only now is it developing.
+                self.waitingForLane = false
+                self.currentStage = .seeing
                 // A fresh trace for this shot (the Developer Tray watches it live); a shot that draws
                 // nothing must never inherit another shot's steps.
                 DevelopTrace.shared.startShot(id: shot.id, photo: photograph)

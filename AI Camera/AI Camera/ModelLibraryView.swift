@@ -157,13 +157,12 @@ struct ModelLibraryView: View {
         }
         .alert("Clear all family models?", isPresented: $showingClearFamilyAlert) {
             Button("Clear all family models", role: .destructive) {
-                let removed = SharedModelStore.clearEntireSharedStore()
-                catalog.refresh()   // store changed with no notification — poke the one source
-                print("AICAMERA: cleared entire shared store: \(removed) repos removed")
+                Task { await clearAllFamilyModels() }
             }
             Button("Cancel", role: .cancel) { showingClearFamilyAlert = false }
         } message: {
-            Text("Removes every downloaded AI model shared across Hal, Posey, and Thomas to reclaim all model storage at once. Each app re-downloads what it needs the next time you use it. Your photos and settings are not affected.")
+            // Says what Thomas really does (review round 2): it never re-downloads on its own.
+            Text("Removes every downloaded AI model shared across Hal, Posey, and Thomas to reclaim all model storage at once. Thomas goes back to Apple's eye; download a model again here whenever you want it. Shots waiting in the Dark Room for a removed model wait until it's back. Your photos are not affected.")
         }
         // Surface the model's license before the download begins. Hangs off the stable List,
         // not a row (rows come and go as the catalog refreshes, which would tear the sheet down).
@@ -693,6 +692,11 @@ struct ModelLicenseSheet: View {
                             }
                             Text("Requires \(String(format: "%.1f", gb)) GB of storage and bandwidth. Wi-Fi recommended.")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if model.engine == .coreML && model.job == .drawing {
+                                // The preparation's own cost, said where the size is (review round 2).
+                                Text("Then Thomas prepares it for this \(ThisDevice.deviceKind)'s Neural Engine, a minute or two, again after each app update, and keeps the prepared copy (about 100 MB more).")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             if PrivacyMonitor.shared.isOnCellular {
                                 Text("You're on cellular data right now.")
                                     .font(.caption).fontWeight(.semibold).foregroundStyle(.orange)
@@ -772,6 +776,20 @@ struct ModelLicenseSheet: View {
 /// fall back to the built-in seer first, so nothing points at weights that are gone. The one copy of
 /// the rule, shared by the Delete button and the antenna's /release verb (which delegates here rather
 /// than reimplementing release-and-remove — 2026-07-30 parity fix).
+/// "Clear all family models", with the same care a single Delete takes (review round 2): stop downloads
+/// in progress, let go of a resident eye or hand, go back to Apple's eye, and let the layout rules see that
+/// no hand is left. Then the shared store is emptied for every app.
+@MainActor func clearAllFamilyModels() async {
+    for model in ModelCatalog.all where !model.isBuiltIn { MLXModelDownloader.shared.cancelDownload(modelID: model.id) }
+    await MLXEyeLoader.shared.unload()
+    await DrawerLoader.shared.unload()
+    Settings.shared.seer = .apple
+    let removed = SharedModelStore.clearEntireSharedStore()
+    for model in ModelCatalog.all where model.job == .drawing { Settings.shared.handRemoved(model.id) }
+    ModelCatalogService.shared.refresh()   // store changed with no notification: poke the one source
+    cameraLog("LIBRARY: cleared the entire shared store: \(removed) repos removed")
+}
+
 @MainActor func deleteModelEverywhere(_ model: CameraModel) async {
     guard !model.isBuiltIn else { return }
     if model.job == .seeing {
@@ -781,6 +799,13 @@ struct ModelLicenseSheet: View {
         if Settings.shared.seer.modelID == model.id { Settings.shared.seer = .apple }
     }
     await MLXModelDownloader.shared.deleteModel(modelID: model.id)
+    // A hand gets what an eye gets (review round 2): it stops being selected, so the next shot doesn't
+    // wait for a model that is gone. Another downloaded hand takes over if there is one; if not, the
+    // layout rules move to one that needs no drawing.
+    if model.job == .drawing {
+        if await DrawerLoader.shared.isLoadedRepo(model.id) { await DrawerLoader.shared.unload() }
+        Settings.shared.handRemoved(model.id)
+    }
     // Refresh the one shared catalog at the deletion SOURCE, so every path that deletes — the Delete
     // button AND the antenna's /release — updates every screen's dots identically. (A delete posts no
     // notification, unlike a download.) Putting it here, not in the button's handler, is what keeps the

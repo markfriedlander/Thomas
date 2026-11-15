@@ -733,6 +733,8 @@ final class Lens: NSObject {
         zoom = defaultZoom(for: device)
         applyZoom(zoom)
         updatePictureAspect()
+        // Focus starts fresh too, as the doc says: a lock pointing at a spot that moved stayed (review round 2).
+        resetFocus()
     }
 
     // MARK: - The shutter
