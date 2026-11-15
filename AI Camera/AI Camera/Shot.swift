@@ -187,6 +187,7 @@ enum Shot {
         // mode, clearly outside the pure chain.
         let prompt = wordsForHand
         DevelopTrace.shared.noteHandWords(prompt)   // the tray shows what the hand will receive, before it loads
+        await noteWhatTheHandReads(prompt, drawerID: config.effectiveDrawerID)
 
         // Frame 2 is over. Let the eye go before either hand arrives — both engines load into a
         // freed device (Mark's rule: no overhead carried between frames).
@@ -252,6 +253,16 @@ enum Shot {
         }
     }
 
+    /// Measure, off the main thread, how many of these words the hand's text reader takes in, for the tray.
+    private static func noteWhatTheHandReads(_ words: String, drawerID: String) async {
+        let read = await Task.detached(priority: .userInitiated) { HandReader.wordsRead(words, drawerID: drawerID) }.value
+        if let read {
+            DevelopTrace.shared.noteHandReads(read)
+            let total = PromptBudget.wordCount(words)
+            if read < total { cameraLog("SHOT: the hand's reader takes \(read) of \(total) words; the rest is cut off") }
+        }
+    }
+
     /// The silent loop: the eye is off, so the (CoreML) hand re-imagines the photograph directly,
     /// nudged by a short hand prompt. Returns the same triple as `seeThenDraw` — here the "perception"
     /// on frame 2 is the instruction you gave (the only language in this mode, and it may be empty),
@@ -271,6 +282,7 @@ enum Shot {
         guard config.drawsThirdFrame else { return (perception, nil, handWords) }
 
         let drawerID = config.effectiveDrawerID
+        if !handWords.isEmpty { await noteWhatTheHandReads(handWords, drawerID: drawerID) }
         guard ModelCatalog.model(id: drawerID)?.engine == .coreML else {
             cameraLog("SILENT: eye off but the selected hand isn't CoreML — the silent loop needs the Neural-Engine hand; landing the photo + your words, no drawing")
             return (perception, nil, handWords)

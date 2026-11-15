@@ -124,7 +124,7 @@ nonisolated enum TrayFeature: CaseIterable, Hashable, Sendable {
     var name: String {
         switch self {
         case .words: return "Its words"
-        case .intake: return "What your photo cost it"
+        case .intake: return "How it took in your photo"
         case .numbers: return "Its numbers"
         case .gaze: return "Where it looked"
         case .attention: return "Where its attention went"

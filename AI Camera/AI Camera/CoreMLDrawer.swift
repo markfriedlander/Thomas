@@ -61,6 +61,16 @@ actor CoreMLDrawer {
         return prefix.isEmpty ? modelDir : modelDir.appendingPathComponent(prefix, isDirectory: true)
     }
 
+    /// How many passes of the drawing model a Core ML drawing runs. PNDM (the engine's default, which
+    /// Thomas uses) adds one at the start; from a photograph the noisiest steps are skipped, leaving the
+    /// last `steps × strength` (ml-stable-diffusion `calculateTimesteps(strength:)`). `strength` nil = from noise.
+    nonisolated static func passes(steps: Int, strength: Float?, pndm: Bool = true) -> Int {
+        let schedule = pndm ? steps + 1 : steps
+        guard let strength else { return schedule }
+        let s = min(max(strength, 0.05), 0.95)
+        return schedule - max(steps - Int(Float(steps) * s), 0)
+    }
+
     nonisolated static func isInstalled(_ repoID: String) -> Bool {
         // The download must be finished (SharedModelStoreKit 1.4.0), not merely have its Unet folder:
         // a cut-off download can hold a half-written Unet.mlmodelc.
@@ -251,7 +261,12 @@ actor CoreMLDrawer {
         config.useDenoisedIntermediates = reportsGuess
         // The engine's default method (PNDM) runs one extra pass at the start: 20 steps are 21 passes
         // of the drawing model, measured 2026-11-13 (21 progress calls). The tray counts what really runs.
-        let passes = config.schedulerType == .pndmScheduler ? steps + 1 : steps
+        // From a photograph (the silent loop) the engine skips the noisiest steps and runs only the last
+        // `steps × strength` of them, plus that extra pass: 20 steps at strength 0.5 are 11 passes. Same
+        // arithmetic as ml-stable-diffusion's `calculateTimesteps(strength:)` (review round 2, 2026-11-14:
+        // the tray said "Step 11 of 21" and stopped there).
+        let passes = Self.passes(steps: steps, strength: startingImage == nil ? nil : config.strength,
+                                 pndm: config.schedulerType == .pndmScheduler)
         trace.begin(prompt: prompt, steps: passes, isGuess: reportsGuess, channelsLast: false,
                     hand: ModelCatalog.model(id: repoID)?.displayName ?? repoID)
 
@@ -299,6 +314,30 @@ extension CoreMLDrawer {
         ctx.interpolationQuality = .high
         ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: side, height: side))
         return ctx.makeImage()
+    }
+}
+
+/// What the hand's text reader actually takes in. Both hands read the words through CLIP's tokenizer,
+/// which keeps a fixed number of word pieces (the MLX hand 75, Thomas's vendored cap; the Core ML hand 76,
+/// ml-stable-diffusion's TextEncoder keeping 77 with its start marker) and drops the rest. Measured with the
+/// hand's own tokenizer files, word by word the way the tokenizer splits them, so the tray can say exactly
+/// where the cut fell instead of claiming the hand got "every one" (review round 2, 2026-11-14).
+nonisolated enum HandReader {
+    /// How many of `words`' space-separated words the hand reads whole; nil when its tokenizer can't be read.
+    static func wordsRead(_ words: String, drawerID: String) -> Int? {
+        let coreML = ModelCatalog.model(id: drawerID)?.engine == .coreML
+        let dir = coreML ? CoreMLDrawer.resourcesDir(for: drawerID)
+                         : SharedModelStore.mlxModelDir(sharedStoreKey(forRepoID: drawerID)).appendingPathComponent("tokenizer")
+        guard let tokenizer = try? BPETokenizer(mergesAt: dir.appendingPathComponent("merges.txt"),
+                                                vocabularyAt: dir.appendingPathComponent("vocab.json")) else { return nil }
+        let limit = coreML ? 76 : 75
+        let split = words.split(whereSeparator: { $0.isWhitespace || $0.isNewline })   // as PromptBudget.wordCount counts
+        var used = 0
+        for (i, word) in split.enumerated() {
+            used += tokenizer.tokenize(input: String(word)).tokens.count - 2   // without its start and end markers
+            if used > limit { return i }
+        }
+        return split.count
     }
 }
 

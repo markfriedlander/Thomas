@@ -114,7 +114,7 @@ final class Settings {
         didSet {
             store(drawsThirdFrame, "drawsThirdFrame")
             snapLayoutIfNeeded()
-            adoptDrawingLayoutIfNeeded(couldDrawBefore: oldValue && DrawerLoader.isAvailable(selectedDrawer))
+            adoptDrawingLayoutIfNeeded(couldDrawBefore: canDraw(eye: useEye, drawer: selectedDrawer, draws: oldValue))
         }
     }
     /// Which hand draws the third frame — the drawer's shared-store repo id. The counterpart to
@@ -125,7 +125,7 @@ final class Settings {
         didSet {
             store(selectedDrawer, "selectedDrawer")
             snapLayoutIfNeeded()
-            adoptDrawingLayoutIfNeeded(couldDrawBefore: drawsThirdFrame && DrawerLoader.isAvailable(oldValue))
+            adoptDrawingLayoutIfNeeded(couldDrawBefore: canDraw(eye: useEye, drawer: oldValue, draws: drawsThirdFrame))
         }
     }
     /// The step knob's value **per drawer** — how many denoising steps each hand draws with.
@@ -188,11 +188,16 @@ final class Settings {
     var useEye: Bool {
         didSet {
             store(useEye, "useEye")
+            let drawerBefore = selectedDrawer, drawsBefore = drawsThirdFrame
             if !useEye, DrawerLoader.isAvailable(ModelCatalog.coreMLSD21.id) {
                 selectedDrawer = ModelCatalog.coreMLSD21.id
                 drawsThirdFrame = true
             }
             snapLayoutIfNeeded()
+            // Turning the eye back on can make drawing possible again (SD-Turbo can't draw in the silent
+            // loop, so its layout had snapped down to the photo): move back up, as the other switches do
+            // (found 2026-11-15 testing the tray; the photo-only layout used to stay).
+            adoptDrawingLayoutIfNeeded(couldDrawBefore: canDraw(eye: oldValue, drawer: drawerBefore, draws: drawsBefore))
         }
     }
     /// The small instruction the hand gets in the silent loop — art direction on the re-imagining,
@@ -320,9 +325,12 @@ final class Settings {
     /// eye off (the silent loop), a hand that can read a photo (only the Core ML hand can). One truth for
     /// every screen and the layout rules (independent review, 2026-11-14: the screens treated SD-Turbo in
     /// the silent loop as drawing, and offered layouts that then had nothing to show).
-    var handWillDraw: Bool {
-        drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
-            && (useEye || ModelCatalog.model(id: selectedDrawer)?.engine == .coreML)
+    var handWillDraw: Bool { canDraw(eye: useEye, drawer: selectedDrawer, draws: drawsThirdFrame) }
+
+    /// `handWillDraw` for any combination, so a switch can ask whether drawing was possible BEFORE it
+    /// changed (the eye counts: SD-Turbo draws only with the eye on).
+    private func canDraw(eye: Bool, drawer: String, draws: Bool) -> Bool {
+        draws && DrawerLoader.isAvailable(drawer) && (eye || ModelCatalog.model(id: drawer)?.engine == .coreML)
     }
 
     private func snapLayoutIfNeeded() {

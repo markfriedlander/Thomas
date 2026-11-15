@@ -27,7 +27,7 @@ nonisolated enum DevelopView: String, CaseIterable, Codable, Sendable {
     /// The engine's actual working latent: static that slowly becomes a picture.
     case working
     /// The engine's current prediction of the finished picture: blurry at first, sharpening.
-    /// Only the Core ML hand exposes this; the MLX hand falls back to `.working` and says so.
+    /// Both hands expose it (the MLX hand since 2026-11-14, Vendor/StableDiffusion VENDOR.md #6).
     case guess
 
     var name: String {
@@ -96,6 +96,23 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         let eye: EyeWorkings?      // the eye's numbers and gaze, when the eye can show them (EyeWorkings.swift)
         let eyeName: String?       // which eye looked
         var intake: EyeIntake? = nil   // Apple's eye: what its photo cost and how it spoke (EyeIntake)
+        /// The shot's own plan for the hand, from its frozen settings, known before the hand starts (live only).
+        var plan: HandPlan? = nil
+        /// The silent loop: the eye was off and the hand started from the photograph.
+        var silentLoop = false
+        /// How many of the hand's words its text reader took in (nil: not measured). Fewer than all means
+        /// the end was cut off (review round 2, 2026-11-14: the tray said "every one" when it wasn't).
+        var handReadWords: Int? = nil
+    }
+
+    /// What the shot will ask of the hand, from its frozen settings: which hand, which engine, how many
+    /// passes it will run (0 when nothing is drawn). Lets the tray name the right chip and count the right
+    /// moments before the hand has loaded (review round 2: it guessed 21 passes and the Neural Engine).
+    struct HandPlan: Sendable {
+        let hand: String
+        let mlx: Bool
+        let passes: Int
+        let silent: Bool
     }
 
     private var version = 0
@@ -115,6 +132,8 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
     private var eyeName: String?
     private var eyeOpen = false
     private var intake: EyeIntake?
+    private var plan: HandPlan?
+    private var handReadWords: Int?
 
     /// A new shot begins developing: forget everything from the last one, so a shot that draws
     /// nothing can never inherit another shot's steps.
@@ -122,9 +141,18 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
         lock.withLock {
             shotID = id; self.photo = photo; eyeWords = nil; wordsFromEye = true; prompt = ""; steps = 0
             isGuess = false; channelsLast = false; hand = ""; shape = []; latents = []; final = nil
-            eye = nil; eyeName = nil; eyeOpen = id != nil; intake = nil
+            eye = nil; eyeName = nil; eyeOpen = id != nil; intake = nil; plan = nil; handReadWords = nil
             version += 1
         }
+    }
+
+    func notePlan(_ p: HandPlan) {
+        lock.withLock { if shotID != nil { plan = p; version += 1 } }
+    }
+
+    /// How many of the words the hand received its text reader takes in (HandReader).
+    func noteHandReads(_ words: Int) {
+        lock.withLock { handReadWords = words; version += 1 }
     }
 
     func noteEyeWords(_ words: String, fromEye: Bool = true) {
@@ -232,7 +260,8 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
             return Snapshot(version: version, shotID: shotID, photo: photo, eyeWords: eyeWords,
                             wordsFromEye: wordsFromEye, prompt: prompt, steps: steps, isGuess: isGuess, channelsLast: channelsLast,
                             hand: hand, shape: shape, latents: latents, final: final,
-                            eye: eye, eyeName: eyeName, intake: intake)
+                            eye: eye, eyeName: eyeName, intake: intake, plan: plan,
+                            silentLoop: plan?.silent ?? !wordsFromEye, handReadWords: handReadWords)
         }
     }
 }
@@ -282,7 +311,7 @@ extension DeveloperTray {
     /// ground, a title bar that names the view, and the place/date footer every frame carries.
     static func contactSheet(_ f: DevelopFrames, final: CGImage?, place: String?, date: Date) -> UIImage {
         var tiles: [(CGImage, String)] = zip(f.images, f.steps).map { ($0, "\($1)") }
-        if let final { tiles.append((final, "saved")) }
+        if let final { tiles.append((final, "finished")) }
 
         let cols = Int(ceil(Double(tiles.count).squareRoot()))
         let rows = Int(ceil(Double(tiles.count) / Double(cols)))
@@ -303,11 +332,13 @@ extension DeveloperTray {
             ctx.cgContext.fill(CGRect(origin: .zero, size: canvas))
 
             let titleSize = width * 0.022
-            let title = "\(f.viewName) · \(f.totalSteps) steps · \(f.hand)" as NSString
+            let title = "\(f.viewName) · \(f.totalSteps) passes · \(f.hand)" as NSString
             title.draw(at: CGPoint(x: margin, y: titleBar * 0.22),
                        withAttributes: [.font: UIFont.systemFont(ofSize: titleSize, weight: .semibold),
                                         .foregroundColor: UIColor.white])
-            let note = "Each step is a quick preview. The last tile is the finished drawing." as NSString
+            // One name per thing across the tray and its keepsakes (review round 2): the drawing model's
+            // passes (the Neural-Engine hand adds one at the start), and "the finished drawing".
+            let note = "Each tile is a quick preview after one pass of the drawing model (the Neural-Engine hand adds one pass at the start, so 20 steps make 21). The last tile is the finished drawing." as NSString
             note.draw(at: CGPoint(x: margin, y: titleBar * 0.22 + titleSize * 1.35),
                       withAttributes: [.font: UIFont.systemFont(ofSize: titleSize * 0.7),
                                        .foregroundColor: UIColor(white: 0.7, alpha: 1)])
@@ -659,6 +690,7 @@ final class TrayModel {
     /// Set once the tray has looked for this shot's kept negative (a shot that is no longer the one
     /// developing live is opened from the Dark Room's negatives).
     private var negativeRequested = false
+    private(set) var negativeChecked = false
     private let decoder = TrayPreviewDecoder()
 
     // The eye's workings (EyeWorkings.swift), when this shot's eye could show them.
@@ -744,6 +776,7 @@ final class TrayModel {
             let id = shotID
             Task {
                 if let kept = await NegativeStore.shared.load(id) { self.trace = kept }
+                self.negativeChecked = true
                 cameraLog("TRAY: opened \(id.uuidString.prefix(8)) from its negative: \(self.trace == nil ? "none kept" : "ok")")
             }
         }
@@ -776,17 +809,20 @@ final class TrayModel {
         if t.final != nil { prefetchAll() }   // done: decode the rest so stepping and scrubbing are smooth
     }
 
-    /// Counts only what can be known: the words moment, the mixing, the hand's passes (set when the
-    /// drawing starts; before that, the Core ML hand's usual 21) and the finished drawing. The eye's
+    /// Counts only what can be known: the words moment, the mixing, the hand's passes (the shot's plan,
+    /// then the drawing's own count once it starts) and the finished drawing. The eye's
     /// remaining words can't be known ahead, so they are not counted.
     private func updateUpcoming(_ t: DevelopTrace.Snapshot?) {
         guard developing else { upcoming = 0; upcomingHandStart = nil; return }
         var n = frames.contains(.words) ? 0 : 1
         var handStart: Int?
-        if Settings.shared.drawsThirdFrame {
+        // The shot's own plan (its frozen settings), not today's Preferences; before the plan is known,
+        // nothing is guessed (review round 2: it assumed 21 passes for any hand).
+        let planned = t?.plan?.passes ?? 0
+        if planned > 0 || (t?.steps ?? 0) > 0 {
             if !has(.hand) { handStart = frames.count + n }
             if !frames.contains(.mixing) { n += 1 }
-            let passes = (t?.steps ?? 0) > 0 ? (t?.steps ?? 0) : 21
+            let passes = (t?.steps ?? 0) > 0 ? (t?.steps ?? 0) : planned
             n += max(0, passes - (t?.latents.count ?? 0))
             if t?.final == nil { n += 1 }
         }
@@ -906,7 +942,7 @@ final class TrayModel {
 
     /// Tap a chapter in the top pill: its first moment.
     func jump(to chapter: TrayChapter) {
-        if let i = frames.firstIndex(where: { $0.chapter == chapter }) { scrub(to: i) }
+        if let i = frames.firstIndex(where: { self.chapter(of: $0) == chapter }) { scrub(to: i) }
     }
 
     /// Tap a word: jump to the moment the eye chose it.
@@ -921,12 +957,31 @@ final class TrayModel {
         if s == comparedSquare { openSquare = s } else { selectedSquare = s }
     }
 
-    func has(_ chapter: TrayChapter) -> Bool { frames.contains { $0.chapter == chapter } }
+    func has(_ chapter: TrayChapter) -> Bool { frames.contains { self.chapter(of: $0) == chapter } }
+
+    /// Which chapter a moment belongs to. In the silent loop the words are your instruction to the hand,
+    /// with the eye switched off, so they sit in the hand's chapter (review round 2: EYE lit over them).
+    func chapter(of frame: TrayFrame) -> TrayChapter {
+        if frame == .words, trace?.silentLoop == true { return .hand }
+        return frame.chapter
+    }
+
+    /// The silent loop: the eye was off and the hand started from the photograph.
+    var silentLoop: Bool { trace?.silentLoop ?? false }
+
+    /// Which engine the hand runs on: known from the shot's plan before the hand loads.
+    var handIsMLX: Bool {
+        if let t = trace, t.steps > 0 { return t.channelsLast }
+        return trace?.plan?.mlx ?? trace?.channelsLast ?? false
+    }
+
+    /// True when nothing of this shot's development was kept: not developing now, no negative on disk.
+    var nothingKept: Bool { trace == nil && negativeChecked && !developing }
 
     var chapterSpans: [TrayChapterSpan] {
         TrayChapter.allCases.compactMap { c in
-            guard let first = frames.firstIndex(where: { $0.chapter == c }),
-                  let last = frames.lastIndex(where: { $0.chapter == c }) else { return nil }
+            guard let first = frames.firstIndex(where: { self.chapter(of: $0) == c }),
+                  let last = frames.lastIndex(where: { self.chapter(of: $0) == c }) else { return nil }
             return TrayChapterSpan(chapter: c, first: first, last: last)
         }
     }
@@ -1022,7 +1077,7 @@ final class TrayModel {
         case .words: return (trace?.wordsFromEye ?? true) ? "What the eye said" : "Your instruction"
         case .mixing: return "Mixing the developer"
         case .step(let k): return "Step \(k) of \(max(trace?.latents.count ?? 0, trace?.steps ?? 0))"
-        case .finished: return "What Thomas saw"
+        case .finished: return "The finished drawing"
         }
     }
 
@@ -1041,7 +1096,22 @@ final class TrayModel {
 
     private var shorteningHelp: String {
         let said = PromptBudget.wordCount(trace?.eyeWords ?? ""), kept = PromptBudget.wordCount(handWords)
-        return "The hand can only read about 50 words. The eye said \(said), so Thomas asked the same eye to say it again in fewer, keeping everything that could be drawn: the things, their colors, textures, and where they are. It worked from its own words; it didn't look at your photograph again. The hand received \(kept) words."
+        return "The hand can only read about 50 words. The eye said \(said), so Thomas asked the same eye to say it again in fewer, keeping everything that could be drawn: the things, their colors, textures, and where they are. It worked from its own words; it didn't look at your photograph again. The hand received \(kept) words." + (cutOffNote.map { " " + $0 } ?? "")
+    }
+
+    /// How many of the hand's words its text reader took in, when that is fewer than all of them.
+    var handWordsRead: (read: Int, of: Int)? {
+        guard let read = trace?.handReadWords else { return nil }
+        let all = PromptBudget.wordCount(handWords)
+        return read < all ? (read, all) : nil
+    }
+
+    /// Said when the hand's reader dropped the end of its words: where the cut fell.
+    var cutOffNote: String? {
+        guard let r = handWordsRead else { return nil }
+        let words = handWords.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+        let last = r.read > 0 ? words[r.read - 1] : ""
+        return "Even so, its text reader takes in a fixed number of word pieces, so it read the first \(r.read) of these \(r.of) words\(last.isEmpty ? "" : ", up to \u{201C}\(last)\u{201D}"), and the rest was cut off."
     }
 
     /// The moment's name when the full one doesn't fit (large text, a phone held sideways): the slider
@@ -1072,9 +1142,11 @@ final class TrayModel {
             // phone is hot (ThermalGovernor). Say that, rather than implying it is merely slow.
             let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
             let waiting = (drawingDone && hot) ? "waits for the \(ThisDevice.deviceKind) to cool" : "is on its way"
-            // Only when there is no picture at all: then the wait needs a reason. When an earlier step
-            // is showing, no note (Mark, 2026-11-13: the pill already says which step this is).
-            return shownStep(for: k) == nil ? "This preview \(waiting)" : nil
+            // No picture at all: the wait needs a reason. An earlier step's picture standing in: say so, so
+            // the pill's step number and the picture never disagree silently (review round 2, 2026-11-14,
+            // reversing 2026-11-13's "the pill already says which step this is"; Mark approved the round).
+            guard let shown = shownStep(for: k) else { return "This preview \(waiting)" }
+            return shown == k ? nil : "Showing step \(shown) \u{00B7} step \(k)'s preview \(waiting)"
         default:
             return nil
         }
@@ -1121,7 +1193,9 @@ final class TrayModel {
             } else {
                 parts.append("\(Self.percent(w.imageShare)) of its attention went to the picture. This shot didn't record where the rest went.")
             }
-            parts.append("The picture's light is on one scale for the whole description, so a word that barely looked at the picture leaves it dim; the very brightest glows, about one in a thousand, show at full light. The earlier words are lit on a scale of their own; the bar above gives the true shares.")
+            // Disclosed (review round 2, 2026-11-14): the curve, the smoothing, and that the scale moves while
+            // the words are still coming.
+            parts.append("The picture's light is on one scale for the whole description\(developing ? " so far; it settles once the last word is written" : ""), so a word that barely looked at the picture leaves it dim; the very brightest glows, about one in a thousand, show at full light. Light is drawn on a curve so faint looks stay visible, and the glow between squares is smoothed, so brightness is not proportional: the bar above gives the true shares.")
             parts.append("A few squares may glow for nearly every word. Models park spare attention in a few fixed places, called attention sinks. It is a real part of how they work, not a fault in the picture.")
             if e.tileSide > 0 {
                 parts.append("This eye looks twice: up close, tile by tile, and once at the whole picture, small. Both looks are on the picture: the close look lights single squares, the whole look lights the larger block each of its squares covered.")
@@ -1147,28 +1221,52 @@ final class TrayModel {
             parts.append("These numbers come from Apple's own tools.")
             return parts.joined(separator: "\n\n")
         case .reality:
+            if silentLoop {
+                return "What the lens saw, exactly as you shot it. In the silent loop the eye is off: no words are written, and the hand starts from this photograph itself, nudged by your instruction."
+            }
             return "What the lens saw, exactly as you shot it. Everything after this is the machine's: the eye reads the photograph, then the hand draws from the eye's words alone."
         case .numbers:
             return "Before it says a word, the eye translates each square of your photo into a list of numbers, a vector: a place on the model's map of ideas. Squares it sees as alike sit close together on its map. Tap any square to light the squares whose numbers are like it."
         case .gaze:
             return "Where the eye's attention went as it chose this word."
         case .words:
-            var s = (trace?.wordsFromEye ?? true)
-                ? "The eye's words, exactly as it said them. They are all the hand receives: it never sees your photograph."
-                : "In the silent loop the eye says nothing; the hand draws from your instruction."
+            var s = silentLoop
+                ? "In the silent loop the eye says nothing. These are your instruction to the hand, which starts from your photograph."
+                : "The eye's words, exactly as it said them. They are all the hand receives: it never sees your photograph."
             if wasShortened { s += "\n\nThey were too long for the hand, so the next moment shows the shorter version it received." }
             return s
         case .mixing:
-            let handed = wasShortened ? shorteningHelp : "These are the eye's words exactly as the hand received them, every one."
-            return handed + "\n\nMeanwhile, the drawing model is loading\((trace?.channelsLast ?? false) ? "" : " onto the Neural Engine"). The first time after installing or updating takes a couple of minutes; after that, a second or two."
+            let handed: String
+            if silentLoop {
+                handed = "The eye is off, so nothing was written. The hand will start from your photograph, nudged by your instruction" + (cutOffNote.map { ". " + $0 } ?? ".")
+            } else if wasShortened {
+                handed = shorteningHelp
+            } else if let cut = cutOffNote {
+                handed = "These are the eye's words as the hand received them. " + cut
+            } else {
+                handed = "These are the eye's words exactly as the hand received them, every one."
+            }
+            // The engine from the shot's own plan, so the MLX hand is never said to load onto the Neural
+            // Engine (review round 2). Only the Core ML hand has the long first preparation.
+            let loading = handIsMLX
+                ? "Meanwhile, the drawing model is loading onto the GPU. That takes a second or two."
+                : "Meanwhile, the drawing model is loading onto the Neural Engine. The first time after installing or updating takes a couple of minutes; after that, a second or two."
+            return handed + "\n\n" + loading
         case .step(let k):
             let of = max(trace?.latents.count ?? 0, trace?.steps ?? 0)
             let kind = (trace?.isGuess ?? false)
                 ? "These previews show the engine's best guess at the finished picture after each step."
                 : "These previews show the engine's working image after each step."
-            let extra = (trace?.channelsLast ?? true) ? "" : " (Its method takes one extra pass at the start, so \(of - 1) steps make \(of) passes.)"
-            return "The hand never sees your photograph. It starts from random noise and, over \(of) passes, refines it toward the eye's words.\(extra) This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
+            let preview = "This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
+            if silentLoop {
+                return "The hand starts from your photograph, not from noise: it buries the photo in noise, then refines it back toward your instruction. The strength setting decides how deep: the engine skips the noisiest of the planned steps and runs only the rest, \(of) passes here (one of them an extra pass its method takes at the start). " + preview
+            }
+            let extra = handIsMLX ? "" : " (Its method takes one extra pass at the start, so \(of - 1) steps make \(of) passes.)"
+            return "The hand never sees your photograph. It starts from random noise and, over \(of) passes, refines it toward the eye's words.\(extra) " + preview
         case .finished:
+            if silentLoop {
+                return "Thomas's hand started from your photograph and redrew it, nudged by your instruction, with no words in between.\n\nThis is the finished drawing itself, not a preview; it's saved to Photos."
+            }
             return "Thomas's hand never saw your photograph. It drew from the eye's words, filling in the rest from what it knows. This is what Thomas saw, as far as it could carry it in words.\n\nThis is the finished drawing itself, not a preview; it's saved to Photos."
         }
     }
@@ -1520,6 +1618,9 @@ struct DeveloperTrayView: View {
             case .reality, .intake, .words, .mixing:
                 if let photo = model.trace?.photo {
                     picture(photo)
+                } else if model.nothingKept {
+                    // Nothing to wait for: say so instead of a spinner that never stops (review round 2).
+                    pill { Text("This shot's development wasn't kept.").font(.callout.weight(.medium)) }
                 } else {
                     ProgressView().tint(.white)
                 }
@@ -1703,8 +1804,12 @@ struct DeveloperTrayView: View {
         let text = handing ? model.handWords : (model.trace?.eyeWords ?? "")
         let label: String? = {
             guard handing else { return nil }
+            if let r = model.handWordsRead, !model.wasShortened {
+                return "Handed to the hand \u{00B7} it read \(r.read) of \(r.of) words"
+            }
             guard model.wasShortened else { return "Handed to the hand, word for word" }
             let kept = PromptBudget.wordCount(model.handWords), said = PromptBudget.wordCount(model.trace?.eyeWords ?? "")
+            if let r = model.handWordsRead { return "Shortened for the hand \u{00B7} \(kept) of \(said) words, it read \(r.read)" }
             return "Shortened for the hand \u{00B7} \(kept) of \(said) words"
         }()
         let words = VStack(alignment: .leading, spacing: 12) {
@@ -1739,7 +1844,7 @@ struct DeveloperTrayView: View {
             Spacer(minLength: 8)
             HStack(spacing: 2) {
                 ForEach(TrayChapter.allCases, id: \.self) { c in
-                    let on = model.current.chapter == c
+                    let on = model.chapter(of: model.current) == c
                     let has = model.has(c)
                     Button { model.jump(to: c) } label: {
                         // One line always; if a screen is ever too narrow, the label shrinks a little

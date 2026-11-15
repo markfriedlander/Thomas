@@ -51,6 +51,9 @@ nonisolated struct NegativeMeta: Codable, Sendable, Identifiable {
     var intake: EyeIntake? = nil
     /// How this shot's words panel was printed, so the Dark Room's tile shows the same. Absent before 2026-11-14.
     var wordsCard: WordsCard? = nil
+    /// The silent loop, and how many of the hand's words its reader took in. Absent before 2026-11-15.
+    var silentLoop: Bool? = nil
+    var handReadWords: Int? = nil
 
     /// The start of what the eye said, for the Dark Room row.
     var firstWords: String {
@@ -117,7 +120,8 @@ actor NegativeStore {
                                     prompt: trace.prompt, steps: trace.steps, isGuess: trace.isGuess,
                                     channelsLast: trace.channelsLast, hand: trace.hand, shape: trace.shape,
                                     latentCount: trace.latents.count, hasDrawing: trace.final != nil, eye: eye,
-                                    intake: trace.intake, wordsCard: wordsCard)
+                                    intake: trace.intake, wordsCard: wordsCard,
+                                    silentLoop: trace.silentLoop, handReadWords: trace.handReadWords)
             if let photo = trace.photo, let reduced = Self.reduced(photo, maxPixel: 1600) {
                 try Self.write(reduced, type: .jpeg, quality: 0.85, to: dir.appendingPathComponent("photo.jpg"))
             }
@@ -226,7 +230,8 @@ actor NegativeStore {
                                      wordsFromEye: m.wordsFromEye, prompt: m.prompt, steps: m.steps,
                                      isGuess: m.isGuess, channelsLast: m.channelsLast, hand: m.hand,
                                      shape: m.shape, latents: latents, final: drawing,
-                                     eye: eye, eyeName: m.eyeName, intake: m.intake)
+                                     eye: eye, eyeName: m.eyeName, intake: m.intake,
+                                     silentLoop: m.silentLoop ?? !m.wordsFromEye, handReadWords: m.handReadWords)
     }
 
     /// A small picture of the kept photograph, for the Dark Room row.

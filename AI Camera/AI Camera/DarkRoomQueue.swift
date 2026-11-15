@@ -744,6 +744,20 @@ final class DarkRoomWorker {
     /// The name a shot waiting on Apple's eye carries (the Dark Room explains it differently from a download).
     nonisolated static let appleIntelligenceName = "Apple Intelligence"
 
+    /// What this shot will ask of the hand (DevelopTrace.HandPlan), from its frozen settings.
+    nonisolated static func handPlan(for c: ShotConfig) -> DevelopTrace.HandPlan {
+        let silent = !c.effectiveUseEye
+        let model = ModelCatalog.model(id: c.effectiveDrawerID)
+        let mlx = (model?.engine ?? .mlx) == .mlx
+        var passes = 0
+        if c.drawsThirdFrame, !(silent && mlx) {   // the silent loop draws only on the Core ML hand
+            passes = mlx ? c.effectiveDrawSteps
+                         : CoreMLDrawer.passes(steps: c.effectiveDrawSteps,
+                                               strength: silent ? Float(c.effectiveHandStrength) : nil)
+        }
+        return .init(hand: model?.displayName ?? c.effectiveDrawerID, mlx: mlx, passes: passes, silent: silent)
+    }
+
     nonisolated static func missingModel(for config: ShotConfig) -> String? {
         let eye = ModelCatalog.model(for: config.seer)
         // A silent-loop shot (eye off) never looks, so it never waits for an eye (review round 3).
@@ -817,6 +831,7 @@ final class DarkRoomWorker {
                 // A fresh trace for this shot (the Developer Tray watches it live); a shot that draws
                 // nothing must never inherit another shot's steps.
                 DevelopTrace.shared.startShot(id: shot.id, photo: photograph)
+                DevelopTrace.shared.notePlan(Self.handPlan(for: config))
                 return await Shot.seeThenDraw(photograph, config: config,
                                               onStage: { stage in self.currentStage = stage })
             }
