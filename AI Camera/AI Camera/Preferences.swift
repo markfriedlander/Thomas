@@ -1175,18 +1175,13 @@ struct PreferencesView: View {
         // What comes along with the print, each on or off (Mark, 2026-11-14).
         PrefCard {
             Text("Also save to Photos").font(.headline)
+            // One switch. The files take the layout's shape (Mark, 2026-11-15: "You should not be able to choose
+            // an outline and a separate file that conflict"): square when the layout is square, so they match
+            // the square guide you framed with; their own shapes otherwise, matching the full view.
             Toggle("Each frame as its own file", isOn: Binding(
                 get: { settings.separateFiles != .off },
                 set: { settings.separateFiles = $0 ? .native : .off }))
                 .tint(.green)
-            if settings.separateFiles != .off {
-                Picker("Shape of the separate files", selection: $settings.separateFiles) {
-                    Text(SeparateFiles.native.name).tag(SeparateFiles.native)
-                    Text(SeparateFiles.square.name).tag(SeparateFiles.square)
-                }
-                .pickerStyle(.segmented)
-                .environment(\.colorScheme, .light)
-            }
             if handDraws {
                 Toggle("A contact sheet of the drawing's steps", isOn: keepsakeBinding(sheet: true)).tint(.green)
                 Toggle("A flipbook of the drawing's steps", isOn: keepsakeBinding(sheet: false)).tint(.green)
@@ -1215,7 +1210,7 @@ struct PreferencesView: View {
 
     private var alsoSaveLine: String {
         var extras: [String] = []
-        if settings.separateFiles != .off { extras.append(settings.separateFiles == .square ? "each frame as a square file" : "each frame as its own file") }
+        if settings.separateFiles != .off { extras.append(settings.layout.isSquareFormat ? "each frame as a square file" : "each frame as its own file") }
         if handDraws {
             switch settings.developmentKeepsake {
             case .contactSheet: extras.append("a contact sheet")
@@ -1418,7 +1413,7 @@ struct PreferencesView: View {
                             body: "When the eye's words have a panel of their own (Words only, the diptychs, the triptychs, and the separate files), this is how that panel looks.\n\nWhite on black is the camera's original look. Black on white is its reverse. The photo's color takes the strongest color in your photo for the panel. The photo, blurred lays a soft copy of your photo behind the words, as these screens do. With the last two, the words are black or white, whichever reads more clearly.\n\nWords laid over a photo or drawing stay white with a shadow.")
         case "keepsake":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "Also save to Photos",
-                            body: "Beside the print you chose, a shot can also save:\n\nEach frame as its own file: the photo, the words and the drawing as separate pictures. Their own shapes keeps each as it is; all square crops the photo to the square the hand draws, so the three pair.\n\nA contact sheet: every step of the drawing on one page. A flipbook: a short video of the steps. The steps are quick previews; the last frame is the finished drawing. These two appear when the hand is drawing.\n\nAll of these are off by default, so a shot does no extra work unless you ask.")
+                            body: "Beside the print you chose, a shot can also save:\n\nEach frame as its own file: the photo, the words and the drawing as separate pictures, in the layout's shape. With a square layout they are square, matching the square you framed in the viewfinder; with any other layout each keeps its own shape, matching the whole view.\n\nA contact sheet: every step of the drawing on one page. A flipbook: a short video of the steps. The steps are quick previews; the last frame is the finished drawing. These two appear when the hand is drawing.\n\nAll of these are off by default, so a shot does no extra work unless you ask.")
         default:
             return PrefHelp(id: key, kicker: "", title: key, body: "")
         }

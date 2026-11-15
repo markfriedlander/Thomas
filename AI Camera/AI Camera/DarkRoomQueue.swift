@@ -147,7 +147,9 @@ extension ShotConfig {
             handStrength: s.handStrength,
             developView: s.developView,
             developmentKeepsake: s.developmentKeepsake,
-            separateFiles: s.separateFiles,
+            // The files take the frozen layout's shape, so they always match what the viewfinder framed (Mark,
+            // 2026-11-15). A stored "square" from before is simply "on".
+            separateFiles: s.separateFiles == .off ? .off : (layout.isSquareFormat ? .square : .native),
             wordsCard: s.wordsCard
         )
     }

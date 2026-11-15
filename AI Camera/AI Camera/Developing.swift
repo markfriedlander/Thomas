@@ -70,6 +70,9 @@ nonisolated enum WordsCard: String, CaseIterable, Codable, Sendable {
 /// is one choice. What comes along with the layout, as an addition, is another choice"). Before this,
 /// separate files were a layout of their own, chosen instead of a combined print, which confused even
 /// Mark. The two Separate layouts survive in `Layout` only so older shots and settings still develop.
+/// Saving each frame as its own file. Since 2026-11-15 the person chooses only on or off; the shape follows
+/// the layout (square layouts give square files), decided when a shot is frozen (`ShotConfig.capture`). The
+/// three cases stay so older settings and shots still read.
 nonisolated enum SeparateFiles: String, CaseIterable, Codable, Sendable {
     case off, native, square
     var name: String {
