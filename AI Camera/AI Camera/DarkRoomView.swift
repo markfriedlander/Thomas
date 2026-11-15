@@ -227,7 +227,7 @@ struct DarkRoomView: View {
                 }
                 if worker.isCoolingDown {
                     Label("Cooling down - the \(ThisDevice.deviceKind) is too hot to develop. Shots resume automatically when it cools.",
-                          systemImage: "snowflake")
+                          systemImage: "thermometer.high")   // one heat symbol across Thomas
                         .font(.footnote).foregroundStyle(.orange)
                         .darkRoomRow()
                 }

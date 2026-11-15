@@ -710,7 +710,10 @@ struct PreferencesView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The eye's system prompt, the temperature, the layout, and the drawing settings all go back to how the camera shipped. Your photographs are untouched.")
+            // Says what it removes (the guide drafter found it didn't, 2026-11-15): negatives kept beyond 20.
+            Text("The eye's system prompt, the temperature, the layout, and the drawing settings all go back to how the camera shipped."
+                 + (settings.negativesToKeep > 20 ? " Kept Developer Tray records go back to the newest 20; older ones are removed." : "")
+                 + " Your photographs are untouched.")
         }
     }
 
@@ -1370,7 +1373,7 @@ struct PreferencesView: View {
                             body: "The hand is a drawing model. It reads only the eye's words and draws the scene again from them; it never sees your photograph. The distance between the photo and the drawing is the point.")
         case "frame.print":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "What lands in Photos",
-                            body: "How the frames are put together when a shot finishes developing: on one plate, side by side, the words over a picture, or each as its own file. Photos keeps the print; the Dark Room keeps the machine's workings for a while so the Developer Tray can open the shot again.")
+                            body: "How the frames are put together when a shot finishes developing: on one plate, side by side, or the words over a picture. Each frame can also be saved as its own file, under Also save to Photos. Photos keeps the print; the Dark Room keeps the machine's workings for a while so the Developer Tray can open the shot again.")
         case "shape":
             return PrefHelp(id: key, kicker: "THE LENS", title: "Picture shape",
                             body: "4:3 is the camera's whole sensor: the widest view. In the square layouts the square sees the most of the scene. On a tall screen the viewfinder has black bands above and below.\n\n16:9 is taller and narrower, like a video frame, and fills more of the screen. In the square layouts the square sees about a quarter less of the scene, as if zoomed in a little.")

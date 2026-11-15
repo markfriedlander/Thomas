@@ -1253,7 +1253,7 @@ final class TrayModel {
             // Engine (review round 2). Only the Core ML hand has the long first preparation.
             let loading = handIsMLX
                 ? "Meanwhile, the drawing model is loading onto the GPU. That takes a second or two."
-                : "Meanwhile, the drawing model is loading onto the Neural Engine. The first time after installing or updating takes a couple of minutes; after that, a second or two."
+                : "Meanwhile, the drawing model is loading onto the Neural Engine. The first time after installing or updating takes a minute or two; after that, a second or two."
             return handed + "\n\n" + loading
         case .step(let k):
             let of = max(trace?.latents.count ?? 0, trace?.steps ?? 0)
@@ -1262,7 +1262,7 @@ final class TrayModel {
                 : "These previews show the engine's working image after each step."
             let preview = "This is a quick preview of the drawing engine's actual state after step \(k), made by a small preview decoder; it is not the finished drawing.\n\n" + kind
             if silentLoop {
-                return "The hand starts from your photograph, not from noise: it buries the photo in noise, then refines it back toward your instruction. The strength setting decides how deep: the engine skips the noisiest of the planned steps and runs only the rest, \(of) passes here (one of them an extra pass its method takes at the start). " + preview
+                return "The hand starts from your photograph, not from noise: it buries the photo in noise, then refines it back toward your instruction. The Transform setting decides how deep: the engine skips the noisiest of the planned steps and runs only the rest, \(of) passes here (one of them an extra pass its method takes at the start). " + preview
             }
             let extra = handIsMLX ? "" : " (Its method takes one extra pass at the start, so \(of - 1) steps make \(of) passes.)"
             return "The hand never sees your photograph. It starts from random noise and, over \(of) passes, refines it toward the eye's words.\(extra) " + preview
@@ -1436,7 +1436,7 @@ struct DeveloperTrayView: View {
                 .buttonStyle(.plain)
             }
         case .cooling:
-            Label("The next shot waits for the \(ThisDevice.deviceKind) to cool", systemImage: "snowflake")
+            Label("Cooling down: the next shot waits for the \(ThisDevice.deviceKind) to cool", systemImage: "thermometer.high")
                 .font(.caption).foregroundStyle(.orange)
         case .paused:
             Text("Paused. The next shot waits until you resume.").font(.caption).foregroundStyle(.white.opacity(0.7))

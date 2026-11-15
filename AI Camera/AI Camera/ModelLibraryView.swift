@@ -500,11 +500,13 @@ private struct DiskRow: View {
                 Label("Models on this \(ThisDevice.deviceKind)", systemImage: "internaldrive")
                     .font(.subheadline)
                 Spacer()
-                Text(format(storeBytes))
+                // "used", so the models' total is never read as free space (Mark read "6.49 GB" as available,
+                // 2026-11-15, with 248 MB free).
+                Text("\(format(storeBytes)) used")
                     .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
             }
             if let important {
-                Text("\(format(important)) available for downloads")
+                Text("Free on this \(ThisDevice.deviceKind) for downloads: \(format(important))")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
