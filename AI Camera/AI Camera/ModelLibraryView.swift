@@ -77,7 +77,7 @@ struct ModelLibraryView: View {
                 } footer: {
                     Text(job == .seeing
                          ? "The machine that reads your photograph and says what it sees. One is loaded at a time, chosen before you raise the camera."
-                         : "The machine that draws the third frame from the words the eye produced. It never sees your photograph.")
+                         : "The machine that draws the third frame from the words the eye produced. It never sees your photograph, except in the silent loop (the eye switched off), where SD-2.1 reads the photo itself.")
                     .font(.caption2)
                 }
             }

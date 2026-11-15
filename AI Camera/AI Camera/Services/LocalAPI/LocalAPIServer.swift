@@ -1416,7 +1416,11 @@ extension LocalAPIServer {
         // location on this fed-in shot (e.g. the original photo's own GPS, for a marketing frame);
         // a human's library import has none, so it defaults to nil like the "Load a picture" door.
         let placeStamp = req.headers["x-place"].flatMap { $0.isEmpty ? nil : $0 }
-        await DarkRoomWorker.shared.enqueue(photograph, place: placeStamp)
+        // Optional, as /capture: X-Draw: false (skip frame 3), X-Layout: <case> (freeze this layout), so a
+        // test photo can exercise any layout without photographing the room through the live lens.
+        let drawThird: Bool? = req.headers["x-draw"].map { $0 != "false" }
+        let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
+        await DarkRoomWorker.shared.enqueue(photograph, place: placeStamp, drawsThirdFrame: drawThird, layoutOverride: layoutOverride)
         let after = await MainActor.run { DarkRoomWorker.shared.developingCount }
         return (200, json([
             "enqueued":    true,

@@ -296,9 +296,18 @@ final class Settings {
     /// layout selected. Enforced HERE in the model (Principle 7, matching `useEye`'s own enforcement),
     /// so it holds however those are changed and can't be bypassed. This is the invariant that retires
     /// the "triptych stuck on with the hand off" bug (2026-07-30 antenna-parity fix).
+    /// Whether a shot taken now would really get a drawing: drawing on, the hand installed, and, with the
+    /// eye off (the silent loop), a hand that can read a photo (only the Core ML hand can). One truth for
+    /// every screen and the layout rules (independent review, 2026-11-14: the screens treated SD-Turbo in
+    /// the silent loop as drawing, and offered layouts that then had nothing to show).
+    var handWillDraw: Bool {
+        drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
+            && (useEye || ModelCatalog.model(id: selectedDrawer)?.engine == .coreML)
+    }
+
     private func snapLayoutIfNeeded() {
         let hasEye = useEye
-        let hasHand = drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
+        let hasHand = handWillDraw
         if !layout.isAvailable(hasEye: hasEye, hasHand: hasHand) {
             layout = Layout.fallback(hasEye: hasEye, hasHand: hasHand)
         }
@@ -312,7 +321,7 @@ final class Settings {
     /// user who later picks a no-drawing layout on purpose keeps it. In the model, not the screen
     /// (Principle 7), so the antenna and the silent-loop switch get it too.
     private func adoptDrawingLayoutIfNeeded(couldDrawBefore: Bool) {
-        let canDrawNow = drawsThirdFrame && DrawerLoader.isAvailable(selectedDrawer)
+        let canDrawNow = handWillDraw
         guard canDrawNow, !couldDrawBefore, !layout.usesDrawing else { return }
         layout = Layout.drawingLayout(hasEye: useEye)
     }
@@ -537,7 +546,7 @@ struct PreferencesView: View {
         .alert("Why can't I change this line?", isPresented: $showingLayerOneInfo) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This keeps the eye's description short enough for the hand to draw from - the drawing model can only read about seventy-five words, and a longer description used to crash the camera. It's locked so it can't be removed by accident. Everything below it is yours.")
+            Text("This keeps the eye's description short enough for the hand to draw from - the drawing model can only read about fifty words, and a longer description used to crash the camera. It's locked so it can't be removed by accident. Everything below it is yours.")
         }
         .task { lastShot = await Self.loadLastShot() }
         #if DEBUG
@@ -558,10 +567,13 @@ struct PreferencesView: View {
     private var frontDoor: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("YOUR CAMERA, AS IT IS SET NOW")
+                Text(lastShot == nil ? "YOUR NEXT SHOT WILL APPEAR HERE" : "YOUR LAST SHOT")
                     .font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.secondary)
                     .padding(.top, 4)
                 lastShotFrames
+                Text("YOUR CAMERA, AS IT IS SET NOW")
+                    .font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(.secondary)
+                    .padding(.top, 4)
                 PrefCard(padding: false) {
                     ForEach(Array(PrefsPage.allCases.enumerated()), id: \.element) { i, p in
                         if i > 0 { Divider().overlay(Color.white.opacity(0.12)) }
@@ -580,9 +592,7 @@ struct PreferencesView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text(lastShot == nil
-                     ? "Your next shot will appear here. Tap a frame or a row to change how it's made."
-                     : "The three pictures are your last shot. Tap one to change how that frame is made.")
+                Text("Tap a frame or a row to change how that part of a shot is made.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 HStack(spacing: 28) {
@@ -645,6 +655,7 @@ struct PreferencesView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(p.spokenName) settings")
+        .accessibilityValue(p == .eye ? (lastShot?.words.map { "Your last shot's words: \($0)" } ?? "") : "")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -721,12 +732,12 @@ struct PreferencesView: View {
             guard settings.useEye else { return "Off · the silent loop" }
             let model = catalog.model(for: settings.seer)
             return model.controls.contains(.temperature)
-                ? "\(settings.seer.name) · temp \(String(format: "%.2f", settings.temperature))" : settings.seer.name
+                ? "\(settings.seer.name) · temperature \(String(format: "%.2f", settings.temperature))" : settings.seer.name
         case .hand:
             guard handDraws, let model = selectedDrawerModel else { return "Off" }
             var s = model.displayName
             if model.controls.contains(.steps) { s += " · \(settings.currentDrawerSteps) steps" }
-            return s + " · \(settings.drawingSize.pixels)"
+            return s + " · \(settings.drawingSize.pixels) px"
         case .print:
             return settings.layout.name
         }
@@ -737,7 +748,7 @@ struct PreferencesView: View {
         case .lens:  return Lens.offersSixteenNine ? "Picture shape, place stamp" : "Place stamp"
         case .eye:   return "Which eye, its system prompt, temperature"
         case .hand:  return "Which hand, steps, size"
-        case .print: return "Layout, keepsakes"
+        case .print: return handDraws ? "Layout, keepsakes" : "Layout"
         }
     }
 
@@ -838,8 +849,12 @@ struct PreferencesView: View {
         }
         PrefCard {
             Toggle("Stamp raw coordinates", isOn: $settings.stampRawCoordinates).font(.headline).tint(.green)
+            // Only a downloaded eye keeps the whole shot on the device; Apple's eye may use Apple's servers
+            // when online (as the privacy lock says), so the promise is made only when it is true.
             PrefLine(settings.stampRawCoordinates
-                     ? "Latitude and longitude, with no lookup: nothing about the shot leaves your \(ThisDevice.deviceKind)."
+                     ? (settings.seer.token == "apple"
+                        ? "Latitude and longitude, with no lookup."
+                        : "Latitude and longitude, with no lookup: with this eye, nothing about the shot leaves your \(ThisDevice.deviceKind).")
                      : "The footer names the place, looked up by Apple's mapping service.",
                      help: helpTopic("location"), open: $help)
         }
@@ -861,7 +876,7 @@ struct PreferencesView: View {
                 PrefLine("The silent loop: the hand reads your photo directly, with no words in between. Set it up under HAND.",
                          help: helpTopic("silentloop"), open: $help)
                 if selectedDrawerEngine != .coreML {
-                    Text("The silent loop only works with the SD-2.1 (Core ML) hand. Download it in the Model Library; until then a shot keeps just the photo.")
+                    Text("The silent loop only draws with the SD-2.1 (Core ML) hand. Download and choose it in the Model Library; until then a shot keeps the photo and your instruction.")
                         .font(.footnote).foregroundStyle(.orange)
                 }
             }
@@ -902,9 +917,12 @@ struct PreferencesView: View {
                     PrefLine("Higher reaches for less likely words.", help: helpTopic("temperature"), open: $help)
                 }
             }
-            PrefCard {
-                pickerRow("Frame 2 shows", selection: $settings.frameTwoShows, options: FrameTwoWords.allCases) { $0.name }
-                PrefLine("Only differs when a long description was shortened for the hand.", help: helpTopic("frametwo"), open: $help)
+            // Only matters when the hand draws: with no drawing, nothing is shortened for it.
+            if handDraws {
+                PrefCard {
+                    pickerRow("Frame 2 shows", selection: $settings.frameTwoShows, options: FrameTwoWords.allCases) { $0.name }
+                    PrefLine("Only differs when a long description was shortened for the hand.", help: helpTopic("frametwo"), open: $help)
+                }
             }
             Button("Reset the eye's defaults") {
                 promptFocused = false
@@ -930,11 +948,13 @@ struct PreferencesView: View {
             }
             PrefLine(settings.useEye
                      ? "The hand draws the scene again from the eye's words. It never sees your photo."
-                     : "With the eye off, the hand reads your photo directly.",
+                     : (selectedDrawerEngine == .coreML
+                        ? "With the eye off, the hand reads your photo directly."
+                        : "With the eye off, only the SD-2.1 hand can draw, so nothing is drawn now."),
                      help: helpTopic("hand"), open: $help)
         }
         // The silent loop's own controls: only with the eye off AND a hand that can do it (Core ML).
-        if !settings.useEye && selectedDrawerEngine == .coreML {
+        if !settings.useEye {
             PrefCard {
                 Text("Silent loop").font(.headline)
                 TextField("e.g. an oil painting · a charcoal sketch · leave blank",
@@ -947,9 +967,13 @@ struct PreferencesView: View {
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .accessibilityLabel("The hand's instruction")
                 HStack { Spacer(); Text("\(settings.handPrompt.count)/\(Self.handPromptMaxChars)").font(.caption2).foregroundStyle(.tertiary) }
-                valueHeader("Transform", String(format: "%.2f", settings.handStrength))
-                Slider(value: $settings.handStrength, in: 0.2...0.9, step: 0.05).accessibilityLabel("Transform")
-                PrefLine("Low keeps the photo's forms; high reinvents them.", help: helpTopic("silentloop"), open: $help)
+                if selectedDrawerEngine == .coreML {
+                    valueHeader("Transform", String(format: "%.2f", settings.handStrength))
+                    Slider(value: $settings.handStrength, in: 0.2...0.9, step: 0.05).accessibilityLabel("Transform")
+                    PrefLine("Low keeps the photo's forms; high reinvents them.", help: helpTopic("silentloop"), open: $help)
+                } else {
+                    PrefLine("Your instruction is kept as the words beside your photo.", help: helpTopic("silentloop"), open: $help)
+                }
             }
         }
         if handDraws {
@@ -962,7 +986,7 @@ struct PreferencesView: View {
                                           set: { settings.currentDrawerSteps = Int($0.rounded()) }),
                            in: Double(spec.range.lowerBound)...Double(spec.range.upperBound), step: 1)
                         .accessibilityLabel("Steps")
-                    PrefLine("More steps, more detail, a little more time.", help: helpTopic("steps"), open: $help)
+                    PrefLine("More steps, more detail, and more time.", help: helpTopic("steps"), open: $help)
                     Button("Reset the hand's defaults") { settings.setDrawSteps(spec.default, for: settings.selectedDrawer) }
                         .font(.subheadline.weight(.semibold))
                 }
@@ -970,7 +994,7 @@ struct PreferencesView: View {
             // MLX only: the full decoder or TAESD. The Core ML hand decodes inside its own package.
             if selectedDrawerEngine == .mlx {
                 PrefCard {
-                    pickerRow("Developer", selection: $settings.decoderChoice, options: DecoderChoice.allCases) { $0.name }
+                    pickerRow("Decoder", selection: $settings.decoderChoice, options: DecoderChoice.allCases) { $0.name }
                     PrefLine(settings.decoderChoice == .detailed ? "The full decoder: sharper, truer to what the model drew."
                                                                  : "A tiny decoder: softer, and it draws in almost any conditions.",
                              help: helpTopic("decoder"), open: $help)
@@ -982,7 +1006,7 @@ struct PreferencesView: View {
                     pickerRow("Upscaler", selection: $settings.upscaler, options: UpscaleMethod.allCases) { $0.name }
                 }
                 PrefLine(settings.drawingSize == .native ? "The hand draws at 512 pixels, small next to your photo."
-                                                         : "Enlarged after the drawing is made; no extra memory.",
+                                                         : "Enlarged after the drawing is made, without straining memory.",
                          help: helpTopic("size"), open: $help)
             }
             PrefCard {
@@ -1008,7 +1032,7 @@ struct PreferencesView: View {
                                     selected: settings.layout == layout)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(layout.name)
+                    .accessibilityLabel(layout.name.replacingOccurrences(of: " · ", with: ", "))
                     .accessibilityAddTraits(settings.layout == layout ? .isSelected : [])
                 }
             }
@@ -1017,7 +1041,7 @@ struct PreferencesView: View {
         if handDraws {
             PrefCard {
                 pickerRow("Also save to Photos", selection: $settings.developmentKeepsake, options: DevelopmentKeepsake.allCases) { $0.name }
-                PrefLine("A contact sheet or a flipbook of the drawing's steps, beside the shot.", help: helpTopic("keepsake"), open: $help)
+                PrefLine("A contact sheet, a flipbook of the drawing's steps, or both, saved beside the shot.", help: helpTopic("keepsake"), open: $help)
             }
         }
     }
@@ -1076,15 +1100,25 @@ struct PreferencesView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// A title and its menu on one line when they fit; stacked when they don't (large text, a long choice).
+    /// Side by side at Mark's text size, "Frame 2 shows" and "What the hand received" overlapped the line
+    /// below them (2026-11-14).
     private func pickerRow<T: Hashable>(_ title: String, selection: Binding<T>, options: [T], name: @escaping (T) -> String) -> some View {
-        HStack {
-            Text(title).font(.headline)
-            Spacer(minLength: 8)
-            Picker(title, selection: selection) {
-                ForEach(options, id: \.self) { Text(name($0)).tag($0) }
+        let menu = Picker(title, selection: selection) {
+            ForEach(options, id: \.self) { Text(name($0)).tag($0) }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        return ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(title).font(.headline).lineLimit(1).fixedSize()
+                Spacer(minLength: 8)
+                menu.fixedSize()
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                menu.fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1107,7 +1141,7 @@ struct PreferencesView: View {
 
     private var selectedDrawerModel: CameraModel? { ModelCatalog.model(id: settings.selectedDrawer) }
     private var selectedDrawerEngine: DrawEngine { selectedDrawerModel?.engine ?? .mlx }
-    private var handDraws: Bool { settings.drawsThirdFrame && DrawerLoader.isAvailable(settings.selectedDrawer) }
+    private var handDraws: Bool { settings.handWillDraw }
 
     /// Short cap on the silent loop's instruction: art direction, not a description (the drawer's text
     /// encoder reads about 75 tokens).
@@ -1164,7 +1198,7 @@ struct PreferencesView: View {
                             body: "With the eye off there are no words: the hand reads your photograph directly and paints it again. It works only with the SD-2.1 (Core ML) hand.\n\nThe instruction nudges the style; the hand still reads your photograph for its shapes and colors, and a blank instruction is fine. Transform sets how far it strays - low keeps the photo's forms, high reinvents them.")
         case "prompt":
             return PrefHelp(id: key, kicker: "THE EYE", title: "System prompt",
-                            body: "The system prompt tells the eye how to describe what it sees. It is sent with every photo, and every word below the locked line is yours to change.\n\nThe locked first line keeps the description short enough for the hand: the drawing model reads only about seventy-five words. \"Reset the eye's defaults\" brings back the prompt and temperature the camera shipped with.")
+                            body: "The system prompt tells the eye how to describe what it sees. It is sent with every photo, and every word below the locked line is yours to change.\n\nThe locked first line keeps the description short enough for the hand: the drawing model reads only about fifty words (seventy-five word pieces), and Thomas shortens anything longer than forty-five. \"Reset the eye's defaults\" brings back the prompt and temperature the camera shipped with.")
         case "temperature":
             return PrefHelp(id: key, kicker: "THE EYE", title: "Temperature",
                             body: "Each time the eye picks its next word, it has a list of likely ones. Temperature decides how far down that list it is willing to reach.\n\nAt 1.0 it describes the same scene differently every time; at 0.6 it is steadier and, in our testing, more specific - not less imaginative. Qwen's own documentation recommends 0.6 for looking at pictures.")
@@ -1173,12 +1207,12 @@ struct PreferencesView: View {
                             body: "When a description runs too long for the hand, the same eye first shortens it to fit. Frame 2 can show what the hand received (the chain with no hidden step: the drawing was made from exactly these words) or the eye's full words, even the part the hand didn't get. On most shots they are the same.")
         case "hand":
             return PrefHelp(id: key, kicker: "THE HAND", title: "Which hand",
-                            body: "SD-2.1 draws on the Neural Engine through Core ML; SD-Turbo draws through MLX in a handful of steps. Both are downloaded in the Model Library. Drawing adds several seconds to a shot; the Model Library card says how long on this \(device).")
+                            body: "The hand reads only the eye's words and never sees your photograph, except in the silent loop, where SD-2.1 reads the photo itself.\n\nSD-2.1 draws on the Neural Engine through Core ML; SD-Turbo draws through MLX in a handful of steps. Both are downloaded in the Model Library. Drawing takes about 10 to 12 seconds on an iPhone 16 Plus; each Model Library card says how long on this \(device).")
         case "steps":
             return PrefHelp(id: key, kicker: "THE HAND", title: "Steps",
                             body: "The hand draws by starting from static and removing a little of it at each step. More steps mean more detail and a little more time. The useful range belongs to the model: SD-Turbo draws in a handful, SD-2.1 wants about twenty.")
         case "decoder":
-            return PrefHelp(id: key, kicker: "THE HAND", title: "Developer",
+            return PrefHelp(id: key, kicker: "THE HAND", title: "Decoder",
                             body: "The last part of a drawing turns the model's numbers into a picture. Detailed uses the full decoder - sharper, and truer to what the model drew. If your \(device) is low on memory for a shot, Thomas quietly switches that one to Fast so the drawing still finishes instead of failing.\n\nFast uses a tiny, low-memory decoder - softer and less detailed, but it draws in almost any conditions. On a dreamy re-imagining, the softness can read as intentional.")
         case "size":
             return PrefHelp(id: key, kicker: "THE HAND", title: "Size",

@@ -528,7 +528,7 @@ nonisolated enum ModelCatalog {
         job: .drawing,
         delivery: .folder("split_einsum_v2/compiled/"),
         sizeGB: 1.14,
-        blurb: "Draws the third frame on the Neural Engine - Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing.",
+        blurb: "Draws the third frame on the Neural Engine - Apple's chip for machine-learning work. Uses about a third of the memory the other hand does and runs cooler, at the cost of a one-time warm-up the first time you use it after installing. The only hand that can work with the eye switched off (the silent loop), reading your photo directly.",
         licence: "CreativeML OpenRAIL++-M",
         // A drawing model has no Layer 1: it takes the eye's words, not a system prompt.
         layerOnePrompt: nil,

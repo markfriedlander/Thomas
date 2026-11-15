@@ -75,8 +75,13 @@ struct DarkRoomView: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
                 }
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) { Button(role: .close) { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty || !negatives.isEmpty { EditButton() } }
+                // Mark, 2026-11-14: the Dark Room had no "?" like the tray and Preferences.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { help = Self.roomHelp } label: { Image(systemName: "questionmark") }
+                        .accessibilityLabel("About the Dark Room")
+                }
             }
             .safeAreaInset(edge: .bottom) { loadBar }
             // Full screen, not pushed inside this sheet: the tray's picture is the whole canvas.
@@ -138,6 +143,9 @@ struct DarkRoomView: View {
             Button("Cancel", role: .cancel) {}
         }
     }
+
+    static let roomHelp = PrefHelp(id: "darkroom", kicker: "THE DARK ROOM", title: "Where shots develop",
+        body: "A shot takes real seconds to develop, so you can keep shooting while it does. Every shot waits here in the bath, then lands in Photos.\n\nEach row is one shot: the photo, then the eye's words, then the hand's drawing, filling in as it develops. The one glowing red is developing now; Watch opens it in the Developer Tray. With more than one shot waiting, Watch the queue follows them one after another.\n\nPause holds the queue; Purge empties it. Swipe a row to delete it, or tap Edit to reorder. If the \(ThisDevice.deviceKind) gets hot, developing waits until it cools; nothing is lost.\n\nAfter a shot lands in Photos, its negative stays here for a while: the machine's workings, so the Developer Tray can open it again.")
 
     /// The safelight: a red glow from the top of the room, over a warm near-black.
     private var backdrop: some View {
@@ -269,7 +277,7 @@ struct DarkRoomView: View {
             }
             PrefLine("The machine's workings, so the Developer Tray can open a shot again. Now using \(NegativeStore.formatBytes(negativesBytes)).",
                      help: PrefHelp(id: "negatives", kicker: "THE DARK ROOM", title: "Negatives",
-                                    body: "Shots develop in the background and land in Photos. The dark room shows what's still developing, and lets you pause, reorder, delete, or load pictures to develop.\n\nAfter a shot lands in Photos, the dark room keeps its negative: the machine's workings (the eye's numbers, where it looked, the drawing's steps) so you can open it in the Developer Tray again. The oldest are removed as new ones arrive. They stay on this \(ThisDevice.deviceKind) and are not backed up."),
+                                    body: "After a shot lands in Photos, the Dark Room keeps its negative: whatever of the machine's workings the Developer Tray can show for that shot, so you can open it again. What that is depends on the eye and hand (each Model Library card says).\n\nThe oldest are removed as new ones arrive. They stay on this \(ThisDevice.deviceKind) and are not backed up. Clearing them leaves your photos, words and drawings in Photos untouched."),
                      open: $help)
             Button("Clear kept negatives", role: .destructive) { confirmingClearNegatives = true }
                 .font(.subheadline.weight(.semibold))
@@ -284,12 +292,14 @@ struct DarkRoomView: View {
 
     private var loadBar: some View {
         // As many as the person likes, no cap (Mark: never limit what a user can do; Thomas cleans up after).
+        // Styled like Pause and Purge above (Mark, 2026-11-14), on a dark capsule so the list behind it doesn't show through.
         PhotosPicker(selection: $pickerItems, maxSelectionCount: nil, selectionBehavior: .ordered, matching: .images) {
-            Text("Load pictures to develop")
-                .font(.headline).foregroundStyle(.black)
+            Label("Load pictures to develop", systemImage: "photo.on.rectangle.angled")
+                .font(.headline).foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(.white, in: Capsule())
+                .padding(.vertical, 13)
+                .background(Safelight.ground.opacity(0.92), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
@@ -464,14 +474,17 @@ private struct DarkRoomRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isDeveloping {
-                LiveTiles(photo: photo, showsWords: record.config.useEye ?? true, drawsThird: record.config.drawsThirdFrame)
+                LiveTiles(photo: photo, showsWords: record.config.makesWords, drawsThird: record.config.makesDrawing)
             } else {
-                ShotTiles(photo: photo, showsWords: true, showsDrawing: true, band: Safelight.band, glowing: false) {
+                ShotTiles(photo: photo, showsWords: record.config.makesWords, showsDrawing: record.config.makesDrawing,
+                          band: Safelight.band, glowing: false) {
                     Safelight.empty
                 } drawing: {
                     Safelight.empty
                 }
                 .opacity(0.85)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(record.status == .blocked ? "Waiting for a model" : "Waiting to develop")
             }
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
@@ -490,7 +503,7 @@ private struct DarkRoomRow: View {
                 }
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var isDeveloping: Bool { worker.currentShotID == record.id }
@@ -565,6 +578,7 @@ private struct LiveTiles: View {
         }
         .task { await follow() }
         .onDisappear { Task { await decoder.release() } }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }
 
@@ -622,6 +636,8 @@ private struct NegativeRow: View {
             } drawing: {
                 if let drawing { drawing.resizable().scaledToFill() } else { Safelight.empty }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(hasWords ? "The eye said: \(negative.firstWords)" : "A developed shot")
             HStack {
                 Text(caption).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 8)
@@ -632,8 +648,7 @@ private struct NegativeRow: View {
                     .buttonStyle(.plain)
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(hasWords ? "\(negative.firstWords). \(caption)" : caption)
+        .accessibilityElement(children: .contain)
     }
 
     private var hasWords: Bool {

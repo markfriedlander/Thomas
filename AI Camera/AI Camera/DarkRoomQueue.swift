@@ -77,6 +77,12 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     /// the photograph directly, nudged by `handPrompt` at `handStrength`. All Optional for back-compat
     /// (a pre-silent-loop record has none): read them through the `effective…` accessors below.
     var useEye: Bool?
+    /// What this shot will make, from its own frozen settings (the Dark Room's tiles): words when the eye
+    /// is on; a drawing when drawing is on and, with the eye off, the hand is the Core ML one.
+    var makesWords: Bool { useEye ?? true }
+    var makesDrawing: Bool {
+        drawsThirdFrame && ((useEye ?? true) || ModelCatalog.model(id: effectiveDrawerID)?.engine == .coreML)
+    }
     var handPrompt: String?
     var handStrength: Double?
     /// Developer Tray (2026-11-05), frozen like everything else. Optional for back-compat: a record
@@ -746,12 +752,22 @@ final class DarkRoomWorker {
         // The footer testifies to when and where the photo was TAKEN — the frozen `capturedAt`
         // and `place`, not develop-time — so a shot resumed hours after a crash still stamps its
         // true moment and location. That is reality's receipt.
-        let frames = Darkroom.develop(photograph: photograph,
+        var frames = Darkroom.develop(photograph: photograph,
                                       words: frameTwoWords,
                                       drawing: result.drawn?.cgImage,
                                       place: shot.place,
                                       layout: config.layout,
                                       date: shot.capturedAt)
+        // A layout can need something this shot didn't make (Drawing only, and no drawing came; Words
+        // only, and the eye said nothing). An empty print can't be saved, and a failed save leaves the
+        // shot at the front of the queue to fail again on every kick, blocking everything behind it
+        // (found by the independent review, 2026-11-14). So it lands in the richest layout it CAN fill.
+        if frames.isEmpty {
+            let fallback = Layout.fallback(hasEye: !frameTwoWords.isEmpty, hasHand: result.drawn != nil)
+            cameraLog("DARKROOM: \(config.layout.rawValue) had nothing to show for shot \(shot.id); saving it as \(fallback.rawValue)")
+            frames = Darkroom.develop(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
+                                      place: shot.place, layout: fallback, date: shot.capturedAt)
+        }
 
         // The invariant's one exit: delete ONLY after Photos confirms the save. Any failure
         // leaves the photo + record on disk to retry.
