@@ -336,6 +336,8 @@ final class Settings {
     /// A hand was deleted (or every model cleared). If it was the selected hand, another downloaded hand
     /// takes over when there is one; otherwise the layout rules see that nothing can draw.
     func handRemoved(_ repoID: String) {
+        // Still there (another app's claim kept the files): nothing changes (second audit, 2026-11-15).
+        guard !DrawerLoader.isAvailable(repoID) else { return }
         guard selectedDrawer == repoID else { snapLayoutIfNeeded(); return }
         if let other = ModelCatalog.all.first(where: { $0.job == .drawing && $0.id != repoID && DrawerLoader.isAvailable($0.id) }) {
             selectedDrawer = other.id

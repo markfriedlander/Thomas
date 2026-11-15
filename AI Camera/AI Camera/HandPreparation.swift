@@ -61,6 +61,8 @@ final class HandPreparation {
 
     /// A preparation asked for while Thomas was in the background, started on return (`prepareDeferred`).
     @ObservationIgnored private var deferred: (repoID: String, reason: String)?
+    /// Which failure's notice is showing, so an older one's timer can't clear a newer one.
+    @ObservationIgnored private var failureNotice: UUID?
 
     func prepareDeferred() async {
         guard let d = deferred else { return }
@@ -219,8 +221,10 @@ final class HandPreparation {
             StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: "exclamationmark.circle",
                                                     text: "Couldn't prepare; the first shot will",
                                                     tap: .explainPreparation))
+            let mine = UUID(); failureNotice = mine
             try? await Task.sleep(nanoseconds: 6_000_000_000)
-            if !isPreparing { StatusFeed.shared.clear(.hand) }
+            // Only this failure's own notice, and only if nothing newer is showing (second audit).
+            if failureNotice == mine, !isPreparing { StatusFeed.shared.clear(.hand) }
             return
         }
         StatusFeed.shared.clear(.hand)

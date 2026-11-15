@@ -308,7 +308,9 @@ struct AI_CameraApp: App {
                         assertion.end()
                     }
                     await DarkRoomWorker.shared.suspendForBackground()
-                    await MLXEyeLoader.shared.unload()
+                    // Back already (a quick lock and unlock): the queue may be developing again with this
+                    // eye, so leave it loaded (second audit, 2026-11-15).
+                    if ForegroundGate.isLeaving { await MLXEyeLoader.shared.unload() }
                     assertion.end()
                 }
             default:

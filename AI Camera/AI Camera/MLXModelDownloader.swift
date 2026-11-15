@@ -1955,6 +1955,12 @@ class MLXModelDownloader: ObservableObject {
         }
     }
     
+    /// Whether a download of this model is under way or waiting its turn.
+    func hasPendingDownload(_ modelID: String) -> Bool {
+        currentDownloadModelID == modelID || downloadQueue.contains { $0.modelID == modelID }
+            || downloadStates[modelID]?.isDownloading == true
+    }
+
     func cancelDownload(modelID: String) {
         // Cancel active download if this is the one
         if currentDownloadModelID == modelID {

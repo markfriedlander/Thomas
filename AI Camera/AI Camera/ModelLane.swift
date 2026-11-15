@@ -159,18 +159,23 @@ nonisolated enum ForegroundGate {
     private static let departures = Atomic<Int>(0)
     /// When the app last became inactive (seconds since 1970, as bits), for the bounded wait below.
     private static let inactiveSinceBits = Atomic<UInt64>(0)
+    /// Whether the grace applies: an iPad only (second audit, 2026-11-15). On a phone the long inactive
+    /// states (the app switcher, Notification Center, a call) all lead to the background, so the work
+    /// keeps waiting there rather than resuming just before the app leaves.
+    private static let graceApplies = Atomic<Bool>(false)
 
     /// How many times the app has gone to the background since launch. Work that spans a trip there
     /// (even one the app is already back from) was interrupted: the Dark Room redoes it whole (review of
     /// round 3's fix, 2026-11-15: a quick lock and unlock used to save the shot without its drawing).
     static var backgroundEntries: Int { departures.load(ordering: .relaxed) }
 
-    /// Inactive this long or more is not a screen locking (that reaches the background within a second):
-    /// an iPad window in the background of Stage Manager, say. GPU work is allowed while inactive, so past
-    /// this the work goes on rather than waiting forever (same review).
+    /// On an iPad, inactive this long or more is not a screen locking (that reaches the background within a
+    /// second): a window in the background of Stage Manager, say. GPU work is allowed while inactive, so
+    /// past this the work goes on rather than waiting forever (same review). Not on a phone (graceApplies).
     static let lockingGrace: TimeInterval = 3
 
     private static var inactiveLongEnough: Bool {
+        guard graceApplies.load(ordering: .relaxed) else { return false }
         let since = Double(bitPattern: inactiveSinceBits.load(ordering: .relaxed))
         return since > 0 && Date().timeIntervalSince1970 - since > lockingGrace
     }
@@ -183,6 +188,7 @@ nonisolated enum ForegroundGate {
     /// Follow the app's state from now on: the starting state, then each change. Once, at launch.
     @MainActor static func start() {
         guard !started.exchange(true, ordering: .relaxed) else { return }
+        graceApplies.store(UIDevice.current.userInterfaceIdiom == .pad, ordering: .relaxed)
         set(from: UIApplication.shared.applicationState)
         let nc = NotificationCenter.default
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in set(.active) }

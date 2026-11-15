@@ -771,31 +771,39 @@ struct ModelLicenseSheet: View {
     }
 }
 
+/// "Clear all family models", with the same care a single Delete takes (review round 2): stop downloads
+/// under way or queued, let go of a resident eye or hand, go back to Apple's eye, and let the layout rules
+/// see that no hand is left. Then the shared store is emptied for every app. In the model lane, so it can
+/// never pull a model out from under a shot that is developing (second audit, 2026-11-15).
+@MainActor func clearAllFamilyModels() async {
+    // Only downloads under way or waiting: cancelling a finished model would mark it "Download canceled".
+    for model in ModelCatalog.all where MLXModelDownloader.shared.hasPendingDownload(model.id) {
+        MLXModelDownloader.shared.cancelDownload(modelID: model.id)
+    }
+    await ModelLane.shared.run("clear all") { @MainActor in
+        await MLXEyeLoader.shared.unload()
+        await DrawerLoader.shared.unload()
+        Settings.shared.seer = .apple
+        let removed = SharedModelStore.clearEntireSharedStore()
+        for model in ModelCatalog.all where model.job == .drawing { Settings.shared.handRemoved(model.id) }
+        ModelCatalogService.shared.refresh()   // store changed with no notification: poke the one source
+        cameraLog("LIBRARY: cleared the entire shared store: \(removed) repos removed")
+    }
+}
+
 /// Give up this camera's claim on a model and remove the files if we were the last to hold them
 /// (`deleteModel` enforces exactly that). If the model is the resident eye, drop it from memory and
 /// fall back to the built-in seer first, so nothing points at weights that are gone. The one copy of
 /// the rule, shared by the Delete button and the antenna's /release verb (which delegates here rather
 /// than reimplementing release-and-remove — 2026-07-30 parity fix).
-/// "Clear all family models", with the same care a single Delete takes (review round 2): stop downloads
-/// in progress, let go of a resident eye or hand, go back to Apple's eye, and let the layout rules see that
-/// no hand is left. Then the shared store is emptied for every app.
-@MainActor func clearAllFamilyModels() async {
-    // Only downloads actually under way: cancelling a finished model would mark it "Download canceled"
-    // (review, 2026-11-15).
-    for model in ModelCatalog.all where MLXModelDownloader.shared.downloadStates[model.id]?.isDownloading == true {
-        MLXModelDownloader.shared.cancelDownload(modelID: model.id)
-    }
-    await MLXEyeLoader.shared.unload()
-    await DrawerLoader.shared.unload()
-    Settings.shared.seer = .apple
-    let removed = SharedModelStore.clearEntireSharedStore()
-    for model in ModelCatalog.all where model.job == .drawing { Settings.shared.handRemoved(model.id) }
-    ModelCatalogService.shared.refresh()   // store changed with no notification: poke the one source
-    cameraLog("LIBRARY: cleared the entire shared store: \(removed) repos removed")
-}
-
 @MainActor func deleteModelEverywhere(_ model: CameraModel) async {
     guard !model.isBuiltIn else { return }
+    // In the model lane: a delete waits for the shot developing now, so it never removes files a shot is
+    // using (second audit, 2026-11-15: that could save the shot without its drawing).
+    await ModelLane.shared.run("delete") { @MainActor in await deleteModelNow(model) }
+}
+
+@MainActor private func deleteModelNow(_ model: CameraModel) async {
     if model.job == .seeing {
         if await MLXEyeLoader.shared.isLoadedRepo(model.id) {
             await MLXEyeLoader.shared.unload()
