@@ -49,6 +49,23 @@ nonisolated enum LayoutCategory: String, CaseIterable, Sendable {
     }
 }
 
+/// How the words look when they have a panel of their own: Words only, the diptychs, the triptychs, the
+/// separate files (Mark, 2026-11-14: the print had always been white on black; he asked for black on white,
+/// colors matched to the picture, and "a blurred version of the original image... like what we're using in
+/// all the screens"). Words laid over a picture stay white with a shadow. The letterbox bars and the footer
+/// stay black, the book's grammar.
+nonisolated enum WordsCard: String, CaseIterable, Codable, Sendable {
+    case whiteOnBlack, blackOnWhite, photoColor, photoBlurred
+    var name: String {
+        switch self {
+        case .whiteOnBlack: return "White on black"
+        case .blackOnWhite: return "Black on white"
+        case .photoColor:   return "The photo's color"
+        case .photoBlurred: return "The photo, blurred"
+        }
+    }
+}
+
 /// Whether a shot ALSO saves each frame as its own file, beside its print (Mark, 2026-11-14: "the layout
 /// is one choice. What comes along with the layout, as an addition, is another choice"). Before this,
 /// separate files were a layout of their own, chosen instead of a combined print, which confused even
@@ -222,7 +239,8 @@ enum Darkroom {
                         drawing: CGImage? = nil,
                         place: String?,
                         layout: Layout = .superimposed,
-                        date: Date = Date()) -> [UIImage] {
+                        date: Date = Date(),
+                        wordsCard: WordsCard = .whiteOnBlack) -> [UIImage] {
         // In the content-driven taxonomy (2026-07-27) each layout produces EXACTLY its named panels.
         // The old "the drawing always rides along as an extra file" behavior is gone — except for the
         // Separate layouts, whose whole point is one file per artifact. A layout is only ever chosen
@@ -234,11 +252,11 @@ enum Darkroom {
         case .triptychVertical, .triptychHorizontal:
             return [triptych(photograph: photograph, words: words, drawing: drawing,
                              axis: layout == .triptychVertical ? .vertical : .horizontal,
-                             place: place, date: date)]
+                             place: place, date: date, wordsCard: wordsCard)]
 
         // ── Single: one panel. ──
         case .textOnly:
-            return [card(words: words, size: photoSize, place: place, date: date)]
+            return [card(words: words, size: photoSize, place: place, date: date, wordsCard: wordsCard, photo: photograph)]
         case .singlePhoto:
             return [compose(photograph: photograph, words: nil, place: place,
                             layout: .superimposed, date: date)]
@@ -261,7 +279,7 @@ enum Darkroom {
         // ── Diptych: two panels. ──
         case .diptychTextLeft, .diptychTextRight:
             return [compose(photograph: photograph, words: words, place: place,
-                            layout: layout, date: date)]
+                            layout: layout, date: date, wordsCard: wordsCard)]
         case .diptychDrawingLeft, .diptychDrawingRight:
             guard let drawing else {
                 return [compose(photograph: photograph, words: words, place: place,
@@ -273,9 +291,9 @@ enum Darkroom {
 
         // ── Separate files: each artifact its own file (the ride-along survives ONLY here). ──
         case .separateNative:
-            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: false)
+            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: false, wordsCard: wordsCard)
         case .separateSquare:
-            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: true)
+            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: true, wordsCard: wordsCard)
         }
     }
 
@@ -284,13 +302,13 @@ enum Darkroom {
     /// so they pair, each at its own resolution. Used by the "also save each frame" choice and by the two
     /// older Separate layouts.
     static func separate(photograph: CGImage, words: String, drawing: CGImage?, place: String?,
-                         date: Date, square: Bool) -> [UIImage] {
+                         date: Date, square: Bool, wordsCard: WordsCard = .whiteOnBlack) -> [UIImage] {
         let photo = square ? centerCropSquare(photograph) : photograph
         let cardSize = square ? CGSize(width: photo.width, height: photo.width)
                               : CGSize(width: photograph.width, height: photograph.height)
         var out = [compose(photograph: photo, words: nil, place: place, layout: .superimposed, date: date)]
         if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            out.append(card(words: words, size: cardSize, place: place, date: date))
+            out.append(card(words: words, size: cardSize, place: place, date: date, wordsCard: wordsCard, photo: photo))
         }
         if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
         return out
@@ -347,7 +365,8 @@ enum Darkroom {
                                  drawing: CGImage?,
                                  axis: TriptychAxis,
                                  place: String?,
-                                 date: Date) -> UIImage {
+                                 date: Date,
+                                 wordsCard: WordsCard) -> UIImage {
         // The photo is centre-cropped to a square so all three panels are EQUAL squares — the
         // hand's ratio wins in the triptych (Mark's rule). What's inside the square viewfinder
         // guide is what lands here.
@@ -410,10 +429,11 @@ enum Darkroom {
                 case .image(let img):
                     img.draw(in: rect)
                 case .words(let w):
-                    // Inside its square, with the same margin the single card uses. No shadow —
-                    // the panel is already black.
+                    // Inside its square, with the same margin the single card uses. No shadow:
+                    // the panel is its own ground.
+                    let ink = paintWordsPanel(rect, style: wordsCard, photo: photo.cgImage)
                     drawWords(w, in: rect.insetBy(dx: margin, dy: margin),
-                              size: unit * 0.075, shadowed: false)
+                              size: unit * 0.075, shadowed: false, color: ink)
                 }
                 if axis == .vertical { y += s.height + gutter }
                 else { x += s.width + gutter }
@@ -461,7 +481,8 @@ enum Darkroom {
                                 words: String?,
                                 place: String?,
                                 layout: Layout,
-                                date: Date) -> UIImage {
+                                date: Date,
+                                wordsCard: WordsCard = .whiteOnBlack) -> UIImage {
 
         let image = UIImage(cgImage: photograph)
         let w = image.size.width
@@ -495,12 +516,13 @@ enum Darkroom {
                 let imageX = textFirst ? w : 0
                 let textX  = textFirst ? 0 : w
                 image.draw(in: CGRect(x: imageX, y: bar, width: w, height: h))
-                // No shadow on the diptych: the panel is already black, so the text has
-                // nothing to fight. Shadowing it would just be grime.
+                // No shadow on the diptych: the panel is its own ground, so the text has nothing to
+                // fight. Shadowing it would just be grime.
+                let ink = paintWordsPanel(CGRect(x: textX, y: bar, width: w, height: h), style: wordsCard, photo: photograph)
                 drawWords(words ?? "", in: CGRect(x: textX + margin, y: bar + margin,
                                                   width: w - margin * 2,
                                                   height: h - margin * 2),
-                          size: w * 0.095, shadowed: false)
+                          size: w * 0.095, shadowed: false, color: ink)
 
             default:
                 // Full-frame image + optional words over it. `develop` only ever hands `compose` a
@@ -520,12 +542,14 @@ enum Darkroom {
         }
     }
 
-    /// Words alone, white on black, in the same grammar and the same dimensions as a
-    /// photograph — so it hangs beside one, or stands on its own.
+    /// Words alone, in the same grammar and the same dimensions as a photograph, so it hangs beside one
+    /// or stands on its own. White on black unless the person chose another `WordsCard`.
     private static func card(words: String,
                              size: CGSize,
                              place: String?,
-                             date: Date) -> UIImage {
+                             date: Date,
+                             wordsCard: WordsCard = .whiteOnBlack,
+                             photo: CGImage? = nil) -> UIImage {
         let w = size.width, h = size.height
         let bar = (h * 0.085).rounded()
         let canvas = CGSize(width: w, height: h + bar * 2)
@@ -539,15 +563,126 @@ enum Darkroom {
             ctx.cgContext.fill(CGRect(origin: .zero, size: canvas))
 
             let margin = w * 0.06
+            let ink = paintWordsPanel(CGRect(x: 0, y: bar, width: w, height: h), style: wordsCard, photo: photo)
             drawWords(words, in: CGRect(x: margin, y: bar + margin,
                                         width: w - margin * 2,
                                         height: h - margin * 2),
-                      size: w * 0.105, shadowed: false)
+                      size: w * 0.105, shadowed: false, color: ink)
             // The footer stays. The photograph is gone, but the machine still looked at a
             // real place at a real time, and that remains checkable.
             drawFooter(place: place, date: date, in: ctx.cgContext, canvas: canvas,
                        bar: bar, margin: w * 0.045, size: w * 0.026)
         }
+    }
+
+    // MARK: - The words' panel
+
+    /// Paints a words panel's ground in `rect` and returns the ink to write on it.
+    private static func paintWordsPanel(_ rect: CGRect, style: WordsCard, photo: CGImage?) -> UIColor {
+        guard let cg = UIGraphicsGetCurrentContext() else { return .white }
+        let look = wordsPanelLook(style, photo: photo)
+        if style == .photoBlurred, let photo, let blurred = blurredFill(photo, size: rect.size) {
+            UIImage(cgImage: blurred).draw(in: rect)
+            look.veil.setFill()
+            cg.fill(rect)
+        } else {
+            look.ground.setFill()
+            cg.fill(rect)
+        }
+        return look.ink
+    }
+
+    /// What a words panel looks like for `style`, from the shot's photo: its ground color, the veil laid
+    /// over a blurred photo to keep the words readable, and the ink. Shared with the screens' tiles so
+    /// they show what the print does. Ink is whichever of near-black or white reads better (WCAG
+    /// contrast) on the ground.
+    nonisolated static func wordsPanelLook(_ style: WordsCard, photo: CGImage?) -> (ground: UIColor, veil: UIColor, ink: UIColor) {
+        switch style {
+        case .whiteOnBlack:
+            return (.black, .clear, .white)
+        case .blackOnWhite:
+            return (UIColor(red: 0.96, green: 0.95, blue: 0.93, alpha: 1), .clear, UIColor(white: 0.06, alpha: 1))
+        case .photoColor:
+            let c = photo.map(strongestColor) ?? .black
+            return (c, .clear, inkFor(c))
+        case .photoBlurred:
+            let avg = photo.map(averageColor) ?? .black
+            // A light picture gets a pale veil and dark words; a dark one a dark veil and white words.
+            if luminance(avg) > 0.45 {
+                return (avg, UIColor.white.withAlphaComponent(0.3), UIColor(white: 0.06, alpha: 1))
+            }
+            return (avg, UIColor.black.withAlphaComponent(0.35), .white)
+        }
+    }
+
+    /// The picture's strongest color: hues weighted by how saturated and bright they are, the heaviest hue
+    /// family averaged, then kept within a range a panel can carry (a plain average is usually mud).
+    nonisolated static func strongestColor(_ image: CGImage) -> UIColor {
+        guard let px = samplePixels(image) else { return .black }
+        var bins = [(w: Double, r: Double, g: Double, b: Double)](repeating: (0, 0, 0, 0), count: 12)
+        for (r, g, b) in px {
+            let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn
+            guard mx > 0, d > 0.02 else { continue }
+            let sat = d / mx
+            var h: Double = mx == r ? (g - b) / d : (mx == g ? (b - r) / d + 2 : (r - g) / d + 4)
+            if h < 0 { h += 6 }
+            let k = min(11, Int(h / 6 * 12))
+            let w = sat * sat * mx
+            bins[k].w += w; bins[k].r += r * w; bins[k].g += g * w; bins[k].b += b * w
+        }
+        guard let best = bins.max(by: { $0.w < $1.w }), best.w > 0.5 else { return averageColor(image) }
+        let c = UIColor(red: best.r / best.w, green: best.g / best.w, blue: best.b / best.w, alpha: 1)
+        var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, a: CGFloat = 0
+        c.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &a)
+        return UIColor(hue: hue, saturation: min(sat, 0.85), brightness: min(max(bri, 0.22), 0.8), alpha: 1)
+    }
+
+    nonisolated static func averageColor(_ image: CGImage) -> UIColor {
+        guard let px = samplePixels(image), !px.isEmpty else { return .black }
+        let n = Double(px.count)
+        let sum = px.reduce((0.0, 0.0, 0.0)) { ($0.0 + $1.0, $0.1 + $1.1, $0.2 + $1.2) }
+        return UIColor(red: sum.0 / n, green: sum.1 / n, blue: sum.2 / n, alpha: 1)
+    }
+
+    /// The picture at 32 x 32, as RGB in 0...1.
+    nonisolated private static func samplePixels(_ image: CGImage) -> [(Double, Double, Double)]? {
+        let side = 32
+        guard let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+        guard let data = ctx.data else { return nil }
+        let p = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
+        return (0..<(side * side)).map { i in
+            (Double(p[i * 4]) / 255, Double(p[i * 4 + 1]) / 255, Double(p[i * 4 + 2]) / 255)
+        }
+    }
+
+    nonisolated static func luminance(_ c: UIColor) -> Double {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func lin(_ v: CGFloat) -> Double { let x = Double(v); return x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    nonisolated static func inkFor(_ ground: UIColor) -> UIColor {
+        let l = luminance(ground)
+        let onWhite = 1.05 / (l + 0.05), onBlack = (l + 0.05) / 0.05
+        return onWhite >= onBlack ? .white : UIColor(white: 0.06, alpha: 1)
+    }
+
+    /// The photo, filling `size` and blurred, made small and blurred on the CPU (no GPU: printing can run
+    /// as the app goes to the background), then drawn large, so it stays soft and cheap.
+    nonisolated static func blurredFill(_ photo: CGImage, size: CGSize) -> CGImage? {
+        let small = CGSize(width: max(8, (size.width / 8).rounded()), height: max(8, (size.height / 8).rounded()))
+        let ci = CIImage(cgImage: photo)
+        let scale = max(small.width / ci.extent.width, small.height / ci.extent.height)
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let crop = CGRect(x: scaled.extent.midX - small.width / 2, y: scaled.extent.midY - small.height / 2,
+                          width: small.width, height: small.height)
+        let blurred = scaled.clampedToExtent().applyingGaussianBlur(sigma: Double(small.width) * 0.05).cropped(to: crop)
+        return CIContext(options: [.useSoftwareRenderer: true]).createCGImage(blurred, from: crop)
     }
 
     // MARK: - The claim
@@ -560,7 +695,8 @@ enum Darkroom {
     private static func drawWords(_ words: String,
                                   in box: CGRect,
                                   size: CGFloat,
-                                  shadowed: Bool) {
+                                  shadowed: Bool,
+                                  color: UIColor = .white) {
         guard !words.isEmpty else { return }
 
         let shadow = NSShadow()
@@ -589,7 +725,7 @@ enum Darkroom {
         repeat {
             attributes = [
                 .font: UIFont.systemFont(ofSize: pointSize, weight: .heavy),
-                .foregroundColor: UIColor.white,
+                .foregroundColor: color,
                 .paragraphStyle: para
             ]
             if shadowed { attributes[.shadow] = shadow }

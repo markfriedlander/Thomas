@@ -49,6 +49,8 @@ nonisolated struct NegativeMeta: Codable, Sendable, Identifiable {
     let eye: Eye?
     /// Apple's eye: what the photo cost and how it spoke (EyeIntake). Absent before 2026-11-14.
     var intake: EyeIntake? = nil
+    /// How this shot's words panel was printed, so the Dark Room's tile shows the same. Absent before 2026-11-14.
+    var wordsCard: WordsCard? = nil
 
     /// The start of what the eye said, for the Dark Room row.
     var firstWords: String {
@@ -93,7 +95,8 @@ actor NegativeStore {
     // MARK: Keeping
 
     /// File a developed shot's negative, then prune to `limit`. `trace` must be this shot's.
-    func keep(_ trace: DevelopTrace.Snapshot, id: UUID, capturedAt: Date, place: String?, limit: Int) {
+    func keep(_ trace: DevelopTrace.Snapshot, id: UUID, capturedAt: Date, place: String?, limit: Int,
+              wordsCard: WordsCard = .whiteOnBlack) {
         let started = Date()
         let dir = folder(id)
         try? FileManager.default.removeItem(at: dir)
@@ -114,7 +117,7 @@ actor NegativeStore {
                                     prompt: trace.prompt, steps: trace.steps, isGuess: trace.isGuess,
                                     channelsLast: trace.channelsLast, hand: trace.hand, shape: trace.shape,
                                     latentCount: trace.latents.count, hasDrawing: trace.final != nil, eye: eye,
-                                    intake: trace.intake)
+                                    intake: trace.intake, wordsCard: wordsCard)
             if let photo = trace.photo, let reduced = Self.reduced(photo, maxPixel: 1600) {
                 try Self.write(reduced, type: .jpeg, quality: 0.85, to: dir.appendingPathComponent("photo.jpg"))
             }

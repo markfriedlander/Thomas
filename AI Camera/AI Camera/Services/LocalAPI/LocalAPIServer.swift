@@ -432,7 +432,8 @@ extension LocalAPIServer {
                                      words: frameTwo,
                                      drawing: raw.drawn,
                                      place: place,
-                                     layout: layout)
+                                     layout: layout,
+                                     wordsCard: Settings.shared.wordsCard)
             return (f, layout.name)
         }
         await Shot.save(toSave)
@@ -655,6 +656,7 @@ extension LocalAPIServer {
             if let v = (obj["developView"] as? String).flatMap(DevelopView.init) { s.developView = v; changed.append("developView=\(v.rawValue)") }
             if let v = (obj["developmentKeepsake"] as? String).flatMap(DevelopmentKeepsake.init) { s.developmentKeepsake = v; changed.append("developmentKeepsake=\(v.rawValue)") }
             if let v = (obj["separateFiles"] as? String).flatMap(SeparateFiles.init) { s.separateFiles = v; changed.append("separateFiles=\(v.rawValue)") }
+            if let v = (obj["wordsCard"] as? String).flatMap(WordsCard.init) { s.wordsCard = v; changed.append("wordsCard=\(v.rawValue)") }
             if let v = obj["negativesToKeep"] as? Int, v > 0 { s.negativesToKeep = v; changed.append("negativesToKeep=\(v)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
@@ -674,6 +676,7 @@ extension LocalAPIServer {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let developView, developmentKeepsake: String
         let separateFiles: String
+        let wordsCard: String
         let pictureShape: String
         let negativesToKeep: Int
         let drawsThirdFrame: Bool
@@ -700,7 +703,7 @@ extension LocalAPIServer {
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt,
-             "developView": developView, "developmentKeepsake": developmentKeepsake, "separateFiles": separateFiles,
+             "developView": developView, "developmentKeepsake": developmentKeepsake, "separateFiles": separateFiles, "wordsCard": wordsCard,
              "negativesToKeep": negativesToKeep,
              "privacy": ["locked": privacyLocked,
                          "look": privacyLook,
@@ -730,6 +733,7 @@ extension LocalAPIServer {
             developView: s.developView.rawValue,
             developmentKeepsake: s.developmentKeepsake.rawValue,
             separateFiles: s.separateFiles.rawValue,
+            wordsCard: s.wordsCard.rawValue,
             pictureShape: s.pictureShape.rawValue,
             negativesToKeep: s.negativesToKeep,
             drawsThirdFrame: s.drawsThirdFrame,
@@ -1341,7 +1345,8 @@ extension LocalAPIServer {
                                               words: frameTwo,
                                               drawing: drawnImage?.cgImage,
                                               place: nil,   // footer text; not memory-relevant
-                                              layout: Settings.shared.layout)
+                                              layout: Settings.shared.layout,
+                                              wordsCard: Settings.shared.wordsCard)
                 return frames.compactMap { $0.pngData() }
             }
             return ShotOut(words: fullWords,

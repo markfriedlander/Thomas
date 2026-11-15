@@ -42,9 +42,9 @@ struct DarkRoomView: View {
     @State private var worker = DarkRoomWorker.shared
     @State private var settings = Settings.shared
     @State private var records: [ShotRecord] = []
-    @State private var thumbnails: [UUID: Image] = [:]
+    @State private var thumbnails: [UUID: UIImage] = [:]
     /// Developed shots' drawings, for the third tile of their rows.
-    @State private var drawings: [UUID: Image] = [:]
+    @State private var drawings: [UUID: UIImage] = [:]
     /// Developed shots whose negatives the dark room still keeps (NegativeStore), newest first.
     @State private var negatives: [NegativeMeta] = []
     /// The pictures chosen from the library, in the order picked; they join the queue in that order.
@@ -321,19 +321,19 @@ struct DarkRoomView: View {
     private func reload() async {
         let recs = await DarkRoomStore.shared.pending()
         let negs = await NegativeStore.shared.list()
-        var thumbs: [UUID: Image] = [:]
-        var draws: [UUID: Image] = [:]
+        var thumbs: [UUID: UIImage] = [:]
+        var draws: [UUID: UIImage] = [:]
         for r in recs {
             if let cg = await DarkRoomStore.shared.thumbnail(for: r, maxPixel: 240) {
-                thumbs[r.id] = Image(uiImage: UIImage(cgImage: cg))
+                thumbs[r.id] = UIImage(cgImage: cg)
             }
         }
         for n in negs where thumbs[n.id] == nil {
             if let cg = await NegativeStore.shared.thumbnail(n.id, maxPixel: 240) {
-                thumbs[n.id] = Image(uiImage: UIImage(cgImage: cg))
+                thumbs[n.id] = UIImage(cgImage: cg)
             }
             if n.hasDrawing, let cg = await NegativeStore.shared.drawingThumbnail(n.id, maxPixel: 240) {
-                draws[n.id] = Image(uiImage: UIImage(cgImage: cg))
+                draws[n.id] = UIImage(cgImage: cg)
             }
         }
         records = recs
@@ -439,7 +439,7 @@ private extension View {
 /// Photo | words | drawing, filling in as the shot develops (Mark, 2026-11-14: "those that have been
 /// completely developed show all three steps, or however many steps were assigned to that photo").
 private struct ShotTiles<Words: View, Drawing: View>: View {
-    let photo: Image?
+    let photo: UIImage?
     let showsWords: Bool
     let showsDrawing: Bool
     let band: Color
@@ -449,7 +449,7 @@ private struct ShotTiles<Words: View, Drawing: View>: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            tile { if let photo { photo.resizable().scaledToFill() } else { Safelight.empty } }
+            tile { if let photo { Image(uiImage: photo).resizable().scaledToFill() } else { Safelight.empty } }
             if showsWords { tile { words } } else { Color.clear.aspectRatio(1, contentMode: .fit) }
             if showsDrawing { tile { drawing } } else { Color.clear.aspectRatio(1, contentMode: .fit) }
         }
@@ -472,17 +472,25 @@ private struct ShotTiles<Words: View, Drawing: View>: View {
 }
 
 /// The words on a tile: paper once developed, a dark safelit card while the eye is still writing.
+/// The words on a tile: a dark safelit card while the eye is still writing; once done, the print's own
+/// words panel (`WordsCard`), so the tile shows what landed in Photos.
 private struct WordsTile: View {
     let text: String
     let developing: Bool
+    var style: WordsCard = .whiteOnBlack
+    var photo: UIImage? = nil
 
     var body: some View {
-        Text(developing ? text + " ▍" : text)
-            .font(.system(size: 11)).lineSpacing(1)
-            .foregroundStyle(developing ? Color(red: 1, green: 0.85, blue: 0.83) : Color(white: 0.08))
-            .padding(7)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(developing ? Safelight.tileDark : Safelight.paper)
+        if developing {
+            Text(text + " ▍")
+                .font(.system(size: 11)).lineSpacing(1)
+                .foregroundStyle(Color(red: 1, green: 0.85, blue: 0.83))
+                .padding(7)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Safelight.tileDark)
+        } else {
+            WordsPanel(text: text, style: style, photo: photo, fontSize: 11)
+        }
     }
 }
 
@@ -493,14 +501,15 @@ private struct DarkRoomRow: View {
     /// Read (not owned) so the row can show the live stage of the one shot developing. `DarkRoomWorker`
     /// is `@Observable`, so reading `currentShotID` / `currentStage` here tracks their changes.
     let worker: DarkRoomWorker
-    let photo: Image?
+    let photo: UIImage?
     /// Opens the Developer Tray for this shot. Offered only on the shot that is developing now.
     let onWatch: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isDeveloping {
-                LiveTiles(photo: photo, showsWords: record.config.makesWords, drawsThird: record.config.makesDrawing)
+                LiveTiles(photo: photo, showsWords: record.config.makesWords, drawsThird: record.config.makesDrawing,
+                          wordsCard: record.config.effectiveWordsCard)
             } else {
                 ShotTiles(photo: photo, showsWords: record.config.makesWords, showsDrawing: record.config.makesDrawing,
                           band: Safelight.band, glowing: false) {
@@ -572,9 +581,10 @@ private struct DarkRoomRow: View {
 /// step, decoded with the small preview decoder at most every 1.5 s and one at a time, only while the Dark
 /// Room is open; released when it closes.
 private struct LiveTiles: View {
-    let photo: Image?
+    let photo: UIImage?
     let showsWords: Bool
     let drawsThird: Bool
+    let wordsCard: WordsCard
     @State private var words = ""
     @State private var step: UIImage?
     @State private var finished: UIImage?
@@ -584,7 +594,7 @@ private struct LiveTiles: View {
 
     var body: some View {
         ShotTiles(photo: photo, showsWords: showsWords, showsDrawing: drawsThird, band: Safelight.band, glowing: true) {
-            if words.isEmpty { Safelight.tileDark } else { WordsTile(text: words, developing: finished == nil) }
+            if words.isEmpty { Safelight.tileDark } else { WordsTile(text: words, developing: finished == nil, style: wordsCard, photo: photo) }
         } drawing: {
             ZStack {
                 Safelight.tileDark
@@ -653,17 +663,18 @@ private struct LiveTiles: View {
 /// it was taken and by which eye and hand, and Watch, which opens it in the Developer Tray.
 private struct NegativeRow: View {
     let negative: NegativeMeta
-    let photo: Image?
-    let drawing: Image?
+    let photo: UIImage?
+    let drawing: UIImage?
     let onWatch: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ShotTiles(photo: photo, showsWords: hasWords, showsDrawing: negative.hasDrawing,
                       band: Safelight.bandDeveloped, glowing: false) {
-                WordsTile(text: negative.eyeWords ?? "", developing: false)
+                WordsTile(text: negative.eyeWords ?? "", developing: false,
+                          style: negative.wordsCard ?? .whiteOnBlack, photo: photo)
             } drawing: {
-                if let drawing { drawing.resizable().scaledToFill() } else { Safelight.empty }
+                if let drawing { Image(uiImage: drawing).resizable().scaledToFill() } else { Safelight.empty }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(hasWords ? "The eye said: \(negative.firstWords)" : "A developed shot")

@@ -92,6 +92,8 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var developmentKeepsake: DevelopmentKeepsake?
     /// Also save each frame as its own file (2026-11-14). Optional for back-compat: older records read off.
     var separateFiles: SeparateFiles?
+    /// How a words panel looks (2026-11-14; see `WordsCard`). Optional: older records read white on black.
+    var wordsCard: WordsCard?
 
     /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
     /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
@@ -110,6 +112,7 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var effectiveDevelopView: DevelopView { developView ?? .working }
     var effectiveKeepsake: DevelopmentKeepsake { developmentKeepsake ?? .off }
     var effectiveSeparateFiles: SeparateFiles { separateFiles ?? .off }
+    var effectiveWordsCard: WordsCard { wordsCard ?? .whiteOnBlack }
 }
 
 extension ShotConfig {
@@ -144,7 +147,8 @@ extension ShotConfig {
             handStrength: s.handStrength,
             developView: s.developView,
             developmentKeepsake: s.developmentKeepsake,
-            separateFiles: s.separateFiles
+            separateFiles: s.separateFiles,
+            wordsCard: s.wordsCard
         )
     }
 }
@@ -810,7 +814,8 @@ final class DarkRoomWorker {
                                       drawing: result.drawn?.cgImage,
                                       place: shot.place,
                                       layout: config.layout,
-                                      date: shot.footerDate)
+                                      date: shot.footerDate,
+                                      wordsCard: config.effectiveWordsCard)
         // A layout can need something this shot didn't make (Drawing only, and no drawing came; Words
         // only, and the eye said nothing). An empty print can't be saved, and a failed save leaves the
         // shot at the front of the queue to fail again on every kick, blocking everything behind it
@@ -819,13 +824,15 @@ final class DarkRoomWorker {
             let fallback = Layout.fallback(hasEye: !frameTwoWords.isEmpty, hasHand: result.drawn != nil)
             cameraLog("DARKROOM: \(config.layout.rawValue) had nothing to show for shot \(shot.id); saving it as \(fallback.rawValue)")
             frames = Darkroom.develop(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
-                                      place: shot.place, layout: fallback, date: shot.footerDate)
+                                      place: shot.place, layout: fallback, date: shot.footerDate,
+                                      wordsCard: config.effectiveWordsCard)
         }
         // And, if asked, each frame as its own file beside the print.
         if config.effectiveSeparateFiles != .off {
             frames += Darkroom.separate(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
                                         place: shot.place, date: shot.footerDate,
-                                        square: config.effectiveSeparateFiles == .square)
+                                        square: config.effectiveSeparateFiles == .square,
+                                        wordsCard: config.effectiveWordsCard)
         }
 
         // The invariant's one exit: delete ONLY after Photos confirms the save. Any failure
@@ -843,7 +850,8 @@ final class DarkRoomWorker {
         // Developer Tray can open it again (NegativeStore). The prints are already safe in Photos.
         if let trace = DevelopTrace.shared.snapshot(), trace.shotID == shot.id {
             await NegativeStore.shared.keep(trace, id: shot.id, capturedAt: shot.capturedAt,
-                                            place: shot.place, limit: Settings.shared.negativesToKeep)
+                                            place: shot.place, limit: Settings.shared.negativesToKeep,
+                                            wordsCard: config.effectiveWordsCard)
         }
         #if DEBUG
         // Capture exactly what just landed in Photos, so the layout audit can look at the real

@@ -258,6 +258,10 @@ final class Settings {
     var separateFiles: SeparateFiles {
         didSet { store(separateFiles.rawValue, "separateFiles") }
     }
+    /// How the words look on a panel of their own (2026-11-14; see `WordsCard`). Default: the book's white on black.
+    var wordsCard: WordsCard {
+        didSet { store(wordsCard.rawValue, "wordsCard") }
+    }
     /// The Dark Room's negatives: how many recent shots keep their workings for the Developer Tray
     /// (NegativeStore). Mark, 2026-11-05: 20 by default, people may keep more. Lowering it prunes.
     var negativesToKeep: Int {
@@ -292,6 +296,7 @@ final class Settings {
         developmentKeepsake = DevelopmentKeepsake(rawValue: d.string(forKey: "developmentKeepsake") ?? "") ?? .off
         negativesToKeep = (d.object(forKey: "negativesToKeep") as? Int) ?? 20
         separateFiles = SeparateFiles(rawValue: d.string(forKey: "separateFiles") ?? "") ?? .off
+        wordsCard = WordsCard(rawValue: d.string(forKey: "wordsCard") ?? "") ?? .whiteOnBlack
         // Someone who had chosen a Separate layout keeps their separate files, now as the add-on, with
         // the richest combined print their eye and hand can make (2026-11-14).
         if layout == .separateNative || layout == .separateSquare {
@@ -385,6 +390,7 @@ final class Settings {
         developView = .working
         developmentKeepsake = .off
         separateFiles = .off
+        wordsCard = .whiteOnBlack
         negativesToKeep = 20
     }
 }
@@ -512,6 +518,36 @@ struct PrefsLastShot {
     var photo: UIImage?
     var words: String?
     var drawing: UIImage?
+    var wordsCard: WordsCard = .whiteOnBlack
+}
+
+/// A words tile in the print's own look (`WordsCard`), so every tile on screen shows what the print does.
+/// (Before 2026-11-14 the tiles were paper-colored while the print was white on black; Mark noticed.)
+struct WordsPanel: View {
+    let text: String
+    let style: WordsCard
+    let photo: UIImage?
+    var fontSize: CGFloat = 9.5
+    var padding: CGFloat = 7
+
+    var body: some View {
+        let look = Darkroom.wordsPanelLook(style, photo: photo?.cgImage)
+        // The ground is a background, so a filled photo can't enlarge the panel and push the words off.
+        Text(text)
+            .font(.system(size: fontSize, weight: .heavy))
+            .foregroundStyle(Color(look.ink))
+            .padding(padding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background {
+                if style == .photoBlurred, let photo {
+                    Image(uiImage: photo).resizable().scaledToFill().blur(radius: 6)
+                        .overlay(Color(look.veil))
+                } else {
+                    Color(look.ground)
+                }
+            }
+            .clipped()
+    }
 }
 
 struct PreferencesView: View {
@@ -697,11 +733,7 @@ struct PreferencesView: View {
         Color.clear.aspectRatio(1, contentMode: .fit)
             .overlay(alignment: .topLeading) {
                 if let words {
-                    Text(words)
-                        .font(.system(size: 9.5)).foregroundStyle(Color(white: 0.08))
-                        .padding(7)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .background(Color(red: 0.957, green: 0.945, blue: 0.918))
+                    WordsPanel(text: words, style: lastShot?.wordsCard ?? .whiteOnBlack, photo: lastShot?.photo)
                 } else {
                     RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.28), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 }
@@ -1071,7 +1103,7 @@ struct PreferencesView: View {
                             Button { settings.layout = layout } label: {
                                 VStack(spacing: 4) {
                                     LayoutThumb(layout: layout, photo: lastShot?.photo, drawing: lastShot?.drawing,
-                                                selected: settings.layout == layout)
+                                                selected: settings.layout == layout, wordsCard: settings.wordsCard)
                                     Text(layout.shortName).font(.caption2)
                                         .foregroundStyle(settings.layout == layout ? .white : .secondary)
                                         .multilineTextAlignment(.center).lineLimit(2)
@@ -1086,6 +1118,34 @@ struct PreferencesView: View {
                 }
             }
             PrefLine(layoutLine(settings.layout), help: helpTopic("layout"), open: $help)
+        }
+        // How the words look on a panel of their own (Mark, 2026-11-14), previewed on the last shot.
+        PrefCard {
+            Text("Words panel").font(.headline)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4), spacing: 10) {
+                ForEach(WordsCard.allCases, id: \.self) { style in
+                    let on = settings.wordsCard == style
+                    Button { settings.wordsCard = style } label: {
+                        VStack(spacing: 4) {
+                            Color.clear.aspectRatio(1, contentMode: .fit)
+                                .overlay {
+                                    WordsPanel(text: lastShot?.words ?? "I see a quiet street under an evening sky.",
+                                               style: style, photo: lastShot?.photo, fontSize: 7, padding: 5)
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(on ? Color.white : Color.white.opacity(0.25), lineWidth: on ? 2 : 1))
+                            Text(style.name).font(.caption2).foregroundStyle(on ? .white : .secondary)
+                                .multilineTextAlignment(.center).lineLimit(2)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(style.name)
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            PrefLine("How the words look when they have a panel of their own.", help: helpTopic("wordspanel"), open: $help)
         }
         // What comes along with the print, each on or off (Mark, 2026-11-14).
         PrefCard {
@@ -1265,7 +1325,8 @@ struct PreferencesView: View {
         let words = (m.eyeWords ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return PrefsLastShot(photo: photo.map { UIImage(cgImage: $0) },
                              words: m.wordsFromEye && !words.isEmpty ? words : nil,
-                             drawing: drawing.map { UIImage(cgImage: $0) })
+                             drawing: drawing.map { UIImage(cgImage: $0) },
+                             wordsCard: m.wordsCard ?? .whiteOnBlack)
     }
 
     // MARK: - The deeper story behind each "?"
@@ -1327,6 +1388,9 @@ struct PreferencesView: View {
         case "layout":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "Layout",
                             body: "The layout is how the finished print is put together; you choose one. Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo, or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych puts all three frames on one plate.\n\nThe layouts with a drawing beside the photo are square (the hand draws squares), so the viewfinder shows a square guide and you frame for the crop.\n\nWhat else is saved beside the print is a separate choice, under Also save to Photos.")
+        case "wordspanel":
+            return PrefHelp(id: key, kicker: "THE PRINT", title: "Words panel",
+                            body: "When the eye's words have a panel of their own (Words only, the diptychs, the triptychs, and the separate files), this is how that panel looks.\n\nWhite on black is the camera's original look. Black on white is its reverse. The photo's color takes the strongest color in your photo for the panel. The photo, blurred lays a soft copy of your photo behind the words, as these screens do. With the last two, the words are black or white, whichever reads more clearly.\n\nWords laid over a photo or drawing stay white with a shadow.")
         case "keepsake":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "Also save to Photos",
                             body: "Beside the print you chose, a shot can also save:\n\nEach frame as its own file: the photo, the words and the drawing as separate pictures. Their own shapes keeps each as it is; all square crops the photo to the square the hand draws, so the three pair.\n\nA contact sheet: every step of the drawing on one page. A flipbook: a short video of the steps. The steps are quick previews; the last frame is the finished drawing. These two appear when the hand is drawing.\n\nAll of these are off by default, so a shot does no extra work unless you ask.")
@@ -1500,6 +1564,7 @@ struct LayoutThumb: View {
     let photo: UIImage?
     let drawing: UIImage?
     let selected: Bool
+    var wordsCard: WordsCard = .whiteOnBlack
 
     private enum Panel { case photo, words, drawing }
 
@@ -1551,15 +1616,23 @@ struct LayoutThumb: View {
     @ViewBuilder private func panel(_ p: Panel) -> some View {
         switch p {
         case .words:
-            RoundedRectangle(cornerRadius: 2).fill(Color(red: 0.957, green: 0.945, blue: 0.918))
-                .overlay(alignment: .topLeading) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(0..<3, id: \.self) { i in
-                            Capsule().fill(Color.black.opacity(0.35)).frame(height: 1.5).frame(maxWidth: i == 2 ? 10 : .infinity)
-                        }
-                    }
-                    .padding(3)
+            let look = Darkroom.wordsPanelLook(wordsCard, photo: photo?.cgImage)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(0..<3, id: \.self) { i in
+                    Capsule().fill(Color(look.ink).opacity(0.85)).frame(height: 1.5).frame(maxWidth: i == 2 ? 10 : .infinity)
                 }
+            }
+            .padding(3)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background {
+                if wordsCard == .photoBlurred, let photo {
+                    Image(uiImage: photo).resizable().scaledToFill().blur(radius: 3).overlay(Color(look.veil))
+                } else {
+                    Color(look.ground)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
         case .photo:   picture(photo, fallback: Color(red: 0.42, green: 0.56, blue: 0.71))
         case .drawing: picture(drawing, fallback: Color(red: 0.76, green: 0.37, blue: 0.66))
         }
