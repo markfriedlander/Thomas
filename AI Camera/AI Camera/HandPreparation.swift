@@ -38,6 +38,13 @@ final class HandPreparation {
     private(set) var stageName = ""
     private(set) var started: Date?
     private(set) var reason = ""
+    /// Whether Core ML has actually begun. Until then the preparation is queued in the model lane, which
+    /// holds heavy work while the phone is hot (ThermalGovernor). Mark, 2026-11-14: after three test
+    /// installs the pill read "Preparing for shooting · 7:21 of about 1:37" while nothing had started,
+    /// so it looked stuck; the clock now starts only when the work does.
+    private(set) var begun = false
+    /// True while it waits for the phone to cool (checked each second until it begins).
+    private(set) var waitingToCool = false
     /// Ticks once a second while preparing, so clocks redraw.
     private(set) var now = Date()
     private var ticker: Task<Void, Never>?
@@ -132,11 +139,16 @@ final class HandPreparation {
               CoreMLDrawer.isInstalled(repoID) else { return }
         self.repoID = repoID; self.reason = reason
         phase = .preparing; stage = 0; stageCount = 0; stageName = "Getting ready"
-        started = Date(); now = Date()
+        started = nil; begun = false; now = Date()
+        waitingToCool = await ThermalGovernor.shared.isHotNow()
         ticker?.cancel()
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if let self, !self.begun {
+                    let hot = await ThermalGovernor.shared.isHotNow()
+                    if hot != self.waitingToCool { self.waitingToCool = hot }
+                }
                 self?.now = Date()
                 self?.publishPill()
             }
@@ -145,6 +157,8 @@ final class HandPreparation {
         let bundlesBefore = await Task.detached { e5rtFinishedBundles() }.value
         cameraLog("PREPARE: \(repoID) (\(reason)) \(writesLine())")
         let result: Result<Double, Error> = await ModelLane.shared.run("prepare") {
+            // Past the lane's heat hold: the real work starts now, and so does the clock.
+            await MainActor.run { HandPreparation.shared.beginWork() }
             do {
                 let seconds = try await CoreMLDrawer.shared.prepare(repoID: repoID) { k, n, name in
                     Task { @MainActor in
@@ -191,9 +205,22 @@ final class HandPreparation {
         await prepare(repo, reason: "after install or update")
     }
 
-    /// The capture screen's status pill while preparing.
+    private func beginWork() {
+        begun = true; waitingToCool = false
+        started = Date(); now = Date()
+        publishPill()
+    }
+
+    /// The capture screen's status pill while preparing. Before the work begins it says why it is
+    /// waiting (the heat), with no clock: a clock counting a wait reads as "stuck".
     private func publishPill() {
         guard isPreparing, let repoID else { return }
+        if !begun {
+            let text = waitingToCool ? "Waiting for the \(ThisDevice.deviceKind) to cool, then preparing" : "Getting ready to prepare"
+            StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: waitingToCool ? "snowflake" : nil,
+                                                    showsSpinner: !waitingToCool, text: text, tap: .explainPreparation))
+            return
+        }
         var text = "Preparing for shooting · \(Self.clock(elapsed))"
         if let last = Self.lastSeconds(repoID) { text += " of about \(Self.clock(last))" }
         StatusFeed.shared.publish(StatusMessage(kind: .hand, icon: nil, showsSpinner: true, text: text,
@@ -210,10 +237,17 @@ struct HandPreparationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Preparing for shooting").font(.subheadline.weight(.medium))
+                if prep.waitingToCool && !prep.begun {
+                    Image(systemName: "snowflake").font(.subheadline).foregroundStyle(.orange)
+                    Text("Waiting for the \(ThisDevice.deviceKind) to cool").font(.subheadline.weight(.medium))
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing for shooting").font(.subheadline.weight(.medium))
+                }
                 Spacer()
-                Text(HandPreparation.clock(prep.elapsed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                if prep.begun {
+                    Text(HandPreparation.clock(prep.elapsed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
             }
             if prep.stageCount > 0 {
                 Text("Step \(prep.stage) of \(prep.stageCount): \(prep.stageName)")
@@ -226,6 +260,10 @@ struct HandPreparationCard: View {
     }
 
     private var detail: String {
+        if prep.waitingToCool && !prep.begun {
+            let tip = ThisDevice.deviceKind == "Mac" ? "" : " Setting it down somewhere cool, off the charger, helps."
+            return "Your \(ThisDevice.deviceKind) is hot, so Thomas is holding heavy work until it cools. Preparing the drawing model starts on its own when it does.\(tip)"
+        }
         if let last = HandPreparation.lastSeconds(repoID) {
             return "Your \(ThisDevice.deviceKind) is getting the drawing model ready for its Neural Engine. Last time this took \(HandPreparation.clock(last)) on this \(ThisDevice.deviceKind). Keep Thomas open until it finishes."
         }

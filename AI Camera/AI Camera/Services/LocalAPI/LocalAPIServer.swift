@@ -954,6 +954,7 @@ extension LocalAPIServer {
         return (200, json(["phase": phase, "repo": p.repoID ?? "", "reason": p.reason,
                            "stage": p.stage, "stageCount": p.stageCount, "stageName": p.stageName,
                            "elapsed": Int(p.elapsed), "selectedDrawer": repo,
+                           "begun": p.begun, "waitingToCool": p.waitingToCool,
                            "preparedForThisBuild": HandPreparation.isPrepared(repo),
                            "build": HandPreparation.currentBuild,
                            "lastSeconds": HandPreparation.lastSeconds(repo) ?? -1,
