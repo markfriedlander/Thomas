@@ -235,6 +235,15 @@ actor NegativeStore {
         return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
     }
 
+    /// A small picture of the kept drawing, for Preferences' front door and the Dark Room row.
+    func drawingThumbnail(_ id: UUID, maxPixel: Int) -> CGImage? {
+        let url = folder(id).appendingPathComponent("drawing.png")
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: maxPixel]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
+    }
+
     /// Total bytes the negatives take up.
     func totalBytes() -> Int { Self.size(of: root) }
 

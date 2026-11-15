@@ -1165,6 +1165,10 @@ extension LocalAPIServer {
             if let section = req.headers["x-section"], !section.isEmpty {
                 bridge.scrollPreferencesTo = section.lowercased()
             }
+            // Optional X-Help: open that "?" card (temperature, prompt, frame.eye, preferences, ...).
+            if let topic = req.headers["x-help"], !topic.isEmpty {
+                bridge.prefsHelp = topic.lowercased()
+            }
             bridge.tapPreferences = true
             return (200, json(["screen": "preferences", "opened": true,
                                "message": "Opened Preferences the way the gear button does. Screenshot with devicectl."]))

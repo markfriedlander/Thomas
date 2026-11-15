@@ -848,6 +848,9 @@ struct ModelLicenseSheet: View {
     /// = scrolling Preferences to a section (its `.id`, e.g. "developing"). Preferences scrolls itself
     /// and clears this. Set by `POST /open` with `X-Section`.
     var scrollPreferencesTo: String? = nil
+    /// = tapping a "?" in Preferences: the help card's topic key ("temperature", "frame.eye", ...). Set by
+    /// `POST /open` X-Screen: preferences with X-Help.
+    var prefsHelp: String? = nil
     /// = tapping the developing shot's Watch button in the Dark Room (opens the Developer Tray).
     var tapWatch = false
     /// = tapping Watch on a developed shot's row (its kept negative) in the Dark Room.
