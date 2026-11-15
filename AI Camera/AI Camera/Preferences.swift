@@ -254,6 +254,10 @@ final class Settings {
     var developmentKeepsake: DevelopmentKeepsake {
         didSet { store(developmentKeepsake.rawValue, "developmentKeepsake") }
     }
+    /// Also save each frame as its own file, beside the print (2026-11-14; see `SeparateFiles`).
+    var separateFiles: SeparateFiles {
+        didSet { store(separateFiles.rawValue, "separateFiles") }
+    }
     /// The Dark Room's negatives: how many recent shots keep their workings for the Developer Tray
     /// (NegativeStore). Mark, 2026-11-05: 20 by default, people may keep more. Lowering it prunes.
     var negativesToKeep: Int {
@@ -287,6 +291,16 @@ final class Settings {
         developView = DevelopView(rawValue: d.string(forKey: "developView") ?? "") ?? .working
         developmentKeepsake = DevelopmentKeepsake(rawValue: d.string(forKey: "developmentKeepsake") ?? "") ?? .off
         negativesToKeep = (d.object(forKey: "negativesToKeep") as? Int) ?? 20
+        separateFiles = SeparateFiles(rawValue: d.string(forKey: "separateFiles") ?? "") ?? .off
+        // Someone who had chosen a Separate layout keeps their separate files, now as the add-on, with
+        // the richest combined print their eye and hand can make (2026-11-14).
+        if layout == .separateNative || layout == .separateSquare {
+            separateFiles = layout == .separateSquare ? .square : .native
+            layout = Layout.fallback(hasEye: useEye, hasHand: handWillDraw)
+            // didSet doesn't run inside init, so store the move by hand (once).
+            d.set(layout.rawValue, forKey: "layout")
+            d.set(separateFiles.rawValue, forKey: "separateFiles")
+        }
     }
 
     /// Keep the selected layout producible. Whenever the eye/hand availability changes (`useEye`,
@@ -370,6 +384,7 @@ final class Settings {
         stampRawCoordinates = false
         developView = .working
         developmentKeepsake = .off
+        separateFiles = .off
         negativesToKeep = 20
     }
 }
@@ -739,7 +754,10 @@ struct PreferencesView: View {
             if model.controls.contains(.steps) { s += " · \(settings.currentDrawerSteps) steps" }
             return s + " · \(settings.drawingSize.pixels) px"
         case .print:
-            return settings.layout.name
+            var extras = 0
+            if settings.separateFiles != .off { extras += 1 }
+            if handDraws, settings.developmentKeepsake != .off { extras += settings.developmentKeepsake == .both ? 2 : 1 }
+            return extras == 0 ? settings.layout.name : "\(settings.layout.name) · +\(extras)"
         }
     }
 
@@ -748,7 +766,7 @@ struct PreferencesView: View {
         case .lens:  return Lens.offersSixteenNine ? "Picture shape, place stamp" : "Place stamp"
         case .eye:   return "Which eye, its system prompt, temperature"
         case .hand:  return "Which hand, steps, size"
-        case .print: return handDraws ? "Layout, keepsakes" : "Layout"
+        case .print: return "Layout, and what's saved beside it"
         }
     }
 
@@ -848,6 +866,16 @@ struct PreferencesView: View {
             }
         }
         PrefCard {
+            // Without Location permission there is no place to stamp at all; say so rather than offer a
+            // choice that does nothing (independent review, 2026-11-14).
+            if !PrivacyMonitor.shared.isLocationAuthorized {
+                Label("Location is off for Thomas, so the footer has no place stamp.", systemImage: "location.slash")
+                    .font(.subheadline).foregroundStyle(.orange)
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    Link("Turn it on in Settings", destination: url).font(.subheadline.weight(.semibold))
+                }
+                Divider().overlay(Color.white.opacity(0.12))
+            }
             Toggle("Stamp raw coordinates", isOn: $settings.stampRawCoordinates).font(.headline).tint(.green)
             // Only a downloaded eye keeps the whole shot on the device; Apple's eye may use Apple's servers
             // when online (as the privacy lock says), so the promise is made only when it is true.
@@ -1023,40 +1051,110 @@ struct PreferencesView: View {
     @ViewBuilder private var printPage: some View {
         PrefCard {
             Text("Layout").font(.headline)
-            // Only the layouts the current eye and hand can make (Mark, 2026-07-27), so no choice ever
-            // conflicts with the switches. Drawn with the last shot's own pictures where there is one.
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
-                ForEach(availableLayouts, id: \.self) { layout in
-                    Button { settings.layout = layout } label: {
-                        LayoutThumb(layout: layout, photo: lastShot?.photo, drawing: lastShot?.drawing,
-                                    selected: settings.layout == layout)
+            // Only combined prints, grouped by family and named, and only those the current eye and hand
+            // can make (Mark, 2026-07-27), so no choice ever conflicts with the switches. Drawn with the
+            // last shot's own pictures where there is one.
+            ForEach(layoutFamilies, id: \.self) { family in
+                let items = availableLayouts.filter { $0.category == family }
+                if !items.isEmpty {
+                    Text(family.title.uppercased()).font(.caption2.weight(.bold)).tracking(1).foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                        .accessibilityAddTraits(.isHeader)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4), spacing: 10) {
+                        ForEach(items, id: \.self) { layout in
+                            Button { settings.layout = layout } label: {
+                                VStack(spacing: 4) {
+                                    LayoutThumb(layout: layout, photo: lastShot?.photo, drawing: lastShot?.drawing,
+                                                selected: settings.layout == layout)
+                                    Text(layout.shortName).font(.caption2)
+                                        .foregroundStyle(settings.layout == layout ? .white : .secondary)
+                                        .multilineTextAlignment(.center).lineLimit(2)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(layout.name.replacingOccurrences(of: " · ", with: ", "))
+                            .accessibilityAddTraits(settings.layout == layout ? [.isButton, .isSelected] : .isButton)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(layout.name.replacingOccurrences(of: " · ", with: ", "))
-                    .accessibilityAddTraits(settings.layout == layout ? .isSelected : [])
                 }
             }
-            PrefLine("\(settings.layout.name): \(layoutLine(settings.layout))", help: helpTopic("layout"), open: $help)
+            PrefLine(layoutLine(settings.layout), help: helpTopic("layout"), open: $help)
         }
+        // What comes along with the print, each on or off (Mark, 2026-11-14).
+        PrefCard {
+            Text("Also save to Photos").font(.headline)
+            Toggle("Each frame as its own file", isOn: Binding(
+                get: { settings.separateFiles != .off },
+                set: { settings.separateFiles = $0 ? .native : .off }))
+                .tint(.green)
+            if settings.separateFiles != .off {
+                Picker("Shape of the separate files", selection: $settings.separateFiles) {
+                    Text(SeparateFiles.native.name).tag(SeparateFiles.native)
+                    Text(SeparateFiles.square.name).tag(SeparateFiles.square)
+                }
+                .pickerStyle(.segmented)
+                .environment(\.colorScheme, .light)
+            }
+            if handDraws {
+                Toggle("A contact sheet of the drawing's steps", isOn: keepsakeBinding(sheet: true)).tint(.green)
+                Toggle("A flipbook of the drawing's steps", isOn: keepsakeBinding(sheet: false)).tint(.green)
+            }
+            PrefLine(alsoSaveLine, help: helpTopic("keepsake"), open: $help)
+        }
+    }
+
+    private var layoutFamilies: [LayoutCategory] { [.superimposed, .single, .diptych, .triptych] }
+
+    /// The contact sheet and flipbook as two switches over the one stored choice (off, either, or both).
+    private func keepsakeBinding(sheet: Bool) -> Binding<Bool> {
+        Binding(
+            get: {
+                let k = settings.developmentKeepsake
+                return sheet ? (k == .contactSheet || k == .both) : (k == .flipbook || k == .both)
+            },
+            set: { on in
+                let k = settings.developmentKeepsake
+                var hasSheet = k == .contactSheet || k == .both
+                var hasFlip = k == .flipbook || k == .both
+                if sheet { hasSheet = on } else { hasFlip = on }
+                settings.developmentKeepsake = hasSheet && hasFlip ? .both : hasSheet ? .contactSheet : hasFlip ? .flipbook : .off
+            })
+    }
+
+    private var alsoSaveLine: String {
+        var extras: [String] = []
+        if settings.separateFiles != .off { extras.append(settings.separateFiles == .square ? "each frame as a square file" : "each frame as its own file") }
         if handDraws {
-            PrefCard {
-                pickerRow("Also save to Photos", selection: $settings.developmentKeepsake, options: DevelopmentKeepsake.allCases) { $0.name }
-                PrefLine("A contact sheet, a flipbook of the drawing's steps, or both, saved beside the shot.", help: helpTopic("keepsake"), open: $help)
+            switch settings.developmentKeepsake {
+            case .contactSheet: extras.append("a contact sheet")
+            case .flipbook:     extras.append("a flipbook")
+            case .both:         extras.append("a contact sheet and a flipbook")
+            case .off:          break
             }
         }
+        guard !extras.isEmpty else { return "Just the print. Anything switched on here is saved beside it." }
+        return "Beside the print: " + ListFormatter.localizedString(byJoining: extras) + "."
     }
 
     private var availableLayouts: [Layout] {
-        Layout.allCases.filter { $0.isAvailable(hasEye: settings.useEye, hasHand: handDraws) }
+        Layout.allCases.filter { $0.category != .separate && $0.isAvailable(hasEye: settings.useEye, hasHand: handDraws) }
     }
 
     private func layoutLine(_ l: Layout) -> String {
-        switch l.category {
-        case .superimposed: return l == .superimposed ? "the words laid over your photo." : "the words laid over the drawing."
-        case .single:       return "one panel on its own."
-        case .diptych:      return "two panels side by side."
-        case .triptych:     return "photo, words and drawing on one plate."
-        case .separate:     return "each frame saved as its own file."
+        switch l {
+        case .superimposed:          return "The eye's words laid over your photo."
+        case .superimposedOnDrawing: return "The eye's words laid over the drawing."
+        case .textOnly:              return "Just the words, on their own card."
+        case .singleDrawing:         return "Just the drawing."
+        case .singlePhoto:           return "Just your photo."
+        case .diptychTextLeft:       return "The words, then your photo, side by side."
+        case .diptychTextRight:      return "Your photo, then the words, side by side."
+        case .diptychDrawingLeft:    return "The drawing, then your photo, side by side."
+        case .diptychDrawingRight:   return "Your photo, then the drawing, side by side."
+        case .triptychVertical:      return "Photo, words and drawing stacked on one plate."
+        case .triptychHorizontal:    return "Photo, words and drawing side by side on one plate."
+        case .separateNative, .separateSquare: return "Each frame as its own file."
         }
     }
 
@@ -1222,10 +1320,10 @@ struct PreferencesView: View {
                             body: "The hand draws in steps, and the Developer Tray can show each one. \"The working image\" is what it actually holds at each step: static slowly becoming a picture. \"Its best guess\" is its prediction of the finished drawing at each step: blurry at first, sharpening. Both are real; one is recorded per shot.")
         case "layout":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "Layout",
-                            body: "Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo - or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych stitches all three frames into one plate. Separate saves each as its own file. The square layouts show a square guide in the viewfinder, so you frame for the crop.")
+                            body: "The layout is how the finished print is put together; you choose one. Only the layouts your current eye and hand can make are shown. Superimposed lays the words over the photo, or over the drawing. Single keeps just one panel: the words, the drawing, or the photo. Diptych sets two side by side. Triptych puts all three frames on one plate.\n\nThe layouts with a drawing beside the photo are square (the hand draws squares), so the viewfinder shows a square guide and you frame for the crop.\n\nWhat else is saved beside the print is a separate choice, under Also save to Photos.")
         case "keepsake":
             return PrefHelp(id: key, kicker: "THE PRINT", title: "Also save to Photos",
-                            body: "A contact sheet puts every step of the drawing on one page; a flipbook is a short video of them. Either is saved beside the shot. The steps are quick previews; the last frame is the finished drawing. Off by default, so a shot does no extra work unless you ask.")
+                            body: "Beside the print you chose, a shot can also save:\n\nEach frame as its own file: the photo, the words and the drawing as separate pictures. Their own shapes keeps each as it is; all square crops the photo to the square the hand draws, so the three pair.\n\nA contact sheet: every step of the drawing on one page. A flipbook: a short video of the steps. The steps are quick previews; the last frame is the finished drawing. These two appear when the hand is drawing.\n\nAll of these are off by default, so a shot does no extra work unless you ask.")
         default:
             return PrefHelp(id: key, kicker: "", title: key, body: "")
         }
@@ -1420,18 +1518,27 @@ struct LayoutThumb: View {
         case .singlePhoto:           panel(.photo)
         case .diptychTextLeft:       HStack(spacing: 3) { panel(.words); panel(.photo) }
         case .diptychTextRight:      HStack(spacing: 3) { panel(.photo); panel(.words) }
-        case .diptychDrawingLeft:    HStack(spacing: 3) { panel(.drawing); panel(.photo) }
-        case .diptychDrawingRight:   HStack(spacing: 3) { panel(.photo); panel(.drawing) }
-        case .triptychVertical:      VStack(spacing: 3) { panel(.photo); panel(.words); panel(.drawing) }
-        case .triptychHorizontal:    HStack(spacing: 3) { panel(.photo); panel(.words); panel(.drawing) }
+        case .diptychDrawingLeft:    HStack(spacing: 3) { square(.drawing); square(.photo) }
+        case .diptychDrawingRight:   HStack(spacing: 3) { square(.photo); square(.drawing) }
+        case .triptychVertical:      VStack(spacing: 2) { square(.photo); square(.words); square(.drawing) }
+        case .triptychHorizontal:    HStack(spacing: 3) { square(.photo); square(.words); square(.drawing) }
         case .separateNative:        HStack(spacing: 5) { panel(.photo).frame(height: 30); panel(.words).frame(height: 40); panel(.drawing).frame(height: 36) }
         case .separateSquare:        HStack(spacing: 5) { panel(.photo).aspectRatio(1, contentMode: .fit); panel(.words).aspectRatio(1, contentMode: .fit); panel(.drawing).aspectRatio(1, contentMode: .fit) }
         }
     }
 
+    /// The panels that are square in the real print (the hand draws squares).
+    private func square(_ p: Panel) -> some View { panel(p).aspectRatio(1, contentMode: .fit) }
+
+    /// Words laid over a picture: two lines of "text", so it reads differently from the picture alone.
     private func overlayPanel(_ p: Panel) -> some View {
-        panel(p).overlay(alignment: .bottom) {
-            RoundedRectangle(cornerRadius: 1).fill(.white.opacity(0.9)).frame(height: 5).padding(.horizontal, 6).padding(.bottom, 7)
+        panel(p).overlay(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 2) {
+                Capsule().fill(.white).frame(height: 3)
+                Capsule().fill(.white).frame(width: 18, height: 3)
+            }
+            .padding(.horizontal, 6).padding(.bottom, 6)
+            .shadow(color: .black.opacity(0.6), radius: 1)
         }
     }
 

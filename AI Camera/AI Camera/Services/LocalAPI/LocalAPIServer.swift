@@ -654,6 +654,7 @@ extension LocalAPIServer {
             if let v = obj["stampRawCoordinates"] as? Bool { s.stampRawCoordinates = v; changed.append("stampRawCoordinates=\(v)") }
             if let v = (obj["developView"] as? String).flatMap(DevelopView.init) { s.developView = v; changed.append("developView=\(v.rawValue)") }
             if let v = (obj["developmentKeepsake"] as? String).flatMap(DevelopmentKeepsake.init) { s.developmentKeepsake = v; changed.append("developmentKeepsake=\(v.rawValue)") }
+            if let v = (obj["separateFiles"] as? String).flatMap(SeparateFiles.init) { s.separateFiles = v; changed.append("separateFiles=\(v.rawValue)") }
             if let v = obj["negativesToKeep"] as? Int, v > 0 { s.negativesToKeep = v; changed.append("negativesToKeep=\(v)") }
             if let v = obj["reset"] as? String {
                 if v == "everything" { s.resetEverything(); changed.append("reset=everything") }
@@ -672,6 +673,7 @@ extension LocalAPIServer {
     private struct SettingsSnapshot: Sendable {
         let seer, layout, frameTwoShows, drawingSize, upscaler, decoderChoice, systemPrompt: String
         let developView, developmentKeepsake: String
+        let separateFiles: String
         let pictureShape: String
         let negativesToKeep: Int
         let drawsThirdFrame: Bool
@@ -698,7 +700,7 @@ extension LocalAPIServer {
              "selectedDrawer": selectedDrawer, "drawSteps": drawSteps,
              "useEye": useEye, "handPrompt": handPrompt, "handStrength": handStrength,
              "systemPrompt": systemPrompt,
-             "developView": developView, "developmentKeepsake": developmentKeepsake,
+             "developView": developView, "developmentKeepsake": developmentKeepsake, "separateFiles": separateFiles,
              "negativesToKeep": negativesToKeep,
              "privacy": ["locked": privacyLocked,
                          "look": privacyLook,
@@ -727,6 +729,7 @@ extension LocalAPIServer {
             systemPrompt: s.systemPrompt,
             developView: s.developView.rawValue,
             developmentKeepsake: s.developmentKeepsake.rawValue,
+            separateFiles: s.separateFiles.rawValue,
             pictureShape: s.pictureShape.rawValue,
             negativesToKeep: s.negativesToKeep,
             drawsThirdFrame: s.drawsThirdFrame,

@@ -49,6 +49,21 @@ nonisolated enum LayoutCategory: String, CaseIterable, Sendable {
     }
 }
 
+/// Whether a shot ALSO saves each frame as its own file, beside its print (Mark, 2026-11-14: "the layout
+/// is one choice. What comes along with the layout, as an addition, is another choice"). Before this,
+/// separate files were a layout of their own, chosen instead of a combined print, which confused even
+/// Mark. The two Separate layouts survive in `Layout` only so older shots and settings still develop.
+nonisolated enum SeparateFiles: String, CaseIterable, Codable, Sendable {
+    case off, native, square
+    var name: String {
+        switch self {
+        case .off:    return "Off"
+        case .native: return "Their own shapes"
+        case .square: return "All square"
+        }
+    }
+}
+
 nonisolated enum Layout: String, CaseIterable, Sendable {
     // ── Superimposed: the machine's words laid ON one image (no scrim, no box). ──
     /// Words over the PHOTOGRAPH — the claim on the reality it describes.
@@ -258,23 +273,27 @@ enum Darkroom {
 
         // ── Separate files: each artifact its own file (the ride-along survives ONLY here). ──
         case .separateNative:
-            var out = [compose(photograph: photograph, words: nil, place: place,
-                               layout: .superimposed, date: date),
-                       card(words: words, size: photoSize, place: place, date: date)]
-            if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
-            return out
+            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: false)
         case .separateSquare:
-            // Every asset square (the hand's ratio). Photo centre-cropped to the square you framed;
-            // the words card is square; the drawing is already square. Same shape, so they pair —
-            // kept at their own resolutions (separate files need only share a ratio, not a size).
-            let square = centerCropSquare(photograph)
-            let side = square.width
-            var out = [compose(photograph: square, words: nil, place: place,
-                               layout: .superimposed, date: date),
-                       card(words: words, size: CGSize(width: side, height: side), place: place, date: date)]
-            if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
-            return out
+            return separate(photograph: photograph, words: words, drawing: drawing, place: place, date: date, square: true)
         }
+    }
+
+    /// Each frame as its own file: the photo, the words (when the eye spoke), the drawing (when there is
+    /// one). Square: every asset in the hand's ratio, the photo centre-cropped and the words card square,
+    /// so they pair, each at its own resolution. Used by the "also save each frame" choice and by the two
+    /// older Separate layouts.
+    static func separate(photograph: CGImage, words: String, drawing: CGImage?, place: String?,
+                         date: Date, square: Bool) -> [UIImage] {
+        let photo = square ? centerCropSquare(photograph) : photograph
+        let cardSize = square ? CGSize(width: photo.width, height: photo.width)
+                              : CGSize(width: photograph.width, height: photograph.height)
+        var out = [compose(photograph: photo, words: nil, place: place, layout: .superimposed, date: date)]
+        if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            out.append(card(words: words, size: cardSize, place: place, date: date))
+        }
+        if let drawing { out.append(frameDrawing(drawing, place: place, date: date)) }
+        return out
     }
 
     /// Give the re-imagining (frame 3) the same grammar as the other frames — letterbox bars

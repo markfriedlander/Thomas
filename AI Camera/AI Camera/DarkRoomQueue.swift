@@ -89,6 +89,8 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     /// from before the tray has neither key, and the accessors below read it as working / off.
     var developView: DevelopView?
     var developmentKeepsake: DevelopmentKeepsake?
+    /// Also save each frame as its own file (2026-11-14). Optional for back-compat: older records read off.
+    var separateFiles: SeparateFiles?
 
     /// The drawer this shot draws with: the frozen id, or sd-turbo for a pre-drawer-choice record.
     /// The one place the nil-means-sd-turbo rule lives — never read `drawerRepoID` directly.
@@ -106,6 +108,7 @@ nonisolated struct ShotConfig: Codable, Sendable, Equatable {
     var effectiveHandStrength: Double { handStrength ?? 0.6 }
     var effectiveDevelopView: DevelopView { developView ?? .working }
     var effectiveKeepsake: DevelopmentKeepsake { developmentKeepsake ?? .off }
+    var effectiveSeparateFiles: SeparateFiles { separateFiles ?? .off }
 }
 
 extension ShotConfig {
@@ -125,7 +128,8 @@ extension ShotConfig {
             // Draw only if this layout will keep the drawing (`Layout.usesDrawing`). Otherwise the
             // hand would spend minutes and heat on a picture the compositor throws away. Frozen here,
             // so the shot record honestly says it doesn't draw, and it never waits on a missing hand.
-            drawsThirdFrame: allowDraw && s.drawsThirdFrame && layout.usesDrawing,
+            // (Or if the drawing will be saved as its own file.)
+            drawsThirdFrame: allowDraw && s.drawsThirdFrame && (layout.usesDrawing || s.separateFiles != .off),
             drawerRepoID: s.selectedDrawer,
             systemPrompt: s.systemPrompt,
             temperature: s.temperature,
@@ -138,7 +142,8 @@ extension ShotConfig {
             handPrompt: s.handPrompt,
             handStrength: s.handStrength,
             developView: s.developView,
-            developmentKeepsake: s.developmentKeepsake
+            developmentKeepsake: s.developmentKeepsake,
+            separateFiles: s.separateFiles
         )
     }
 }
@@ -767,6 +772,12 @@ final class DarkRoomWorker {
             cameraLog("DARKROOM: \(config.layout.rawValue) had nothing to show for shot \(shot.id); saving it as \(fallback.rawValue)")
             frames = Darkroom.develop(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
                                       place: shot.place, layout: fallback, date: shot.capturedAt)
+        }
+        // And, if asked, each frame as its own file beside the print.
+        if config.effectiveSeparateFiles != .off {
+            frames += Darkroom.separate(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
+                                        place: shot.place, date: shot.capturedAt,
+                                        square: config.effectiveSeparateFiles == .square)
         }
 
         // The invariant's one exit: delete ONLY after Photos confirms the save. Any failure
