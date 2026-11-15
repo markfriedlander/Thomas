@@ -118,7 +118,8 @@ enum Shot {
 
         // The full perception — always what frame 2 shows by default, and the fallback for
         // `wordsForHand` in every early return below.
-        let fullWords = perception.wireText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fullWords = perception.printableText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if case .broke(let reason) = perception { cameraLog("SHOT: the eye broke (\(reason)); no words printed or drawn") }
         DevelopTrace.shared.noteEyeWords(fullWords)   // the Developer Tray shows them as soon as they exist
 
         guard config.drawsThirdFrame else { return (perception, nil, fullWords) }

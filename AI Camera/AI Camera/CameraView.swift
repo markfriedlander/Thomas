@@ -520,7 +520,10 @@ struct CameraView: View {
     // MARK: - Pressing it
 
     private func shoot() async {
-        guard let photograph = await lens.capture() else { return }
+        guard let photograph = await lens.capture() else {
+            DarkRoomWorker.shared.noteCouldNotKeepShot()   // said, not silently dropped (review, 2026-11-14)
+            return
+        }
         await develop(photograph)
     }
 

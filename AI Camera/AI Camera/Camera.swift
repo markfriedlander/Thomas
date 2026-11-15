@@ -66,7 +66,10 @@ final class Lens: NSObject {
     private let output = AVCapturePhotoOutput()
     private var device: AVCaptureDevice?
     private var configured = false
-    private var pending: CheckedContinuation<AVCapturePhoto?, Never>?
+    /// One waiting capture per press, keyed by its settings' uniqueID. A single slot lost a shot when two
+    /// presses overlapped: the second press overwrote the first's continuation, which then waited forever,
+    /// and the first photo was handed to the second press (independent review, 2026-11-14).
+    private var pending: [Int64: CheckedContinuation<AVCapturePhoto?, Never>] = [:]
 
     /// Apple's answer to "which way is the phone pointing."
     ///
@@ -741,10 +744,10 @@ final class Lens: NSObject {
     /// declares about itself. Downstream is handed pixels and nothing else.
     func capture() async -> CGImage? {
         let photo: AVCapturePhoto? = await withCheckedContinuation { cont in
-            pending = cont
             // Explicitly the largest photo the format takes (item 17: a 16:9 format's full 16:9 size).
             let settings = AVCapturePhotoSettings()
             settings.maxPhotoDimensions = output.maxPhotoDimensions
+            pending[settings.uniqueID] = cont
             output.capturePhoto(with: settings, delegate: self)
         }
         guard let photo, let cg = photo.cgImageRepresentation() else { return nil }
@@ -757,8 +760,15 @@ extension Lens: @preconcurrency AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput,
                      didFinishProcessingPhoto photo: AVCapturePhoto,
                      error: Error?) {
-        pending?.resume(returning: error == nil ? photo : nil)
-        pending = nil
+        pending.removeValue(forKey: photo.resolvedSettings.uniqueID)?.resume(returning: error == nil ? photo : nil)
+    }
+
+    /// The capture's last callback. If it ended without a photo (an error before processing), the press
+    /// still gets its answer instead of waiting forever.
+    func photoOutput(_ output: AVCapturePhotoOutput,
+                     didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+                     error: Error?) {
+        pending.removeValue(forKey: resolvedSettings.uniqueID)?.resume(returning: nil)
     }
 }
 
@@ -797,6 +807,7 @@ final class Place: NSObject {
 
     private let manager = CLLocationManager()
     private var lastGeocoded: CLLocation?
+    private var lastLookupAttempt: Date?
 
     override init() {
         super.init()
@@ -855,7 +866,13 @@ final class Place: NSObject {
         if Settings.shared.stampRawCoordinates { return }
         // Don't re-geocode for small moves; the place name doesn't change block to block.
         if let last = lastGeocoded, location.distance(from: last) < 500 { return }
+        // Offline, a failed lookup is retried at most once a minute.
+        if let tried = lastLookupAttempt, Date().timeIntervalSince(tried) < 60 { return }
+        lastLookupAttempt = Date()
         lastGeocoded = location
+        // Moved on: the old city no longer describes where we are. Better no place than a wrong one
+        // (review, 2026-11-14: offline, an earlier city stuck to a new place's photo).
+        name = nil
 
         // MapKit, not CLGeocoder — the latter is deprecated as of iOS 26.
         //
@@ -866,7 +883,11 @@ final class Place: NSObject {
         Task { @MainActor [weak self] in
             guard let request = MKReverseGeocodingRequest(location: location),
                   let items = try? await request.mapItems,
-                  let place = items.first?.addressRepresentations else { return }
+                  let place = items.first?.addressRepresentations else {
+                self?.lastGeocoded = nil   // failed: let the next fix try again (rate-limited above)
+                return
+            }
+            self?.lastLookupAttempt = nil
             self?.name = place.cityWithContext ?? place.regionName
         }
     }

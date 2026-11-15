@@ -61,6 +61,15 @@ extension Perception {
         case .broke(let reason):           return reason
         }
     }
+
+    /// What may be printed as frame 2 or handed to the hand. A refusal or a filter's block is the
+    /// machine's own answer and is content; a breakage is an engineering error, never a perception, so it
+    /// prints nothing (independent review, 2026-11-14: "The model isn't ready yet..." was being printed
+    /// as the words and drawn). `wireText` still carries the reason for the log and the antenna.
+    nonisolated var printableText: String {
+        if case .broke = self { return "" }
+        return wireText
+    }
 }
 
 /// One shutter press worth of seeing.

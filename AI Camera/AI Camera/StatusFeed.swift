@@ -72,6 +72,18 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
     /// spinner, because this is a deliberate pause, not active work; the thermometer (rather than a
     /// snowflake) keeps it consistent with Hal's thermal indicator across the studio. Highest
     /// precedence: when the phone is hot this is *why* nothing is progressing, so it speaks over the count.
+    /// Photos access refused: shots wait, and the Dark Room shows how to allow it.
+    static let photosRefused = StatusMessage(kind: .darkRoom,
+                                             icon: "photo.badge.exclamationmark",
+                                             text: "Can't save to Photos",
+                                             tap: .openDarkRoom)
+
+    /// A press that couldn't be kept (an empty frame, or no room to store it). Shown for a few seconds.
+    static let couldNotKeep = StatusMessage(kind: .darkRoom,
+                                            icon: "exclamationmark.circle",
+                                            text: "Couldn't keep that shot",
+                                            tap: .openDarkRoom)
+
     static let cooling = StatusMessage(kind: .darkRoom,
                                        icon: "thermometer.high",
                                        text: "Cooling down…",
@@ -103,7 +115,8 @@ nonisolated struct StatusMessage: Identifiable, Equatable {
     static func blocked(count: Int) -> StatusMessage {
         StatusMessage(kind: .darkRoom,
                       icon: "exclamationmark.triangle.fill",
-                      text: count == 1 ? "1 blocked" : "\(count) blocked",
+                      // Not "blocked": that is also the word for Apple's safety filter (review, 2026-11-14).
+                      text: count == 1 ? "1 needs a model" : "\(count) need a model",
                       tap: .openDarkRoom)
     }
 

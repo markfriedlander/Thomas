@@ -20,6 +20,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import UIKit   // the worker composites [UIImage] and saves to Photos
+import Photos
 import SharedModelStoreKit
 
 // MARK: - Frozen render config
@@ -172,6 +173,12 @@ nonisolated struct ShotRecord: Codable, Sendable, Identifiable {
     /// installed (e.g. "Qwen3.5-2B" or "SD-Turbo"), so the row can say exactly what to re-download.
     /// `nil` whenever the shot is not blocked. Also optional for the same no-migration reason.
     var blockedModel: String? = nil
+
+    /// When the picture was really taken, for a picture loaded from the library (its own EXIF date).
+    /// `capturedAt` stays the moment it joined the queue, which keeps the order picked; the footer
+    /// testifies to `takenAt` when there is one (review, 2026-11-14: loaded pictures claimed today).
+    var takenAt: Date? = nil
+    var footerDate: Date { takenAt ?? capturedAt }
 }
 
 /// Coarse status. `done` is never a value — a done shot is deleted, not marked. `blocked` means
@@ -215,12 +222,13 @@ actor DarkRoomStore {
     /// Persist the photo + record, then return the record. **This is the durability point:** once
     /// this returns, the shot survives a crash. Photo is written first, then the record — so a
     /// record on disk always has its photo.
-    func enqueue(photoData: Data, config: ShotConfig, place: String?) throws -> ShotRecord {
+    func enqueue(photoData: Data, config: ShotConfig, place: String?, takenAt: Date? = nil) throws -> ShotRecord {
         let id = UUID()
         let photoName = "\(id.uuidString).png"
         try photoData.write(to: dir.appendingPathComponent(photoName), options: .atomic)
-        let record = ShotRecord(id: id, photoFile: photoName, config: config,
+        var record = ShotRecord(id: id, photoFile: photoName, config: config,
                                 capturedAt: Date(), place: place, status: .pending)
+        record.takenAt = takenAt
         try writeRecord(record)
         return record
     }
@@ -429,6 +437,26 @@ final class DarkRoomWorker {
     /// and persists across foregrounds until the user resumes. Mirrors into the pill (state 4).
     private(set) var isPaused = false { didSet { syncStatusFeed() } }
 
+    /// True when Thomas may not add to Photos (refused or restricted). Checked before developing, so
+    /// nothing is developed for nowhere: before, a refused permission left "Developing" spinning and
+    /// re-ran every shot on each return to the app (independent review, 2026-11-14).
+    private(set) var photosRefused = false { didSet { syncStatusFeed() } }
+
+    /// Set for a few seconds when a press could not be kept (the frame came back empty, or couldn't be
+    /// stored: a full disk), so the camera says so instead of silently dropping it.
+    private(set) var couldNotKeepShot = false { didSet { syncStatusFeed() } }
+    private var couldNotKeepTask: Task<Void, Never>?
+
+    func noteCouldNotKeepShot() {
+        couldNotKeepShot = true
+        couldNotKeepTask?.cancel()
+        couldNotKeepTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.couldNotKeepShot = false
+        }
+    }
+
     /// The current drain task, held so `suspendForBackground()` can await it reaching a safe stop
     /// (the in-flight op finished, nothing saved) before the app unloads models.
     private var loopTask: Task<Void, Never>? = nil
@@ -455,7 +483,11 @@ final class DarkRoomWorker {
         //   3. developing N — shots actively in the bath
         //   4. N blocked — shown only when nothing is developing (blocked shots are the whole story)
         //   5. nothing to report → clear, so the pill disappears
-        if isCoolingDown {
+        if couldNotKeepShot {
+            StatusFeed.shared.publish(.couldNotKeep)
+        } else if photosRefused && (developingCount > 0 || blockedCount > 0) {
+            StatusFeed.shared.publish(.photosRefused)
+        } else if isCoolingDown {
             StatusFeed.shared.publish(.cooling)
         } else if isPaused && (developingCount > 0 || blockedCount > 0) {
             StatusFeed.shared.publish(.paused)
@@ -513,20 +545,22 @@ final class DarkRoomWorker {
     /// - Parameter kickAfter: false enqueues WITHOUT waking the worker, for /capture's X-Hold resume
     ///   test. Returns the stored record id, or nil if the frame could not be encoded or stored.
     @discardableResult
-    func enqueue(_ photograph: CGImage, place: String?,
+    func enqueue(_ photograph: CGImage, place: String?, takenAt: Date? = nil,
                  drawsThirdFrame: Bool? = nil,
                  layoutOverride: Layout? = nil,
                  kickAfter: Bool = true) async -> UUID? {
         let config = ShotConfig.capture(layout: layoutOverride, allowDraw: drawsThirdFrame ?? true)
         guard let photoData = ShotPhoto.encode(photograph) else {
             cameraLog("INTAKE: could not encode the frame — shot dropped")
+            noteCouldNotKeepShot()
             return nil
         }
         let record: ShotRecord
         do {
-            record = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place)
+            record = try await DarkRoomStore.shared.enqueue(photoData: photoData, config: config, place: place, takenAt: takenAt)
         } catch {
             cameraLog("INTAKE: could not enqueue the shot — \(error.localizedDescription)")
+            noteCouldNotKeepShot()
             return nil
         }
         if kickAfter { kick() }
@@ -608,6 +642,14 @@ final class DarkRoomWorker {
                 developingCount = ready.count
                 blockedCount = after.filter { $0.status == .blocked }.count
                 guard let shot = ready.first else { break }
+                // Nowhere to put it? Ask (the first time), and stop if refused: the pill says why.
+                var access = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+                if access == .notDetermined { access = await PHPhotoLibrary.requestAuthorization(for: .addOnly) }
+                photosRefused = !(access == .authorized || access == .limited)
+                if photosRefused {
+                    cameraLog("DARKROOM: Photos access refused; holding \(ready.count) shot(s) until it is allowed")
+                    return
+                }
                 let saved = await develop(shot)
                 // A failed save (e.g. Photos permission denied) will fail again immediately; stop
                 // rather than burn the battery re-developing the same shot. Nothing is lost — it
@@ -640,9 +682,15 @@ final class DarkRoomWorker {
 
     /// The display name of a model this shot needs but that isn't installed, or nil if everything
     /// it needs is present. The eye is always required; the drawer only when the shot draws frame 3.
+    /// The name a shot waiting on Apple's eye carries (the Dark Room explains it differently from a download).
+    nonisolated static let appleIntelligenceName = "Apple Intelligence"
+
     nonisolated static func missingModel(for config: ShotConfig) -> String? {
         let eye = ModelCatalog.model(for: config.seer)
         if !eye.isInstalled { return eye.displayName }
+        // Apple's eye is always "installed" but can be not ready (still downloading after setup, or
+        // switched off). Hold the shot until it is, rather than develop it with no eye (2026-11-14).
+        if config.effectiveUseEye, case .apple = config.seer, !Readiness.current.isReady { return appleIntelligenceName }
         if config.drawsThirdFrame {
             // The frozen drawer, not a hardcoded sd-turbo — a shot taken with a different hand
             // blocks on that hand. An id with no catalog entry counts as missing too (name = id).
@@ -726,12 +774,12 @@ final class DarkRoomWorker {
                 let final = result.drawn?.cgImage
                 if keepsake.wantsSheet {
                     keepsakeImages.append(DeveloperTray.contactSheet(frames, final: final,
-                                                                     place: shot.place, date: shot.capturedAt))
+                                                                     place: shot.place, date: shot.footerDate))
                 }
                 if keepsake.wantsFlipbook {
                     do {
                         keepsakeVideos.append(try await DeveloperTray.flipbook(frames, final: final,
-                                                                               place: shot.place, date: shot.capturedAt))
+                                                                               place: shot.place, date: shot.footerDate))
                     } catch {
                         cameraLog("KEEPSAKE: flipbook failed - \(error.localizedDescription)")
                     }
@@ -751,7 +799,7 @@ final class DarkRoomWorker {
         // version the hand drew from. Same rule as the live shutter.
         currentStage = .saving
         let frameTwoWords = config.frameTwoShows == .fullPerception
-            ? result.perception.wireText
+            ? result.perception.printableText
             : result.wordsForHand
 
         // The footer testifies to when and where the photo was TAKEN — the frozen `capturedAt`
@@ -762,7 +810,7 @@ final class DarkRoomWorker {
                                       drawing: result.drawn?.cgImage,
                                       place: shot.place,
                                       layout: config.layout,
-                                      date: shot.capturedAt)
+                                      date: shot.footerDate)
         // A layout can need something this shot didn't make (Drawing only, and no drawing came; Words
         // only, and the eye said nothing). An empty print can't be saved, and a failed save leaves the
         // shot at the front of the queue to fail again on every kick, blocking everything behind it
@@ -771,12 +819,12 @@ final class DarkRoomWorker {
             let fallback = Layout.fallback(hasEye: !frameTwoWords.isEmpty, hasHand: result.drawn != nil)
             cameraLog("DARKROOM: \(config.layout.rawValue) had nothing to show for shot \(shot.id); saving it as \(fallback.rawValue)")
             frames = Darkroom.develop(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
-                                      place: shot.place, layout: fallback, date: shot.capturedAt)
+                                      place: shot.place, layout: fallback, date: shot.footerDate)
         }
         // And, if asked, each frame as its own file beside the print.
         if config.effectiveSeparateFiles != .off {
             frames += Darkroom.separate(photograph: photograph, words: frameTwoWords, drawing: result.drawn?.cgImage,
-                                        place: shot.place, date: shot.capturedAt,
+                                        place: shot.place, date: shot.footerDate,
                                         square: config.effectiveSeparateFiles == .square)
         }
 

@@ -211,6 +211,16 @@ struct DarkRoomView: View {
             List {
                 // Why nothing may be moving: the phone is too hot, or the user paused. (Blocked
                 // shots say so on their own row.) The pill shows the same condition from outside.
+                if worker.photosRefused {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Thomas isn't allowed to add to Photos, so shots are waiting here.", systemImage: "photo.badge.exclamationmark")
+                            .font(.footnote).foregroundStyle(.orange)
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            Link("Allow it in Settings", destination: url).font(.footnote.weight(.semibold))
+                        }
+                    }
+                    .darkRoomRow()
+                }
                 if worker.isCoolingDown {
                     Label("Cooling down - the \(ThisDevice.deviceKind) is too hot to develop. Shots resume automatically when it cools.",
                           systemImage: "snowflake")
@@ -364,6 +374,20 @@ struct DarkRoomView: View {
         Task { await DarkRoomWorker.shared.purgeAll(); await reload() }
     }
 
+    /// The picture's own "taken" date, from its EXIF (with its time-zone offset when it has one).
+    static func dateTaken(_ props: [CFString: Any]?) -> Date? {
+        guard let exif = props?[kCGImagePropertyExifDictionary] as? [CFString: Any],
+              let text = exif[kCGImagePropertyExifDateTimeOriginal] as? String else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        if let offset = exif[kCGImagePropertyExifOffsetTimeOriginal] as? String {
+            f.dateFormat = "yyyy:MM:dd HH:mm:ssxxx"
+            if let d = f.date(from: text + offset) { return d }
+        }
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return f.date(from: text)
+    }
+
     private func watchAll() {
         if let id = worker.currentShotID { watching = WatchTarget(id: id, followsQueue: true) }
     }
@@ -387,8 +411,10 @@ struct DarkRoomView: View {
                 let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
                 let raw = props?[kCGImagePropertyOrientation] as? UInt32 ?? 1
                 let orientation = CGImagePropertyOrientation(rawValue: raw) ?? .up
-                // A picture imported from the library has no capture location, so no place stamp.
-                if await DarkRoomWorker.shared.enqueue(cg.uprighted(orientation), place: nil) != nil { added += 1 }
+                // A picture imported from the library has no capture location, so no place stamp. Its
+                // footer date is when it was taken (its EXIF), not when it was loaded.
+                if await DarkRoomWorker.shared.enqueue(cg.uprighted(orientation), place: nil,
+                                                       takenAt: Self.dateTaken(props)) != nil { added += 1 }
                 await reload()
             }
             cameraLog("INTAKE: \(added) of \(items.count) library pictures joined the queue")
@@ -529,7 +555,10 @@ private struct DarkRoomRow: View {
 
     private var subText: String? {
         if record.status == .blocked {
-            return "Re-download it in the Model Library to continue."
+            if record.blockedModel == DarkRoomWorker.appleIntelligenceName {
+                return Readiness.current.explanation + " It develops on its own once Apple Intelligence is ready."
+            }
+            return "Download it in the Model Library to continue."
         }
         var parts: [String] = []
         if let place = record.place { parts.append(place) }
