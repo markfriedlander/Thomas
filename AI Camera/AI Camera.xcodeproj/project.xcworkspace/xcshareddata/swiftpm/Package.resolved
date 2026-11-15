@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/markfriedlander/SharedModelStoreKit",
       "state" : {
-        "revision" : "7eaef9a42061c3eb14401d5d3f5b936ef301aa2f",
-        "version" : "1.4.0"
+        "revision" : "8b1038de1507bf0a2098c9e1b3239397df2139a4",
+        "version" : "1.5.0"
       }
     },
     {

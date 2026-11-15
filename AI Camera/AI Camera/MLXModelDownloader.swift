@@ -149,51 +149,38 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     // needed; and nothing checked what arrived (an error page could be saved as weights). Now every download
     // persists its files and their sizes from Hugging Face, the list survives a relaunch, and a model is
     // finished only when every file is on disk at its expected size.
-    private let expectedFilesDefaultsKey = "bgDownloadExpectedFiles.v1"
+    //
+    // Since SharedModelStoreKit 1.5.0 (2026-11-14, Mark: "maybe we should do it and then just have Hal adopt it
+    // next") that list lives in the model's own folder, written by `SharedModelStore.markDownloadStarted(_:expecting:)`,
+    // and the store itself refuses to mark a model finished, or call it ready, while a listed file isn't whole. So
+    // this downloader can't get "finished" wrong even if it tried, and every app in the family can read the list.
+    // (Thomas first kept it in UserDefaults, "bgDownloadExpectedFiles.v1", for a few hours on the Mac only.)
 
-    /// modelID -> filename -> expected byte size (0 = unknown).
-    private var expectedFiles: [String: [String: Int64]] {
-        get { (UserDefaults.standard.dictionary(forKey: expectedFilesDefaultsKey) as? [String: [String: Int64]])
-              ?? (UserDefaults.standard.dictionary(forKey: expectedFilesDefaultsKey) as? [String: [String: NSNumber]])?
-                  .mapValues { $0.mapValues { $0.int64Value } } ?? [:] }
-        set { UserDefaults.standard.set(newValue.mapValues { $0.mapValues { NSNumber(value: $0) } }, forKey: expectedFilesDefaultsKey) }
+    /// filename -> expected byte size (0 = unknown) for a download of `modelID`, from the model's folder.
+    private func expected(_ modelID: String) -> [String: Int64]? {
+        SharedModelStore.expectedFiles(sharedStoreKey(forRepoID: modelID))
     }
 
     /// The files a download of `modelID` is expected to contain, if one is on record.
     func expectedFileNames(for modelID: String) -> [String]? {
-        expectedFiles[modelID].map { Array($0.keys).sorted() }
-    }
-
-    private func forgetExpected(_ modelID: String) {
-        var all = expectedFiles
-        all.removeValue(forKey: modelID)
-        expectedFiles = all
+        expected(modelID).map { Array($0.keys).sorted() }
     }
 
     /// Is this file on disk whole? Its expected size when known, else simply not empty.
     private func isWhole(_ filename: String, of modelID: String) -> Bool {
-        let url = modelDirectory(for: modelID).appendingPathComponent(filename)
-        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64 else { return false }
-        let expected = expectedFiles[modelID]?[filename] ?? 0
-        return expected > 0 ? size == expected : size > 0
+        SharedModelStore.isFileWhole(sharedStoreKey(forRepoID: modelID), file: filename,
+                                     expectedBytes: expected(modelID)?[filename] ?? 0)
     }
 
     /// The files still to come, rebuilt from the persisted list (after a relaunch the in-memory one is empty).
     private func restoredPending(_ modelID: String) -> Set<String> {
-        guard let files = expectedFiles[modelID] else { return [] }
+        guard let files = expected(modelID) else { return [] }
         return Set(files.keys.filter { !isWhole($0, of: modelID) })
     }
 
     /// Every expected file present at its expected size, or the ones that aren't, with why.
     private func verifyWhole(_ modelID: String) -> [String: String] {
-        guard let files = expectedFiles[modelID] else { return [:] }
-        var problems: [String: String] = [:]
-        for (name, expected) in files where !isWhole(name, of: modelID) {
-            let url = modelDirectory(for: modelID).appendingPathComponent(name)
-            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
-            problems[name] = size == nil ? "missing" : "\(size!) bytes, expected \(expected)"
-        }
-        return problems
+        SharedModelStore.problemFiles(sharedStoreKey(forRepoID: modelID))
     }
 
     /// Retries of a file whose transfer failed, keyed "modelID/filename".
@@ -315,6 +302,8 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
 
     private override init() {
         super.init()
+        // The list's few-hours home before SharedModelStoreKit 1.5.0 (Mac only); the model folder holds it now.
+        UserDefaults.standard.removeObject(forKey: "bgDownloadExpectedFiles.v1")
         cameraLog("HALDEBUG-BGDL: BackgroundDownloadCoordinator init; will lazily create URLSessions (fg + bg id=\(Self.backgroundSessionID))")
         // Touch the lazy background session so iOS immediately replays any
         // pending events from a previous app instance. Foreground session
@@ -431,9 +420,9 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
         SharedModelStore.excludeFromBackup(sharedStoreKey(forRepoID: modelID))
 
         // What this download must contain, persisted so a relaunch or a restart can't lose it.
-        var all = expectedFiles
-        all[modelID] = Dictionary(mlxFiles.map { ($0, lastTreeSizes[$0] ?? 0) }, uniquingKeysWith: { a, _ in a })
-        expectedFiles = all
+        SharedModelStore.markDownloadStarted(sharedStoreKey(forRepoID: modelID),
+                                             expecting: Dictionary(mlxFiles.map { ($0, lastTreeSizes[$0] ?? 0) },
+                                                                   uniquingKeysWith: { a, _ in a }))
         retriesByFile = retriesByFile.filter { !$0.key.hasPrefix(modelID + "/") }
 
         // Initialize per-model byte tracking so progress can be computed.
@@ -656,7 +645,7 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
                 cameraLog("HALDEBUG-BGDL: Moved \(context.filename) → \(target.path) (\(kind == .foreground ? "fg" : "bg") task \(downloadTask.taskIdentifier))")
                 if !isWhole(context.filename, of: context.modelID) {
                     let got = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? nil
-                    moveError = "arrived at \(got ?? 0) bytes, expected \(expectedFiles[context.modelID]?[context.filename] ?? 0)"
+                    moveError = "arrived at \(got ?? 0) bytes, expected \(expected(context.modelID)?[context.filename] ?? 0)"
                     try? FileManager.default.removeItem(at: target)
                     cameraLog("HALDEBUG-BGDL: ❌ \(context.filename) is the wrong size; removed")
                 }
@@ -712,7 +701,6 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
     private func finishModel(_ modelID: String) {
         let problems = verifyWhole(modelID)
         if problems.isEmpty {
-            forgetExpected(modelID)
             notifyModelDownloadComplete(modelID: modelID)
         } else {
             notifyModelDownloadFailed(modelID: modelID, failures: problems)
@@ -741,7 +729,6 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             cameraLog("HALDEBUG-BGDL: removed partial \(modelID) so nothing mistakes it for installed")
         }
         SharedModelStore.releaseDownloadLock(modelID: key)
-        forgetExpected(modelID)
         filesPendingByModel.removeValue(forKey: modelID)
 
         let first = failures.first.map { "\($0.key) — \($0.value)" } ?? "unknown error"
@@ -951,7 +938,6 @@ class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate, Obser
             self.bytesWrittenByModel.removeValue(forKey: modelID)
             self.bytesExpectedByModel.removeValue(forKey: modelID)
             self.filesFailedByModel.removeValue(forKey: modelID)
-            self.forgetExpected(modelID)
         }
     }
 
@@ -1651,10 +1637,10 @@ class MLXModelDownloader: ObservableObject {
     /// claim) so a completion delivered after a background relaunch still clears
     /// the lock.
     private func performLockedDownload(modelID: String, repoID: String, sizeGB: Double?, files: [String]?) async {
-        // "Begun, not finished", in the model's own folder (SharedModelStoreKit 1.4.0): if Thomas is
-        // killed or the network drops before the end, every app in the family reads this copy as NOT
-        // ready (isRepoReady) instead of offering a partial model. Cleared by markRepoComplete.
-        SharedModelStore.markDownloadStarted(sharedStoreKey(forRepoID: modelID))
+        // "Begun, not finished" is written in the model's own folder by the coordinator's startDownload, with the
+        // file list (SharedModelStoreKit 1.5.0, markDownloadStarted(_:expecting:)), as soon as the list is known.
+        // Not here with the plain 1.4.0 form: that would erase a list an interrupted attempt left, which the
+        // auto-resume reads to fetch the same files.
         // Start download
         await MainActor.run {
             currentDownloadModelID = modelID
