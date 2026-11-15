@@ -198,6 +198,7 @@ struct PrivacyState: Equatable {
 /// (this two-axis, state-aware form is his, 2026-07-28). Do not "align," "simplify," or reword it
 /// here or there without him.
 struct PrivacyPopover: View {
+    static let bodyGray = Color(white: 0.72)
     let state: PrivacyState
     /// Invoked when the user taps "Preferences": the caller dismisses the popover and opens
     /// Preferences. Preferences is the door to BOTH remedies the popover names — pick a downloaded
@@ -205,19 +206,34 @@ struct PrivacyPopover: View {
     let onOpenPreferences: () -> Void
 
     var body: some View {
+        // Fits, or scrolls: at the largest text sizes the statement is taller than the screen, and the
+        // popover cut it off top and bottom, Preferences link and all (largest-size check, 2026-11-15).
+        // The words are unchanged.
+        ViewThatFits(in: .vertical) {
+            statement
+            ScrollView { statement }
+        }
+    }
+
+    private var statement: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Only the glyph changes with state. No title text.
             Image(systemName: state.isLocked ? "lock" : "lock.open")
                 .font(.headline)
+                // Named as the lock button is; unnamed, VoiceOver read the symbol ("Unlock", audit, 2026-11-15).
+                .accessibilityLabel(state.isLocked ? "Privacy: stays on device" : "Privacy: may leave device")
 
+            // A light gray measured against the popover's dark card: .secondary drew (105,105,105) on (28,28,28),
+            // 3.1 to 1, under Apple's 4.5 minimum for text this size (phone audit, 2026-11-15, items 1-2, measured
+            // from the screenshot's pixels). 0.72 white is about 8 to 1. The words are unchanged.
             Text(markdown(state.lookLine))
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(Self.bodyGray)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(markdown(state.placeLine))
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(Self.bodyGray)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button(action: onOpenPreferences) {
@@ -226,8 +242,11 @@ struct PrivacyPopover: View {
                     Image(systemName: "arrow.right")
                 }
                 .font(.subheadline.weight(.medium))
+                .frame(minHeight: 44).contentShape(Rectangle())   // a finger's 44 pt (audit, 2026-11-15)
             }
-            .padding(.top, 2)
+            // The 44 pt target is 26 pt taller than the line it draws; hand 13 back above (less the old 2 pt
+            // gap) and 13 below, so the popover keeps its size (compared pixel by pixel, 2026-11-15).
+            .padding(.top, -11).padding(.bottom, -13)
         }
         .padding(16)
         .frame(width: 300)

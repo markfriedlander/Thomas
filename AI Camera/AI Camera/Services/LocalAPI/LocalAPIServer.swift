@@ -1226,6 +1226,7 @@ extension LocalAPIServer {
                                "message": "Opened Preferences and pushed the Model Library, the way tapping Browse Model Library does. Screenshot with devicectl."]))
         case "capture", "camera", "home":
             bridge.dismissToCapture = true
+            bridge.closePopovers += 1   // and a tap outside any open popover, as a person backing out does
             return (200, json(["screen": "capture", "opened": true,
                                "message": "Backed out to the bare capture screen the way tapping Done does. Screenshot with devicectl."]))
         case "privacy", "lock":

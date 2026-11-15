@@ -39,6 +39,7 @@ enum Safelight {
 
 struct DarkRoomView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var worker = DarkRoomWorker.shared
     @State private var settings = Settings.shared
     @State private var records: [ShotRecord] = []
@@ -74,6 +75,9 @@ struct DarkRoomView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
+                    // The top bar limits how large its title grows (item 71); a long press shows it large, as
+                    // Apple's own bar titles do.
+                    .accessibilityShowsLargeContentViewer()
                 }
                 ToolbarItem(placement: .topBarLeading) { Button(role: .close) { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { if !records.isEmpty || !negatives.isEmpty { EditButton() } }
@@ -83,7 +87,9 @@ struct DarkRoomView: View {
                         .accessibilityLabel("About the Dark Room")
                 }
             }
-            .safeAreaInset(edge: .bottom) { loadBar }
+            // The bar floats at the bottom, except in an empty room at the accessibility text sizes, where it
+            // follows the message instead (see `content`).
+            .safeAreaInset(edge: .bottom) { if !loadBarFollowsMessage { loadBar } }
             // Full screen, not pushed inside this sheet: the tray's picture is the whole canvas.
             .fullScreenCover(item: $watching) { target in DeveloperTrayView(shotID: target.id, followsQueue: target.followsQueue) }
         }
@@ -162,51 +168,93 @@ struct DarkRoomView: View {
     // MARK: - The top controls (Mark: pause + purge, at the top)
 
     private var controlBar: some View {
-        HStack(spacing: 10) {
-            Button {
-                worker.isPaused ? worker.resume() : worker.pause()
-            } label: {
-                Label(worker.isPaused ? "Resume" : "Pause", systemImage: worker.isPaused ? "play.fill" : "pause.fill")
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
-            }
-            // More than one shot in the bath: watch them develop one after another (Mark, 2026-11-14).
-            // Watch on a row still watches just that shot.
-            // "The queue", not "all" (Mark): it follows the shots still developing, not the ones already done.
-            if worker.currentShotID != nil && worker.developingCount > 1 {
-                Button(action: watchAll) {
-                    Label("Watch the queue", systemImage: "play.fill")
-                        .fontWeight(.bold)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(Safelight.red, in: Capsule())
-                }
-            }
-            Button(role: .destructive) {
-                confirmingPurgeAll = true
-            } label: {
-                Label("Purge", systemImage: "trash")
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
-            }
-            .disabled(records.isEmpty)
+        // Side by side while they fit on one line each; stacked when they don't, so the words grow with the
+        // reader's text size all the way. Before, they stopped growing past the largest standard size (capped,
+        // with a long-press magnifier), which Apple's audit rightly reported as text that doesn't grow (phone
+        // audit, 2026-11-15, items 72 and 74). At ordinary sizes nothing changes.
+        ViewThatFits(in: .horizontal) {
+            // No line limit: ViewThatFits already picks the stack before a word would wrap, and a one-line limit
+            // read to Apple's audit as text that will clip (re-audit, 2026-11-15).
+            HStack(spacing: 10) { controlButtons }
+            VStack(alignment: .leading, spacing: 0) { controlButtons }
         }
         .font(.subheadline.weight(.semibold))
         .foregroundStyle(.white)
         .buttonStyle(.plain)
         .padding(.horizontal)
-        .padding(.vertical, 10)
+        .padding(.vertical, 5)   // was 10; the buttons' taller touch areas took the other 5
+    }
+
+    @ViewBuilder private var controlButtons: some View {
+        Button {
+            worker.isPaused ? worker.resume() : worker.pause()
+        } label: {
+            Label(worker.isPaused ? "Resume" : "Pause", systemImage: worker.isPaused ? "play.fill" : "pause.fill")
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
+                .padding(.vertical, 5).contentShape(Rectangle())   // 44 pt to press (audit walk, 2026-11-15)
+        }
+        .accessibilityShowsLargeContentViewer()
+        // More than one shot in the bath: watch them develop one after another (Mark, 2026-11-14).
+        // Watch on a row still watches just that shot.
+        // "The queue", not "all" (Mark): it follows the shots still developing, not the ones already done.
+        if worker.currentShotID != nil && worker.developingCount > 1 {
+            Button(action: watchAll) {
+                Label("Watch the queue", systemImage: "play.fill")
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Safelight.red, in: Capsule())
+                    .padding(.vertical, 5).contentShape(Rectangle())
+            }
+            .accessibilityShowsLargeContentViewer()
+        }
+        Button(role: .destructive) {
+            confirmingPurgeAll = true
+        } label: {
+            Label("Purge", systemImage: "trash")
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .overlay(Capsule().strokeBorder(.white.opacity(0.3), lineWidth: 0.5))
+                .padding(.vertical, 5).contentShape(Rectangle())   // 44 pt to press (audit walk, 2026-11-15)
+        }
+        .disabled(records.isEmpty)
+        .accessibilityShowsLargeContentViewer()
     }
 
     // MARK: - The list (or the empty state)
 
+    /// An empty room at an accessibility text size: the "Load pictures" button follows the message, inside the
+    /// scroll, instead of floating over it. Everywhere else it floats at the bottom, as designed.
+    private var loadBarFollowsMessage: Bool {
+        records.isEmpty && negatives.isEmpty && typeSize.isAccessibilitySize
+    }
+
+    private var emptyRoom: some View {
+        ContentUnavailableView {
+            Label("The dark room is empty", systemImage: "tray")
+        } description: {
+            Text("Shots you take appear here while they develop, then land in Photos. You can also load pictures to develop below.")
+        }
+    }
+
     @ViewBuilder private var content: some View {
         if records.isEmpty && negatives.isEmpty {
-            ContentUnavailableView {
-                Label("The dark room is empty", systemImage: "tray")
-            } description: {
-                Text("Shots you take appear here while they develop, then land in Photos. You can also load pictures to develop below.")
+            // Always in a scroll area at least as tall as the space: centred when it fits (as before), scrolling
+            // when it doesn't, and never under the "Load pictures" bar. The earlier "fits, or scrolls" choice
+            // (ViewThatFits) picked "fits" at the largest text size because the empty-state view reports a height
+            // it then overflows, and the words ran under the bar (phone audit at the largest size, 2026-11-15,
+            // items 73 and 75).
+            GeometryReader { space in
+                ScrollView {
+                    if loadBarFollowsMessage {
+                        // At the accessibility sizes the floating bar covered the message even when it scrolled
+                        // (seen on the phone at the largest size, 2026-11-15), so the button comes after it.
+                        VStack(spacing: 0) { emptyRoom; loadBar }
+                    } else {
+                        emptyRoom.frame(maxWidth: .infinity, minHeight: space.size.height)
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
                 // Why nothing may be moving: the phone is too hot, or the user paused. (Blocked

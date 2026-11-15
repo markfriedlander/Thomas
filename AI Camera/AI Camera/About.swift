@@ -128,7 +128,9 @@ struct AboutView: View {
                         .font(.subheadline).italic()
                         .foregroundStyle(.secondary)
                     Text("Version \(version) (\(build))")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        // .secondary, not .tertiary: the dimmest gray is below Apple's contrast minimum for small
+                        // text (phone audit, 2026-11-15, item 57, the likeliest of About's unnamed contrast flag).
+                        .font(.caption).foregroundStyle(.secondary)
                         .monospacedDigit()
                         .padding(.top, 2)
                 }

@@ -239,6 +239,11 @@ struct StatusFeedView: View {
         .onChange(of: antennaBridge.tapPreparingPill) { _, want in
             if want { showingPreparation = true; antennaBridge.tapPreparingPill = false }
         }
+        // Human-parity "back to capture": a person taps outside an open popover to close it.
+        .onChange(of: antennaBridge.closePopovers) { _, _ in
+            showingPrivacy = false
+            showingPreparation = false
+        }
         #endif
     }
 
@@ -258,13 +263,25 @@ struct StatusFeedView: View {
         feed.publish(.privacy(locked: privacyState.isLocked))
     }
 
+    /// The lock capsule's extra pressable margin: (44 - 29) / 2 and (44 - 41) / 2, rounded up.
+    private static let lockHitPadV: CGFloat = 8
+    private static let lockHitPadH: CGFloat = 2
+
     /// One capsule. Tappable only if the message names a tap action; otherwise a plain label.
     @ViewBuilder
     private func capsule(for message: StatusMessage) -> some View {
         switch message.tap {
         case .explainPrivacy:
-            Button { showingPrivacy = true } label: { capsuleBody(message) }
+            Button { showingPrivacy = true } label: {
+                // The lock draws 41 x 29 pt; Apple's minimum for a finger is 44 x 44 (the accessibility
+                // audit's list, 2026-11-15). Pad the pressable area to 44 x 44 and give the padding back
+                // to the layout, so the lock looks and sits exactly where it did.
+                capsuleBody(message)
+                    .padding(.vertical, Self.lockHitPadV).padding(.horizontal, Self.lockHitPadH)
+                    .contentShape(Rectangle())
+            }
                 .buttonStyle(.plain)
+                .padding(.vertical, -Self.lockHitPadV).padding(.horizontal, -Self.lockHitPadH)
                 // The lock is glyph-only; without a name VoiceOver read the symbol ("Unlock").
                 .accessibilityLabel(message.icon == "lock" ? "Privacy: stays on device" : "Privacy: may leave device")
                 .popover(isPresented: $showingPrivacy) {
@@ -275,6 +292,11 @@ struct StatusFeedView: View {
                             onOpenPreferences()
                         })
                     .presentationCompactAdaptation(.popover)
+                    // A solid dark card, in Thomas's dark look: the see-through glass took its colour from whatever
+                    // the camera saw, and over a bright scene the gray words fell below Apple's contrast minimum
+                    // (phone audit, 2026-11-15, items 1-3). The words are unchanged.
+                    .environment(\.colorScheme, .dark)
+                    .presentationBackground(Color(white: 0.11))
                 }
         case .openDarkRoom:
             Button { onOpenDarkRoom() } label: { capsuleBody(message) }
@@ -332,6 +354,12 @@ struct CaptureControlCircle: ViewModifier {
             .frame(width: 44, height: 44)
             .background(.black.opacity(0.35), in: Circle())
             .contentShape(Circle())
+            // The camera's buttons are fixed circles, like a camera body's. At the largest text sizes the glyph
+            // outgrew its circle and the top corner's two collided (largest-size check, 2026-11-15), so the
+            // glyph stops growing at the largest standard size; a long press shows it large, Apple's way for
+            // fixed bar controls.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .accessibilityShowsLargeContentViewer()
     }
 }
 

@@ -574,6 +574,11 @@ struct WordsPanel: View {
 
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    /// At the accessibility text sizes, rows stack and grids use fewer columns, so no word breaks mid-word
+    /// (largest-size check, 2026-11-15).
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The system prompt box's fixed height: 150 pt at the standard text size, scaled with it.
+    @ScaledMetric(relativeTo: .footnote) private var promptBoxHeight: CGFloat = 150
     @State private var settings = Settings.shared
     /// The one shared catalog (Hal's pattern): reading its refreshed models is what makes the names and
     /// availability here re-derive when a model is downloaded or deleted anywhere.
@@ -642,13 +647,13 @@ struct PreferencesView: View {
         }
         .task { lastShot = await Self.loadLastShot() }
         #if DEBUG
-        .onAppear { openForAntenna() }
+        // A help request already waiting when Preferences opens is honored after the page is shown (the page
+        // push waits 400 ms), the order a person goes: the page, then its "?". Before, only a request arriving
+        // while Preferences was open worked; one sent with Preferences closed did nothing (independent review,
+        // 2026-11-15).
+        .onAppear { openForAntenna(); openHelpForAntenna(afterMilliseconds: 700) }
         .onChange(of: AntennaUIBridge.shared.scrollPreferencesTo) { openForAntenna() }
-        .onChange(of: AntennaUIBridge.shared.prefsHelp) { _, key in
-            guard let key else { return }
-            help = helpTopic(key)
-            AntennaUIBridge.shared.prefsHelp = nil
-        }
+        .onChange(of: AntennaUIBridge.shared.prefsHelp) { _, _ in openHelpForAntenna(afterMilliseconds: 0) }
         #endif
         // ⏸️ PRESETS hidden since 2026-07-27 (Mark); on the after-2.0 list to reconsider as a whole-camera
         // preset (Mark, 2026-11-14 night: "I can see where I would put it"). `Preset`/`PresetPicker` are kept.
@@ -695,9 +700,12 @@ struct PreferencesView: View {
                 HStack(spacing: 28) {
                     NavigationLink("About Thomas") { AboutView.thomas }
                         .foregroundStyle(.white.opacity(0.8))
+                        .frame(minHeight: 44).contentShape(Rectangle())   // a finger's 44 pt (audit walk, 2026-11-15)
                     Button("Reset everything", role: .destructive) { confirmingReset = true }
                         .foregroundStyle(Color(red: 1, green: 0.41, blue: 0.38))
+                        .frame(minHeight: 44).contentShape(Rectangle())
                 }
+                .padding(.vertical, -13)   // the taller targets hand their extra height back
                 .font(.subheadline)
                 .frame(maxWidth: .infinity)
                 #if DEBUG
@@ -718,6 +726,9 @@ struct PreferencesView: View {
                 Text("PREFERENCES").font(.headline.weight(.heavy)).tracking(2)
                     .accessibilityLabel("Preferences")
                     .accessibilityAddTraits(.isHeader)
+                    // The top bar limits how large its title grows (item 7); a long press shows it large, as
+                    // Apple's own bar titles do.
+                    .accessibilityShowsLargeContentViewer()
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button(role: .close) { dismiss() }
@@ -756,6 +767,9 @@ struct PreferencesView: View {
             VStack(spacing: 6) {
                 tile()
                 Text(p.label).font(.caption.weight(.heavy)).tracking(1)
+                    // One word under a third of the width: at the largest sizes it shrinks rather than
+                    // breaking ("HAN / D", largest-size check, 2026-11-15).
+                    .lineLimit(1).minimumScaleFactor(0.5)
             }
         }
         .buttonStyle(.plain)
@@ -792,16 +806,30 @@ struct PreferencesView: View {
 
     private func summaryRow(_ p: PrefsPage) -> some View {
         Button { open(p) } label: {
-            HStack(spacing: 12) {
-                Text(p.label).font(.caption.weight(.heavy)).tracking(1).foregroundStyle(.secondary)
-                    .lineLimit(1).fixedSize()
-                    .frame(minWidth: 58, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(summary(p)).font(.callout.weight(.semibold))
-                    Text(summaryNote(p)).font(.footnote).foregroundStyle(.secondary)
+            let tag = Text(p.label).font(.caption.weight(.heavy)).tracking(1).foregroundStyle(.secondary)
+                .lineLimit(1).fixedSize()
+            let words = VStack(alignment: .leading, spacing: 2) {
+                Text(summary(p)).font(.callout.weight(.semibold))
+                Text(summaryNote(p)).font(.footnote).foregroundStyle(.secondary)
+            }
+            let chevron = Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            Group {
+                if typeSize.isAccessibilitySize {
+                    // The frame's name above its setting: beside it, the setting broke mid-word ("Place
+                    // name / s", largest-size check, 2026-11-15).
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) { tag; words }
+                        Spacer(minLength: 4)
+                        chevron
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        tag.frame(minWidth: 58, alignment: .leading)
+                        words
+                        Spacer(minLength: 4)
+                        chevron
+                    }
                 }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
             .contentShape(Rectangle())
@@ -919,8 +947,12 @@ struct PreferencesView: View {
                         .foregroundStyle(on ? Color.black : Color.white.opacity(0.85))
                         .padding(.horizontal, 12).padding(.vertical, 7)
                         .background(on ? Color.white : Color.clear, in: Capsule())
+                        // A finger needs 44 pt; the pill draws about 28 (accessibility audit, 2026-11-15). The
+                        // pressable area grows; the padding is handed back so the pills look the same.
+                        .padding(.vertical, 8).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.vertical, -8)
                 .accessibilityLabel(p.spokenName)
                 .accessibilityAddTraits(on ? .isSelected : [])
                 .accessibilityShowsLargeContentViewer { Text(p.label) }
@@ -944,6 +976,9 @@ struct PreferencesView: View {
                     ForEach(PictureShape.allCases, id: \.self) { Text($0.name).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                // Apple's larger size: at the regular size a real tap 5 pt above or below the 32 pt control did
+                // nothing (measured on the phone, 2026-11-15, items 13-14). Measured again after this change.
+                .controlSize(.large)
                 // Light, so the choice reads clearly on the dark card (the dark style was faint on the phone).
                 .environment(\.colorScheme, .light)
                 PrefLine(settings.pictureShape == .fourThree
@@ -964,6 +999,7 @@ struct PreferencesView: View {
                 Divider().overlay(Color.white.opacity(0.12))
             }
             Toggle("Stamp raw coordinates", isOn: $settings.stampRawCoordinates).font(.headline).tint(.green)
+                .toggleStyle(RowSwitchStyle())
             // Only a downloaded eye keeps the whole shot on the device; Apple's eye may use Apple's servers
             // when online (as the privacy lock says), so the promise is made only when it is true.
             PrefLine(settings.stampRawCoordinates
@@ -980,6 +1016,7 @@ struct PreferencesView: View {
     @ViewBuilder private var eyePage: some View {
         PrefCard {
             Toggle("Use the eye", isOn: $settings.useEye).font(.headline).tint(.green)
+                .toggleStyle(RowSwitchStyle())
             if settings.useEye {
                 Divider().overlay(Color.white.opacity(0.12))
                 modelRow(catalog.model(for: settings.seer), verb: "to look")
@@ -1008,8 +1045,13 @@ struct PreferencesView: View {
                     Spacer(minLength: 4)
                     Button { promptFocused = false; showingLayerOneInfo = true } label: {
                         Image(systemName: "info.circle").foregroundStyle(.tertiary)
+                            // At least 44 x 44 to press, without moving the line it sits on. 46, not 44: on a
+                            // 3x screen the frame's position snaps to whole pixels and an exact 44 measured
+                            // 43.7 (phone audit, 2026-11-15, item 20). It takes the same 20 pt of the line.
+                            .frame(width: 46, height: 46).contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .padding(-13)
                     .accessibilityLabel("Why this line is locked")
                 }
                 // A system prompt, called a system prompt, every word readable and changeable (Layer 2).
@@ -1017,7 +1059,10 @@ struct PreferencesView: View {
                     .font(.system(.footnote, design: .monospaced))
                     .scrollContentBackground(.hidden)
                     .padding(6)
-                    .frame(minHeight: 150)
+                    // A fixed height that scrolls (Mark, 2026-11-15: "fixed height that scrolls"). With only a
+                    // minimum it sometimes grew to the whole prompt, so the page changed shape visit to visit.
+                    // The height follows the text size, so large text still shows about as many lines.
+                    .frame(height: promptBoxHeight)
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .focused($promptFocused)
                     .accessibilityLabel("System prompt")
@@ -1028,6 +1073,9 @@ struct PreferencesView: View {
                 PrefCard {
                     valueHeader("Temperature", String(format: "%.2f", settings.temperature))
                     Slider(value: $settings.temperature, in: 0...1.5, step: 0.05)
+                        // Apple's own slider at its own size. A press 5 pt above or below the knob does nothing
+                        // (measured on the phone, 2026-11-15, item 21); Apple's .large size did not change that, so
+                        // it was taken back out. Mark, 2026-11-15: "Keep Apple's slider" (Apple ships the same one).
                         .accessibilityLabel("Temperature")
                     PrefLine("Higher reaches for less likely words.", help: helpTopic("temperature"), open: $help)
                 }
@@ -1039,11 +1087,19 @@ struct PreferencesView: View {
                     PrefLine("Only differs when a long description was shortened for the hand.", help: helpTopic("frametwo"), open: $help)
                 }
             }
-            Button("Reset the eye's defaults") {
+            Button {
                 promptFocused = false
                 settings.resetPromptToDefault()
+            } label: {
+                // The finger's area is INSIDE the label: a frame put around a Button grows the box the
+                // accessibility system reports, not the area a tap lands on (phone audit, 2026-11-15, item 22).
+                // 46, not 44, so whole-pixel snapping can't take it under 44; the extra 2 pt is handed back.
+                Text("Reset the eye's defaults")
+                    .frame(minHeight: 46)
+                    .contentShape(Rectangle())
             }
             .font(.subheadline.weight(.semibold))
+            .padding(.vertical, -1)
             .padding(.horizontal, 4)
         }
     }
@@ -1054,6 +1110,7 @@ struct PreferencesView: View {
         PrefCard {
             // Which hand is chosen in the Model Library, not here (2026-07-27): one selection home.
             Toggle("Draw the third frame", isOn: $settings.drawsThirdFrame).font(.headline).tint(.green)
+                .toggleStyle(RowSwitchStyle())
                 .disabled(!DrawerLoader.isAvailable(settings.selectedDrawer))
             Divider().overlay(Color.white.opacity(0.12))
             if let model = selectedDrawerModel { modelRow(model, verb: "to draw") }
@@ -1147,15 +1204,20 @@ struct PreferencesView: View {
                     Text(family.title.uppercased()).font(.caption2.weight(.bold)).tracking(1).foregroundStyle(.secondary)
                         .padding(.top, 2)
                         .accessibilityAddTraits(.isHeader)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4), spacing: 10) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: tileColumns), spacing: 10) {
                         ForEach(items, id: \.self) { layout in
                             Button { settings.layout = layout } label: {
                                 VStack(spacing: 4) {
                                     LayoutThumb(layout: layout, photo: lastShot?.photo, drawing: lastShot?.drawing,
                                                 selected: settings.layout == layout, wordsCard: settings.wordsCard)
                                     Text(layout.shortName).font(.caption2)
-                                        .foregroundStyle(settings.layout == layout ? .white : .secondary)
-                                        .multilineTextAlignment(.center).lineLimit(2)
+                                        // Unchosen names a brighter gray than .secondary, which measured below
+                                        // Apple's contrast minimum on this card (phone audit, 2026-11-15, item 27);
+                                        // the chosen one stays white, with its white border.
+                                        .foregroundStyle(settings.layout == layout ? Color.white : Color.white.opacity(0.75))
+                                        .multilineTextAlignment(.center)
+                                        // Wraps as far as the text size needs, never cut off (audit, 2026-11-15).
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                             .buttonStyle(.plain)
@@ -1171,7 +1233,7 @@ struct PreferencesView: View {
         // How the words look on a panel of their own (Mark, 2026-11-14), previewed on the last shot.
         PrefCard {
             Text("Words panel").font(.headline)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 4), spacing: 10) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: tileColumns), spacing: 10) {
                 ForEach(WordsCard.allCases, id: \.self) { style in
                     let on = settings.wordsCard == style
                     Button { settings.wordsCard = style } label: {
@@ -1180,12 +1242,22 @@ struct PreferencesView: View {
                                 .overlay {
                                     WordsPanel(text: lastShot?.words ?? "I see a quiet street under an evening sky.",
                                                style: style, photo: lastShot?.photo, fontSize: 7, padding: 5)
+                                        // A scale model of the printed panel, drawn small on purpose: a picture,
+                                        // not text to read. The tile's name below says what it is (phone audit,
+                                        // 2026-11-15, items 28, 29, 36, 39: 7 pt text that can't grow). Hidden
+                                        // from accessibility (the button also ignores its children). Apple's
+                                        // audit still lists it: the UI-test view of the page shows hidden children.
+                                        // Mark, 2026-11-15: "Keep it as it is. It's a deliberate thumbnail. It's
+                                        // not meant to be read."
+                                        .accessibilityHidden(true)
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                                 .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .strokeBorder(on ? Color.white : Color.white.opacity(0.25), lineWidth: on ? 2 : 1))
-                            Text(style.name).font(.caption2).foregroundStyle(on ? .white : .secondary)
-                                .multilineTextAlignment(.center).lineLimit(2)
+                                    .strokeBorder(on ? Color.white : Color.white.opacity(0.4), lineWidth: on ? 2 : 1))   // as the layout tiles (item 27)
+                            Text(style.name).font(.caption2)
+                                .foregroundStyle(on ? Color.white : Color.white.opacity(0.75))   // as the layout names (item 27)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)   // wraps, never cut off (audit, 2026-11-15)
                         }
                     }
                     .buttonStyle(.plain)
@@ -1206,9 +1278,12 @@ struct PreferencesView: View {
                 get: { settings.separateFiles != .off },
                 set: { settings.separateFiles = $0 ? .native : .off }))
                 .tint(.green)
+                .toggleStyle(RowSwitchStyle())
             if handDraws {
                 Toggle("A contact sheet of the drawing's steps", isOn: keepsakeBinding(sheet: true)).tint(.green)
+                    .toggleStyle(RowSwitchStyle())
                 Toggle("A flipbook of the drawing's steps", isOn: keepsakeBinding(sheet: false)).tint(.green)
+                    .toggleStyle(RowSwitchStyle())
             }
             PrefLine(alsoSaveLine, help: helpTopic("keepsake"), open: $help)
         }
@@ -1270,18 +1345,30 @@ struct PreferencesView: View {
 
     // MARK: - Pieces
 
+    /// Four tiles across, or two at the accessibility text sizes, where four left each name too narrow and it
+    /// broke mid-word ("On the pho to", largest-size check, 2026-11-15).
+    private var tileColumns: Int { typeSize.isAccessibilitySize ? 2 : 4 }
+
     private func modelRow(_ model: CameraModel, verb: String) -> some View {
         NavigationLink { ModelLibraryView() } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(model.displayName).font(.headline)
-                    if let t = timeLine(model, verb: verb) {
-                        Text(t).font(.footnote).foregroundStyle(.secondary)
-                    }
+            let name = VStack(alignment: .leading, spacing: 2) {
+                Text(model.displayName).font(.headline)
+                if let t = timeLine(model, verb: verb) {
+                    Text(t).font(.footnote).foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 4)
+            }
+            let door = HStack {
                 Text("Model Library").font(.subheadline).foregroundStyle(.secondary)
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            Group {
+                if typeSize.isAccessibilitySize {
+                    // Side by side, the model's name broke letter by letter at the largest sizes.
+                    VStack(alignment: .leading, spacing: 6) { name; door }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack { name; Spacer(minLength: 4); door }
+                }
             }
             .contentShape(Rectangle())
         }
@@ -1487,6 +1574,18 @@ struct PreferencesView: View {
         }
     }
 
+    /// Human parity: the antenna's X-Help opens that "?" card, as tapping it does.
+    private func openHelpForAntenna(afterMilliseconds wait: UInt64) {
+        guard let key = AntennaUIBridge.shared.prefsHelp else { return }
+        AntennaUIBridge.shared.prefsHelp = nil
+        Task { @MainActor in
+            if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000) }
+            help = helpTopic(key)
+        }
+    }
+    #endif
+
+    #if DEBUG
     // MARK: - Antenna (DEBUG-only local API address + token)
     //
     // The local HTTP API's base URL and token, each with a copy button (Mark, 2026-07-25: "ridiculous we
@@ -1558,15 +1657,27 @@ struct PrefHelpCard: View {
                 .frame(maxHeight: 420)
                 .fixedSize(horizontal: false, vertical: true)
                 HStack {
+                    // Each button's whole area is INSIDE its label, so a tap anywhere on it lands: the "Done" pill's
+                    // padding used to sit outside the button, leaving only the word (55 x 25 pt) to hit (phone
+                    // audit, 2026-11-15, items 52 and 53). At least 44 pt tall, the extra height handed back so
+                    // the card keeps its shape.
                     if let onGuide {
-                        Button("More in the guide", action: onGuide)
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        Button(action: onGuide) {
+                            Text("More in the guide")
+                                .frame(minHeight: 46).contentShape(Rectangle())
+                        }
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.vertical, -11)   // takes about 24 pt, inside the row the pill sets
                     }
                     Spacer()
-                    Button("Done", action: done)
-                        .font(.subheadline.weight(.bold)).foregroundStyle(.black)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(.white, in: Capsule())
+                    Button(action: done) {
+                        Text("Done")
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                            .background(.white, in: Capsule())
+                            .frame(minHeight: 46).contentShape(Rectangle())
+                    }
+                    .font(.subheadline.weight(.bold)).foregroundStyle(.black)
+                    .padding(.vertical, -2.5)   // the pill was about 41 pt tall (25 + 2 x 8); 46 - 2 x 2.5 = 41
                 }
             }
             .padding(18)
@@ -1603,6 +1714,32 @@ struct PrefCard<Content: View>: View {
 }
 
 /// A setting's one plain line, and its "?" (the deeper story opens over the screen).
+/// A switch whose WHOLE ROW takes the tap, at least 46 pt tall to press. Apple's switch on its own takes taps only
+/// within its drawn 28 pt (a real tap 7 pt above or below it did nothing, measured on the phone, 2026-11-15, items
+/// 15-16, 18-19, 25-26, 41-42). The switch is drawn exactly as before but takes no taps itself, so a tap is counted
+/// once; VoiceOver is given a standard switch; the extra height is handed back, so the card keeps its size.
+struct RowSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack {
+                configuration.label
+                Spacer(minLength: 8)
+                Toggle("", isOn: configuration.$isOn)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .allowsHitTesting(false)
+            }
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, -9)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }.toggleStyle(.switch)
+        }
+    }
+}
+
 struct PrefLine: View {
     let text: String
     let help: PrefHelp
@@ -1620,9 +1757,12 @@ struct PrefLine: View {
                 Image(systemName: "questionmark").font(.caption.weight(.bold))
                     .frame(width: 26, height: 26)
                     .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 1))
-                    .contentShape(Circle())
+                    // The circle draws 26 pt; a finger needs 44 (audit walk, 2026-11-15). The pressable square
+                    // grows to 44 and the extra is handed back, so the line looks and sits as before.
+                    .padding(9).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(-9)
             .accessibilityLabel("More about \(help.title.lowercased())")
         }
     }
@@ -1644,8 +1784,10 @@ struct LayoutThumb: View {
             .frame(maxWidth: .infinity)
             .frame(height: 64)
             .background(selected ? Color.white.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // The unchosen outline at 0.4 white: at 0.25 it measured 2.65 to 1 against the card, under the 3 to 1
+            // a control's outline needs to be seen (phone audit, 2026-11-15, item 27); about 3.8 to 1 now.
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(selected ? Color.white : Color.white.opacity(0.25), lineWidth: selected ? 2 : 1))
+                .strokeBorder(selected ? Color.white : Color.white.opacity(0.4), lineWidth: selected ? 2 : 1))
             .clipped()
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }

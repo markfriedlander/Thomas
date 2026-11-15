@@ -398,6 +398,12 @@ private struct GuideSearchBar: View {
                 .foregroundStyle(.secondary)
 
             TextField("Find in the guide", text: $query)
+                // A tap anywhere on the bar's height focuses the field: the field itself is 28 pt, with space around
+                // it that looked like field but took no tap (phone audit, 2026-11-15, item 67). A taller frame alone
+                // grew only the space, not the field (re-audit), so the space behind the field takes the tap and
+                // focuses it. The bar's padding gives the height back, so the bar looks the same.
+                .frame(minHeight: 46)
+                .background(Color.clear.contentShape(Rectangle()).onTapGesture { isFieldFocused = true })
                 .focused($isFieldFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
@@ -439,7 +445,7 @@ private struct GuideSearchBar: View {
         }
         .tint(.primary)
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 1)   // was 10 around a 28 pt field (48 pt); now 1 around the 46 pt field (48 pt)
         .background(.regularMaterial)
     }
 }
@@ -449,6 +455,10 @@ struct GuideReaderView: View {
     // Query lives on GuideState so the antenna (POST /open X-Screen: guide, X-Query) can drive find-in-page
     // for headless verification, not just a human typing. Reset on close. (Hal keeps it on its ChatViewModel.)
     @State private var guide = GuideState.shared
+    /// The guide's body size follows the reader's text-size setting (17 pt at the standard size, like body
+    /// text). Hal passes a size its own slider picks; Thomas has no slider, so it takes the system's
+    /// (accessibility audit, 2026-11-15: the guide's text didn't grow at all).
+    @ScaledMetric(relativeTo: .body) private var guideBodySize: CGFloat = 17
     /// 0-based index INTO `matchIndices` (which chunk of the matching set we are on).
     @State private var currentMatch: Int? = nil
 
@@ -485,7 +495,7 @@ struct GuideReaderView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(chunks.indices, id: \.self) { i in
-                            MarkdownView(text: chunks[i], bodyPointSize: 17, lineSpacing: 5, highlight: trimmedQuery)
+                            MarkdownView(text: chunks[i], bodyPointSize: guideBodySize, lineSpacing: 5, highlight: trimmedQuery)
                                 .id(i)
                                 .padding(.horizontal, 16)
                         }

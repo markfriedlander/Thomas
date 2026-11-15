@@ -316,6 +316,9 @@ private struct ModelLibraryRow: View {
     let onDelete: () -> Void
 
     @State private var isExpanded = false
+    /// At the accessibility text sizes the name gets its own line; beside the size it was cut to "Qwen..."
+    /// (largest-size check, 2026-11-15).
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var prep = HandPreparation.shared
 #if DEBUG
     @State private var bridge = AntennaUIBridge.shared
@@ -339,12 +342,10 @@ private struct ModelLibraryRow: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
             } label: {
-                HStack(spacing: 10) {
-                    Text(model.displayName)
-                        .font(.subheadline).fontWeight(.medium)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
+                let name = Text(model.displayName)
+                    .font(.subheadline).fontWeight(.medium)
+                    .foregroundStyle(.primary)
+                let facts = HStack(spacing: 10) {
                     if let gb = model.sizeGB {
                         Text("\(String(format: "%.1f", gb)) GB")
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
@@ -352,6 +353,17 @@ private struct ModelLibraryRow: View {
                     statusDot
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption2).foregroundStyle(.secondary)
+                }
+                Group {
+                    if typeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 4) {
+                            name.fixedSize(horizontal: false, vertical: true)
+                            facts
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        HStack(spacing: 10) { name.lineLimit(1); Spacer(minLength: 8); facts }
+                    }
                 }
                 .contentShape(Rectangle())
             }
@@ -870,6 +882,12 @@ struct ModelLicenseSheet: View {
     /// `showingDarkRoom`, exactly as the Done button / a back-swipe does. Without
     /// this the antenna could open interior screens but never return to capture — below human parity.
     var dismissToCapture = false
+    /// = the taps outside an open popover that close it, part of backing out to the bare capture screen.
+    /// Counts up on every `POST /open X-Screen: capture`; `StatusFeedView` closes the privacy and Preparing
+    /// popovers when it changes. A counter, not a flag someone clears, so a second observer can never miss it
+    /// (independent review, 2026-11-15: going "home" left the privacy popover open, and an audit read it as
+    /// the capture screen).
+    var closePopovers = 0
     /// = tapping the privacy lock capsule to reveal the popover. `StatusFeedView` mirrors this into its
     /// real `showingPrivacy`, exactly as tapping the lock does, so the antenna can open (and screenshot)
     /// the privacy explanation a human sees.

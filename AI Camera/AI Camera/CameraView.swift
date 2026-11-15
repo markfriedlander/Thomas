@@ -280,8 +280,9 @@ struct CameraView: View {
         }
         // Human-parity "return to capture": dropping `showingPreferences` dismisses Preferences and any
         // Model Library pushed inside it, landing on the bare capture screen — exactly what tapping Done
-        // does. `StatusFeedView` honors the same flag for the Dark Room. Cleared here (the always-present
-        // root); the guarded `want` means the clear can't re-trigger either observer.
+        // does, and drops the Dark Room sheet too. Cleared here (the always-present root); the guarded `want`
+        // means the clear can't re-trigger. Open popovers (privacy, Preparing) are closed by `StatusFeedView`
+        // on the bridge's `closePopovers` counter, which the same route bumps.
         .onChange(of: bridge.dismissToCapture) { _, want in
             if want { showingPreferences = false; showingDarkRoom = false; bridge.dismissToCapture = false }
         }
@@ -339,13 +340,18 @@ struct CameraView: View {
     /// the camera's format, and square layouts used the square format, which shows the most of the
     /// room. Switching formats shortly after launch left the preview black, though photos still came;
     /// the same switch triggered later by hand worked. Not understood yet; see NEXT.md.)
+    @ViewBuilder
     private var flipButton: some View {
-        Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
-            // Only when there is a second camera (a Mac's built-in camera is the only one). Hidden by
-            // opacity, not removed, so the shutter stays centred between the corners.
-            .opacity(lens.canFlip ? 1 : 0)
-            .disabled(!lens.canFlip)
-            .accessibilityHidden(!lens.canFlip)
+        // Only when there is a second camera (a Mac's built-in camera is the only one). Without one, an
+        // empty space of the same size keeps the shutter centred between the corners. (It used to be the
+        // button at opacity 0 with accessibilityHidden, but the accessibility walk of 2026-11-15 still
+        // found an invisible "Switch Camera" button in the tree; removing it is the sure way.)
+        if lens.canFlip {
+            Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
+                .accessibilityLabel("Switch Camera")
+        } else {
+            cornerGlyph("arrow.triangle.2.circlepath.camera").hidden().accessibilityHidden(true)
+        }
     }
 
     /// See what came OUT — opens the Photos app to the shots you've developed. A *stack* of
