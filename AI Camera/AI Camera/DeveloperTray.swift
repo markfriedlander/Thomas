@@ -161,6 +161,12 @@ nonisolated final class DevelopTrace: @unchecked Sendable {
     // The eye's workings (EyeRecorder). Recording is allowed exactly once per shot, for the look
     // that comes between `startShot` and the shot's words, so no other use of the eye (the condense
     // call, an antenna /look) can ever write into a shot's trace.
+    /// The look being recorded was stopped partway (the app left the foreground) and will be redone: drop
+    /// its half-recording, so the tray shows only the look that made the words.
+    func discardEyeRecording() {
+        lock.withLock { if eyeOpen, eye != nil { eye = nil; version += 1 } }
+    }
+
     func openEyeRecording(model: String) -> Bool {
         lock.withLock {
             guard eyeOpen, eye == nil else { return false }
@@ -606,6 +612,8 @@ actor TrayPreviewDecoder {
         #if targetEnvironment(simulator)
         return nil
         #else
+        // Never GPU work once the app is leaving the foreground (ForegroundGate); the preview is skipped.
+        guard ForegroundGate.mayRunGPU else { return nil }
         if taesd == nil { taesd = try? TAESDDecoder.bundled() }
         guard let taesd, shape.count == 4 else { return nil }
         var z = MLXArray(values, shape)
@@ -853,7 +861,7 @@ final class TrayModel {
             let started = Date()
             let pic: TrayPreviewDecoder.Picture?
             if direct {
-                pic = await decoder.decode(values, shape: shape, channelsLast: channelsLast)
+                pic = await ModelLane.shared.runBeside { await decoder.decode(values, shape: shape, channelsLast: channelsLast) }
             } else {
                 pic = await ModelLane.shared.run("tray") {
                     await decoder.decode(values, shape: shape, channelsLast: channelsLast)

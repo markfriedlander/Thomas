@@ -179,6 +179,8 @@ struct AI_CameraApp: App {
         // The privacy lock watches the network from launch, not only once the camera's status area
         // appears, so its first answer is a real reading (independent review, 2026-11-14).
         PrivacyMonitor.shared.start()
+        // Heavy work checks this between steps, so nothing runs on the GPU once the app is leaving.
+        ForegroundGate.start()
         // ⭐ AI Camera's OWN curated pin — the CoreML SD-2.1 drawer (the Neural-Engine hand). Only
         // this app uses it, so it registers its own pin rather than waiting on the shared baseline
         // (the package is built for exactly this: "the family relies on the baseline; an outside
@@ -226,7 +228,7 @@ struct AI_CameraApp: App {
             Task { @MainActor in
                 guard let model = ModelCatalog.all.first(where: { sharedStoreKey(forRepoID: $0.id) == id || $0.id == id }),
                       model.engine == .coreML else { return }
-                await HandPreparation.shared.prepare(model.id, reason: "just downloaded")
+                await HandPreparation.shared.prepare(model.id, reason: "just downloaded")   // waits for the foreground
             }
         }
         // Instantiate the shared model catalog at launch so its `.mlxModelDidDownload` observer is
@@ -272,6 +274,9 @@ struct AI_CameraApp: App {
                 // worker is already developing, this does nothing. App-level, so there is no view
                 // it can be orphaned from.
                 DarkRoomWorker.shared.kick()
+                // A preparation asked for while Thomas was in the background (a download finishing
+                // there) starts now.
+                Task { await HandPreparation.shared.prepareDeferred() }
             case .background:
                 // `.background` only — NOT `.inactive`. Inactive fires for a pulled-down
                 // notification shade, a control-centre swipe, or an incoming call banner;
@@ -286,21 +291,40 @@ struct AI_CameraApp: App {
                 // WITHOUT saving anything partial, and only then do we unload. Our ops are a few
                 // seconds and the window is tens, so it completes cleanly; if iOS ever ends the
                 // assertion early, the shot's durable record redoes it whole on foreground, so there
-                // is no data loss either way. (No expiration handler: we always end it ourselves
-                // well inside the window, and an overrun that iOS ends is already covered by
-                // durability.)
+                // is no data loss either way.
+                //
+                // Round 3 of the review (2026-11-14) found the two holes in that: (1) with no expiration
+                // handler, an operation that outlasts the window (a first-run preparation, a long hold)
+                // gets the app KILLED by iOS, not merely suspended; (2) an MLX operation "finishing" in
+                // the background is GPU work iOS refuses. So the work itself now stops at its next step
+                // (ForegroundGate, between drawing steps and the eye's words), and the expiration handler
+                // ends the assertion, so an overrun is a suspend, never a kill.
                 cameraLog("MEMORY: app entered background — stopping the queue, then unloading the eye")
                 Task { @MainActor in
                     let app = UIApplication.shared
-                    let bgTask = app.beginBackgroundTask(withName: "DarkRoomBackgroundStop")
+                    let assertion = BackgroundAssertion()
+                    assertion.id = app.beginBackgroundTask(withName: "DarkRoomBackgroundStop") {
+                        cameraLog("MEMORY: background time ran out before the queue stopped; ending it (a suspend, not a kill)")
+                        assertion.end()
+                    }
                     await DarkRoomWorker.shared.suspendForBackground()
                     await MLXEyeLoader.shared.unload()
-                    if bgTask != .invalid { app.endBackgroundTask(bgTask) }
+                    assertion.end()
                 }
             default:
                 break
             }
         }
+    }
+}
+/// A background-task assertion that is ended exactly once, by whichever comes first: the work finishing,
+/// or iOS's expiration handler.
+@MainActor final class BackgroundAssertion {
+    var id: UIBackgroundTaskIdentifier = .invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }
 // ==== LEGO END: 1 App Entry ====

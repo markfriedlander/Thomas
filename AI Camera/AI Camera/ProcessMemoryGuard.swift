@@ -172,7 +172,11 @@ nonisolated func writesLine() -> String {
 nonisolated func processAvailableMemoryMB() -> Double {
     #if !os(macOS)
     let bytes = os_proc_available_memory()
-    if bytes == 0 { return .infinity }  // 0 = unsupported / already over the limit
+    // 0 means one of two opposite things: the call isn't supported (an iPhone app running on a Mac, where
+    // memory isn't capped this way), or the app is already at its limit. Reading every 0 as "unlimited"
+    // let a phone at its limit start a multi-GB load straight into a jetsam kill (review round 3,
+    // 2026-11-14). On a phone it now reads as no room at all.
+    if bytes == 0 { return ProcessInfo.processInfo.isiOSAppOnMac ? .infinity : 0 }
     return Double(bytes) / (1024.0 * 1024.0)
     #else
     return .infinity

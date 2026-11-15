@@ -183,6 +183,11 @@ nonisolated struct ShotRecord: Codable, Sendable, Identifiable {
     /// testifies to `takenAt` when there is one (review, 2026-11-14: loaded pictures claimed today).
     var takenAt: Date? = nil
     var footerDate: Date { takenAt ?? capturedAt }
+
+    /// How many times the eye broke (an engineering failure, not a perception) on this shot. The shot
+    /// stays queued and is looked at again, up to `DarkRoomWorker.eyeTries` times, before it is saved
+    /// with no words (review round 3, 2026-11-14: one transient failure used to cost the words for good).
+    var eyeFailures: Int? = nil
 }
 
 /// Coarse status. `done` is never a value — a done shot is deleted, not marked. `blocked` means
@@ -293,6 +298,39 @@ actor DarkRoomStore {
             record.queueOrder = Double(index)
             try? writeRecord(record)
         }
+    }
+
+    /// Whether a shot is still in the queue (not deleted or purged while it developed).
+    func contains(_ id: UUID) -> Bool { FileManager.default.fileExists(atPath: recordURL(id).path) }
+
+    /// Rescue shots whose photo is here but whose record is missing or unreadable (a crash between the
+    /// two writes, a record a newer build can't read): give each a fresh record with `config` (the camera's
+    /// settings now, since the frozen ones are lost) so it still develops, instead of the photo sitting
+    /// here forever, unseen (review round 3, 2026-11-14). The unreadable record is kept beside it as
+    /// `.json.unreadable` for a look later. Returns how many were rescued.
+    func rescueOrphans(config: ShotConfig) -> Int {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        var rescued = 0
+        for photo in files where photo.pathExtension == "png" {
+            guard let id = UUID(uuidString: photo.deletingPathExtension().lastPathComponent) else { continue }
+            let url = recordURL(id)
+            if fm.fileExists(atPath: url.path) {
+                guard let data = try? Data(contentsOf: url),
+                      (try? JSONDecoder().decode(ShotRecord.self, from: data)) == nil else { continue }
+                let keep = url.appendingPathExtension("unreadable")
+                try? fm.removeItem(at: keep)
+                try? fm.moveItem(at: url, to: keep)
+            }
+            let made = (try? photo.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+            let record = ShotRecord(id: id, photoFile: photo.lastPathComponent, config: config,
+                                    capturedAt: made, place: nil, status: .pending)
+            if (try? writeRecord(record)) != nil {
+                rescued += 1
+                cameraLog("DARKROOM: rescued shot \(id) (its record was missing or unreadable); it develops with today's settings")
+            }
+        }
+        return rescued
     }
 
     /// One record by id, or nil if it's gone.
@@ -436,6 +474,13 @@ final class DarkRoomWorker {
     /// GPU op can never be suspended mid-flight and take the app down.
     private var suspended = false
 
+    /// Suspended, or about to be: the app reached the background (ForegroundGate) and the lifecycle
+    /// handler that sets `suspended` may not have run yet. Every "abandon without saving" check reads this.
+    private var leaving: Bool { suspended || ForegroundGate.isLeaving }
+
+    /// How many looks a shot gets when the eye breaks, before it is saved with no words.
+    nonisolated static let eyeTries = 3
+
     /// True while the user has paused the queue from the Dark Room screen. Like `suspended`, it
     /// stops the worker pulling new shots, but it is a deliberate user hold (not a lifecycle event)
     /// and persists across foregrounds until the user resumes. Mirrors into the pill (state 4).
@@ -527,6 +572,15 @@ final class DarkRoomWorker {
     /// over-call (after every enqueue, on every foreground activation, and when a model download
     /// finishes so blocked shots get another look).
     func kick() {
+        // Never start (or clear a suspend) while Thomas is in the background: a model download finishing
+        // there kicks too, and it used to clear `suspended` and start developing in the background, where
+        // iOS refuses GPU work and the time is short (review round 3, 2026-11-14). The `.active` kick
+        // comes when Thomas is back.
+        ForegroundGate.set(from: UIApplication.shared.applicationState)
+        guard UIApplication.shared.applicationState != .background else {
+            refreshCounts()
+            return
+        }
         suspended = false            // a foreground kick clears any background suspend
         refreshCounts()              // keep the counts honest even if we don't start below
         guard !isPaused else { return }
@@ -634,6 +688,7 @@ final class DarkRoomWorker {
         // depth (0 developing when drained, but blockedCount stays > 0 if shots are held), so the
         // "N blocked" pill survives the loop exiting. Only the transient develop state is cleared.
         defer { running = false; isCoolingDown = false; currentShotID = nil; currentStage = nil }
+        _ = await DarkRoomStore.shared.rescueOrphans(config: ShotConfig.capture())
         while dirty && !suspended && !isPaused {
             dirty = false
             while !suspended && !isPaused {
@@ -691,7 +746,8 @@ final class DarkRoomWorker {
 
     nonisolated static func missingModel(for config: ShotConfig) -> String? {
         let eye = ModelCatalog.model(for: config.seer)
-        if !eye.isInstalled { return eye.displayName }
+        // A silent-loop shot (eye off) never looks, so it never waits for an eye (review round 3).
+        if config.effectiveUseEye, !eye.isInstalled { return eye.displayName }
         // Apple's eye is always "installed" but can be not ready (still downloading after setup, or
         // switched off). Hold the shot until it is, rather than develop it with no eye (2026-11-14).
         if config.effectiveUseEye, case .apple = config.seer, !Readiness.current.isReady { return appleIntelligenceName }
@@ -710,7 +766,7 @@ final class DarkRoomWorker {
     private func develop(_ shot: ShotRecord) async -> Bool {
         // Bail before touching anything heavy if the app has been backgrounded. The shot stays
         // pending on disk and re-develops whole on the next foreground kick.
-        if suspended { return false }
+        if leaving { return false }
 
         // Decode the saved reality frame. If the photo is gone or unreadable there is nothing to
         // develop and nothing to recover — drop the record so the loop can't spin on it forever.
@@ -733,7 +789,7 @@ final class DarkRoomWorker {
         // (`await` can't sit to the right of `&&`, so the suspend check is the while condition and
         // the thermal check is the first thing inside.)
         var announcedHold = false
-        while !suspended {
+        while !leaving {
             let hot = await ThermalGovernor.shared.isHotNow()
             if !hot { break }
             if !announcedHold {
@@ -746,11 +802,11 @@ final class DarkRoomWorker {
         // The hold ends two ways; say which. Logging "cooled" when the loop actually exited because
         // the app went to the background (phone locked) sent a 2026-11-05 reading down the wrong path.
         if announcedHold {
-            cameraLog(suspended ? "DARKROOM: hold ended by backgrounding, shot stays queued"
+            cameraLog(leaving ? "DARKROOM: hold ended by backgrounding, shot stays queued"
                                 : "DARKROOM: phone cooled, resuming develop")
         }
         isCoolingDown = false
-        if suspended { currentShotID = nil; currentStage = nil; return false }
+        if leaving { currentShotID = nil; currentStage = nil; return false }
 
         // The heavy pipeline — see, tear the eye down, draw — through the ONE lane shared with the
         // antenna. Only Sendable values cross back; the cheap compositor + save stay out here. The
@@ -771,7 +827,7 @@ final class DarkRoomWorker {
         var keepsakeImages: [UIImage] = []
         var keepsakeVideos: [URL] = []
         let keepsake = config.effectiveKeepsake
-        if keepsake != .off, result.drawn != nil, !suspended,
+        if keepsake != .off, result.drawn != nil, !leaving,
            let trace = DevelopTrace.shared.snapshot() {
             let frames = await ModelLane.shared.run("keepsake") { DeveloperTray.decode(trace) }
             if let frames {
@@ -797,7 +853,36 @@ final class DarkRoomWorker {
         // Interrupted by a background transition while the heavy op ran? Abandon WITHOUT saving —
         // the record is untouched and still pending, so foregrounding redoes the whole shot. This
         // is why a suspended app never saves a half-finished develop.
-        if suspended { currentShotID = nil; currentStage = nil; return false }
+        if leaving {
+            for url in keepsakeVideos { try? FileManager.default.removeItem(at: url) }
+            currentShotID = nil; currentStage = nil; return false
+        }
+
+        // Deleted or purged in the Dark Room while it developed? Then it is gone, as asked: save nothing
+        // (review round 3, 2026-11-14: it used to land in Photos anyway).
+        guard await DarkRoomStore.shared.contains(shot.id) else {
+            cameraLog("DARKROOM: shot \(shot.id) was deleted while it developed; not saved")
+            for url in keepsakeVideos { try? FileManager.default.removeItem(at: url) }
+            currentShotID = nil; currentStage = nil
+            return true
+        }
+
+        // The eye broke (an engineering failure: a model that failed to load, an error mid-reply). The
+        // words are the shot's second frame, so look again rather than save without them: the shot stays
+        // queued and develops again after the lane's settle, up to `eyeTries` looks in all, then saves
+        // with no words as before. Counted in the record, so a crash loop can't retry forever either.
+        if case .broke(let reason) = result.perception, config.effectiveUseEye {
+            let failures = (shot.eyeFailures ?? 0) + 1
+            if failures < Self.eyeTries {
+                var r = shot; r.eyeFailures = failures
+                try? await DarkRoomStore.shared.update(r)
+                cameraLog("DARKROOM: the eye broke on shot \(shot.id) (\(reason)); look \(failures) of \(Self.eyeTries), trying again")
+                for url in keepsakeVideos { try? FileManager.default.removeItem(at: url) }
+                currentShotID = nil; currentStage = nil
+                return true
+            }
+            cameraLog("DARKROOM: the eye broke on shot \(shot.id) \(failures) times; saving it without words")
+        }
 
         // Which words frame 2 shows — the eye's full perception, or the (possibly condensed)
         // version the hand drew from. Same rule as the live shutter.

@@ -13,6 +13,8 @@
 
 import Foundation
 import MLX   // Stream.gpu.synchronize(), Memory.clearCache() — the settle
+import Synchronization
+import UIKit
 
 // ==== LEGO START: 9 The Model Lane (Serialization + Settle) ====
 
@@ -65,6 +67,7 @@ actor ModelLane {
             // finished and settled — until it cools, rather than stacking another heavy draw
             // onto the heat. No-op when cool; cancellable, so a stop is never stuck behind it.
             await ThermalGovernor.shared.pace()
+            await self.waitForBeside()
             let result = await work()
             // The settle is part of the op, not a courtesy after it: the next caller must
             // not begin until this one's world is not just dropped but reclaimed.
@@ -75,6 +78,26 @@ actor ModelLane {
         // `run` queues behind `mine` (and its settle) rather than racing it.
         tail = Task { _ = await mine.value }
         return await mine.value
+    }
+
+    // MARK: Beside the lane
+
+    /// Small GPU jobs running beside a Neural-Engine drawing (the live step previews). The Core ML hand
+    /// leaves the GPU idle, so a preview may decode while it draws without waiting the whole drawing; but
+    /// it must be done before the next lane operation starts, or two GPU jobs overlap (review round 3,
+    /// 2026-11-14: the previews ran outside the lane and could overlap the next shot's eye).
+    private var besideCount = 0
+
+    /// Run a small GPU job beside the lane's current Neural-Engine operation. Callers decide it is that
+    /// moment (a Core ML drawing in progress); the next lane operation waits for this to finish.
+    func runBeside<T: Sendable>(_ work: @Sendable () async -> T) async -> T {
+        besideCount += 1
+        defer { besideCount -= 1 }
+        return await work()
+    }
+
+    private func waitForBeside() async {
+        while besideCount > 0 { try? await Task.sleep(nanoseconds: 30_000_000) }
     }
 
     /// Let the phone settle: drain GPU work, release MLX's cache, and wait for iOS to give
@@ -110,6 +133,72 @@ actor ModelLane {
             last = now
         }
         cameraLog("LANE: settled after \(label) — availableMB=\(formatMB(processAvailableMemoryMB())) in \(String(format: "%.2f", Date().timeIntervalSince(start)))s")
+    }
+}
+
+/// Whether heavy model work may take its next step right now: the app's foreground state, readable
+/// from any thread, checked between drawing steps and between the eye's words.
+///
+/// WHY (independent review, round 3, 2026-11-14). iOS refuses GPU work from an app in the background,
+/// and a refused MLX command fails inside MLX, which takes the app down. The old safety (2026-07-21)
+/// let the operation in flight finish inside the background grace window before abandoning the shot,
+/// but an MLX operation in flight IS GPU work, and a whole look or drawing can outlast the window. So
+/// the work now stops itself at the next step instead:
+///   - **inactive** (the screen is locking, Control Center, a call coming in): GPU work waits between
+///     steps, so nothing is mid-flight when the app reaches the background. If the app comes straight
+///     back (a glance at Control Center), the step goes on and nothing is lost.
+///   - **background**: the work stops; the Dark Room leaves the shot queued and develops it whole on
+///     return, as before.
+/// On a Mac (Designed for iPad) another window in front makes Thomas inactive, and macOS allows GPU work
+/// then, so a Mac only stops for the background.
+nonisolated enum ForegroundGate {
+    enum State: Int, Sendable { case active = 0, inactive = 1, background = 2 }
+
+    private static let state = Atomic<Int>(State.active.rawValue)
+    private static let started = Atomic<Bool>(false)
+
+    static var current: State { State(rawValue: state.load(ordering: .relaxed)) ?? .active }
+
+    /// True once the app is in the background: whatever is running should stop at its next step.
+    static var isLeaving: Bool { current == .background }
+
+    /// Follow the app's state from now on: the starting state, then each change. Once, at launch.
+    @MainActor static func start() {
+        guard !started.exchange(true, ordering: .relaxed) else { return }
+        set(from: UIApplication.shared.applicationState)
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in set(.active) }
+        nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: nil) { _ in set(.inactive) }
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in set(.background) }
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { _ in set(.inactive) }
+    }
+
+    @MainActor static func set(from appState: UIApplication.State) {
+        switch appState {
+        case .active: set(.active)
+        case .background: set(.background)
+        default: set(.inactive)
+        }
+    }
+
+    static func set(_ s: State) {
+        let before = state.exchange(s.rawValue, ordering: .relaxed)
+        if before != s.rawValue { cameraLog("GATE: \(State(rawValue: before).map { "\($0)" } ?? "?") -> \(s)") }
+    }
+
+    /// Call between GPU steps. Waits while the app is inactive (on a phone), and returns false once it
+    /// is in the background, meaning "stop now and abandon".
+    static func mayContinue() async -> Bool {
+        if !ProcessInfo.processInfo.isiOSAppOnMac {
+            while current == .inactive { try? await Task.sleep(nanoseconds: 100_000_000) }
+        }
+        return current != .background
+    }
+
+    /// For work that can't wait between steps (the eye's words arrive from a stream that keeps going):
+    /// true while it may keep running. On a phone it must stop as soon as the app is inactive.
+    static var mayRunGPU: Bool {
+        ProcessInfo.processInfo.isiOSAppOnMac ? current != .background : current == .active
     }
 }
 

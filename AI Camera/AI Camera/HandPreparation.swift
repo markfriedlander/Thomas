@@ -59,6 +59,15 @@ final class HandPreparation {
         }
     }
 
+    /// A preparation asked for while Thomas was in the background, started on return (`prepareDeferred`).
+    @ObservationIgnored private var deferred: (repoID: String, reason: String)?
+
+    func prepareDeferred() async {
+        guard let d = deferred else { return }
+        deferred = nil
+        await prepare(d.repoID, reason: d.reason)
+    }
+
     var isPreparing: Bool { phase == .preparing }
     var elapsed: TimeInterval { started.map { now.timeIntervalSince($0) } ?? 0 }
 
@@ -137,6 +146,13 @@ final class HandPreparation {
     func prepare(_ repoID: String, reason: String) async {
         guard !isPreparing, ModelCatalog.model(id: repoID)?.engine == .coreML,
               CoreMLDrawer.isInstalled(repoID) else { return }
+        // Not in the background: a download finishing there used to start a minutes-long preparation
+        // where iOS gives Thomas seconds (review round 3, 2026-11-14). It waits for the foreground.
+        if UIApplication.shared.applicationState == .background {
+            deferred = (repoID, reason)
+            cameraLog("PREPARE: \(repoID) asked for in the background; it starts when Thomas is back")
+            return
+        }
         self.repoID = repoID; self.reason = reason
         phase = .preparing; stage = 0; stageCount = 0; stageName = "Getting ready"
         started = nil; begun = false; now = Date()

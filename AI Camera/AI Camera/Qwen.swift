@@ -65,6 +65,10 @@ nonisolated struct MLXVLMEye: Sendable {
     var systemPrompt: String
     var temperature: Double
 
+    /// What a look stopped by the app going to the background reports. The Dark Room never prints it: by
+    /// then the shot is being left queued, to develop whole when Thomas is back.
+    static let interruptedReason = "interrupted: Thomas went to the background"
+
     /// The image is already upright — see `uprighted`.
     func look(at image: CGImage) async -> Perception {
         do {
@@ -77,29 +81,60 @@ nonisolated struct MLXVLMEye: Sendable {
             let (watchable, tokenizer) = await container.perform { ctx in
                 (ctx.model is TQwen35 || ctx.model is TIdefics3, ctx.tokenizer)
             }
-            if watchable {
-                EyeRecorder.shared.beginLook(model: ModelCatalog.model(id: repoID)?.displayName ?? repoID,
-                                             tokenizer: tokenizer)
-            }
+            let displayName = ModelCatalog.model(id: repoID)?.displayName ?? repoID
+            var recording = false
             let lookStarted = Date()
-            defer { EyeRecorder.shared.endLook(lookSeconds: Date().timeIntervalSince(lookStarted)) }
+            defer { if recording { EyeRecorder.shared.endLook(lookSeconds: Date().timeIntervalSince(lookStarted)) } }
 
-            let session = ChatSession(
-                container,
-                // Layer 1 (locked brevity) + Layer 2 (the user's prompt). Same as the Apple
-                // eye — every eye gets the same brevity floor. See `PromptLayers`.
-                instructions: PromptLayers.compose(
-                    layerOne: PromptLayers.layerOne(forRepo: repoID),
-                    userPrompt: systemPrompt),
-                generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: temperature)
-            )
-            let text = try await session.respond(to: "Describe what you see.",
-                                                 image: .ciImage(ci))
+            let text = try await Self.respondInFront(
+                "Describe what you see.", image: .ciImage(ci),
+                session: {
+                    // A look redone after an interruption starts its recording over (the tray shows only the
+                    // look that made the words).
+                    if recording {
+                        EyeRecorder.shared.endLook(lookSeconds: Date().timeIntervalSince(lookStarted))
+                        DevelopTrace.shared.discardEyeRecording()
+                        recording = false
+                    }
+                    if watchable { recording = EyeRecorder.shared.beginLook(model: displayName, tokenizer: tokenizer) }
+                    return ChatSession(
+                        container,
+                        // Layer 1 (locked brevity) + Layer 2 (the user's prompt). Same as the Apple
+                        // eye — every eye gets the same brevity floor. See `PromptLayers`.
+                        instructions: PromptLayers.compose(
+                            layerOne: PromptLayers.layerOne(forRepo: repoID),
+                            userPrompt: systemPrompt),
+                        generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: temperature))
+                })
+            guard let text else { return .broke(reason: Self.interruptedReason) }
             return .spoke(text: text.trimmingCharacters(in: .whitespacesAndNewlines),
                           tokens: nil)
         } catch {
             return .broke(reason: "\(error)")
         }
+    }
+
+    /// Ask, and collect the reply as it streams, stopping at the next word piece once the app may no longer
+    /// run GPU work (ForegroundGate: on a phone, as soon as the screen starts to lock). If Thomas comes
+    /// straight back (a glance at Control Center), ask again from the start with a fresh session, up to
+    /// three times; nil when the app went to the background instead. Same words as `respond`, which is
+    /// this same stream collected (mlx-swift-lm ChatSession).
+    private static func respondInFront(_ prompt: String, image: UserInput.Image? = nil,
+                                       session makeSession: () throws -> ChatSession) async throws -> String? {
+        for attempt in 1...3 {
+            let session = try makeSession()
+            var out = ""
+            var stopped = false
+            for try await chunk in session.streamResponse(to: prompt, images: image.map { [$0] } ?? []) {
+                out += chunk
+                if !ForegroundGate.mayRunGPU { stopped = true; break }
+            }
+            if !stopped { return out }
+            cameraLog("EYE: stopped mid-reply (\(ForegroundGate.current)), \(out.count) characters in")
+            guard await ForegroundGate.mayContinue() else { return nil }
+            cameraLog("EYE: back in front; asking again (attempt \(attempt + 1))")
+        }
+        return nil
     }
 
     /// The eye restating its own words in fewer of them. See `Eye.condense` for the why and
@@ -112,17 +147,20 @@ nonisolated struct MLXVLMEye: Sendable {
     func condense(_ text: String, toAtMostWords maxWords: Int) async -> String? {
         do {
             let container = try await MLXEyeLoader.shared.container(for: repoID)
-            let session = ChatSession(
-                container,
-                instructions: """
-                    You shorten a description while keeping its concrete visual content — the \
-                    things named, and their colors, textures, and arrangement. Remove nothing \
-                    that could be drawn; drop only what couldn't. Output the shortened \
-                    description and nothing else — no preamble.
-                    """,
-                generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: 0.3)
-            )
-            let out = try await session.respond(to: "Rewrite this in no more than \(maxWords) words:\n\n\(text)")
+            let reply = try await Self.respondInFront("Rewrite this in no more than \(maxWords) words:\n\n\(text)",
+                                                      session: {
+                ChatSession(
+                    container,
+                    instructions: """
+                        You shorten a description while keeping its concrete visual content — the \
+                        things named, and their colors, textures, and arrangement. Remove nothing \
+                        that could be drawn; drop only what couldn't. Output the shortened \
+                        description and nothing else — no preamble.
+                        """,
+                    generateParameters: SamplerRecipe.forRepo(repoID).parameters(temperature: 0.3)
+                )
+            })
+            guard let out = reply else { return nil }
             let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         } catch {

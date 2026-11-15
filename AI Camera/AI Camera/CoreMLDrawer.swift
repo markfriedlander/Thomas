@@ -266,7 +266,14 @@ actor CoreMLDrawer {
             // image is now forming - flip the pill from "Mixing the developer" to "Developing".
             if stepN == 1 { onFirstStep?() }
             cameraLog("COREML: step \(stepN) at \(String(format: "%.1f", Date().timeIntervalSince(drawStarted)))s availMB=\(formatMB(processAvailableMemoryMB()))")
-            return true
+            // In the background, stop at the next step (ForegroundGate). This hand runs on the Neural Engine
+            // and CPU, which iOS allows in the background, so it needn't wait while the screen locks; but a
+            // drawing the Dark Room will throw away anyway shouldn't hold the background time it is given.
+            return !ForegroundGate.isLeaving
+        }
+        if ForegroundGate.isLeaving {
+            cameraLog("COREML: stopped after \(stepN) of \(passes) passes, the app went to the background")
+            throw CoreMLDrawError.interrupted
         }
 
         guard let cg = images.first ?? nil else {
@@ -298,6 +305,8 @@ extension CoreMLDrawer {
 enum CoreMLDrawError: LocalizedError {
     case notInstalled(String)
     case producedNothing
+    /// Stopped at a step because the app went to the background; the shot stays queued.
+    case interrupted
 
     var errorDescription: String? {
         switch self {
@@ -305,6 +314,8 @@ enum CoreMLDrawError: LocalizedError {
             return "\(repo) isn't downloaded yet. Get it in Preferences → Models → Browse Model Library."
         case .producedNothing:
             return "The Neural-Engine drawing finished with no image. That shouldn't happen - check the step count."
+        case .interrupted:
+            return "The drawing stopped because Thomas went to the background."
         }
     }
 }

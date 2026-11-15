@@ -645,9 +645,13 @@ private struct LiveTiles: View {
                 stepsPlanned = snap.steps
                 stepsDone = snap.latents.count
                 if let f = snap.final, finished == nil { finished = UIImage(cgImage: f) }
-                if finished == nil, let latest = snap.latents.last, Date().timeIntervalSince(lastDecode) > 1.5 {
+                // Only beside the Neural-Engine hand (the tray's rule): the MLX hand is using the GPU itself,
+                // so its steps show once its drawing is done.
+                if finished == nil, !snap.channelsLast, let latest = snap.latents.last,
+                   Date().timeIntervalSince(lastDecode) > 1.5 {
                     lastDecode = Date()
-                    if let pic = await decoder.decode(latest, shape: snap.shape, channelsLast: snap.channelsLast) {
+                    let decoder = self.decoder, shape = snap.shape
+                    if let pic = await ModelLane.shared.runBeside({ await decoder.decode(latest, shape: shape, channelsLast: false) }) {
                         step = UIImage(cgImage: pic.image)
                     }
                 }

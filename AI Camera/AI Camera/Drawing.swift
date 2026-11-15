@@ -428,7 +428,12 @@ actor DrawerLoader {
         DevelopTrace.shared.begin(prompt: prompt, steps: parameters.steps, isGuess: guessing,
                                   channelsLast: true, hand: ModelCatalog.model(id: drawing.repoID)?.displayName ?? drawing.repoID)
         var iterator: DenoiseIterator? = generator!.generateLatents(parameters: parameters)
-        while let xt = iterator?.next() {
+        // Between steps, ask whether the app is leaving (ForegroundGate): while the screen locks it waits
+        // here with nothing in flight on the GPU, and in the background it stops (the shot stays queued).
+        var interrupted = false
+        while true {
+            if !(await ForegroundGate.mayContinue()) { interrupted = true; break }
+            guard let xt = iterator?.next() else { break }
             latent = xt
             // MLX is lazy: the iterator hands back an unevaluated graph. Without this the
             // whole diffusion collapses into the final eval and every per-step number is a
@@ -442,7 +447,6 @@ actor DrawerLoader {
             cameraLog("DRAW: step \(step)/\(parameters.steps) at \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
         }
 
-        guard let final = latent else { throw DrawingError.producedNothing }
         let denoiseSeconds = Date().timeIntervalSince(started)
 
         // Drop the UNet and the text encoder. Drain first — Metal command buffers from the
@@ -465,6 +469,13 @@ actor DrawerLoader {
         // climbs during the decode below, the spike is the VAE (only tiled decode helps).
         let atRelease = MLX.Memory.snapshot()
         cameraLog("DRAW: released the generator before decoding — iosAvailMB \(formatMB(beforeRelease)) → \(formatMB(afterRelease)) (freed \(formatMB(afterRelease - beforeRelease))) | mlxActive=\(String(format: "%.0f", Double(atRelease.activeMemory) / 1_048_576)) peakSoFar=\(String(format: "%.0f", Double(atRelease.peakMemory) / 1_048_576)) MB")
+        // Stopped for the background, or nothing drawn: the release above has run either way (it must, before
+        // these arrays go), and there is nothing to decode.
+        if interrupted {
+            cameraLog("DRAW: stopped after \(step) of \(parameters.steps) steps, the app went to the background")
+            throw DrawingError.interrupted
+        }
+        guard let final = latent else { throw DrawingError.producedNothing }
 
         // ── Choose the developer. ──
         //
@@ -533,6 +544,9 @@ enum DrawingError: LocalizedError {
     case unknownDrawer(String)
     case wrongKind
     case producedNothing
+    /// Stopped between steps because the app went to the background (ForegroundGate). Not a failure:
+    /// the Dark Room leaves the shot queued and develops it whole when Thomas is back.
+    case interrupted
     /// A failure captured across the ModelLane boundary, where the original error type
     /// isn't Sendable, so its message is carried as a string.
     case drawFailed(String)
@@ -549,6 +563,8 @@ enum DrawingError: LocalizedError {
             return "The drawer loaded, but not as something that can draw from text."
         case .producedNothing:
             return "The drawing finished with no image. That shouldn't happen - check the step count."
+        case .interrupted:
+            return "The drawing stopped because Thomas went to the background."
         case .drawFailed(let message):
             return message
         }
