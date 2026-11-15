@@ -74,15 +74,17 @@
     </header>
 
     <div class="doc">
-      <p>Thomas does not collect, store, transmit, or share any personal data of any kind, when using a local MLX model or Apple Intelligence offline.</p>
+      <p>Thomas does not collect or share any personal data. It sends nothing about you or your pictures to the developer or to anyone else.</p>
+
+      <p>Whether anything leaves your device at all depends on two choices, and the lock on the camera screen shows the answer at every moment. <strong>The eye:</strong> a downloaded model keeps the look on your device; Apple Intelligence may use Apple's Private Cloud Compute when you're online. <strong>The place:</strong> raw coordinates keep it on your device; a place name is looked up with Apple's mapping service when you're online. With a downloaded eye (or offline), and raw coordinates on (or Location off, or offline), nothing leaves your device.</p>
 
       <p>It has no accounts, no analytics, no advertising identifiers. Your data is your data. There are no servers operated by the developer.</p>
 
       <p><strong>Your photographs.</strong> Both machines can run on your iPhone: the vision model that describes what it sees, and the drawing model that redraws the scene from those words. Thomas does not upload your photographs to the developer or to anyone else. Your photographs are saved in your phone's photos library.</p>
 
-      <p><strong>Apple Intelligence.</strong> When the eye is Apple Intelligence, inference is on-device when offline; when connected, Apple's Private Cloud Compute may be used (encrypted in transit, processed in non-persistent memory on Apple-controlled servers). Choosing a downloaded local model keeps everything on your device, with no network calls at all.</p>
+      <p><strong>Apple Intelligence.</strong> When the eye is Apple Intelligence, inference is on-device when offline; when connected, Apple's Private Cloud Compute may be used (encrypted in transit, processed in non-persistent memory on Apple-controlled servers). Choosing a downloaded local model keeps the look on your device.</p>
 
-      <p><strong>Location.</strong> Thomas stamps the place on the frame, the way a camera has always stamped the date. That stamp is visible, printed in the footer, and it is the only place your location ever appears: unlike the built-in Camera app, Thomas never writes hidden GPS coordinates into the saved image's metadata. To turn your coordinates into a place name, the coordinate is sent to Apple's mapping service, which is how reverse geocoding works on iOS. You can turn that off in Settings and stamp raw latitude and longitude instead, computed on your device, which skips the lookup entirely so no coordinate is ever sent anywhere. Thomas does not store your location and does not send it anywhere else. If you decline location, no lookup is ever made and frames simply carry no place stamp.</p>
+      <p><strong>Location.</strong> Thomas stamps the place on the frame, the way a camera has always stamped the date. That stamp is visible, printed in the footer, and it is the only place your location ever appears: unlike the built-in Camera app, Thomas never writes hidden GPS coordinates into the saved image's metadata. To turn your location into a place name, Thomas sends your current location to Apple's mapping service while the camera is open (and again after you've moved about half a kilometer); that is how place names work on iOS. Turn on <em>Stamp raw coordinates</em> in Thomas's Preferences to stamp latitude and longitude instead, computed on your device, with no lookup, so your location is never sent anywhere. Thomas keeps the place only with your shots, on your device, and does not send it anywhere else. If you decline location, no lookup is ever made and frames simply carry no place stamp.</p>
 
       <p><strong>Your photo library.</strong> Saving a finished frame uses add-only permission, which lets Thomas add pictures without being able to read the ones already there. If you choose to feed an existing picture into the camera, the system picker hands Thomas that one picture and nothing else.</p>
 

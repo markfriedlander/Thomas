@@ -25,7 +25,8 @@ drawing is an optional model you download when you want it.
 - **The eye** — a vision-language model looks at the photo and writes what it sees. Choose Apple
   Intelligence (built in, zero download) or a downloadable model that sees differently.
 - **The hand** — a Stable Diffusion model draws a new image from the eye's words. It never sees your
-  photo; it only reads the description. You pick how it develops the drawing (a full, detailed decoder
+  photo; it only reads the description (unless you switch the eye off: the silent loop, where the hand
+  reads the photo directly). You pick how it develops the drawing (a full, detailed decoder
   or a fast, lighter one — and Thomas quietly falls back to the light one rather than ever failing).
 - **The shot is atomic.** You configure once, then just shoot. Finished frames land in Photos like a
   print surfacing in a chemical bath — the latency is the film developing.

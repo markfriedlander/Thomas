@@ -135,7 +135,8 @@ final class PrivacyMonitor: NSObject {
         } else if networkAvailable {
             lookLine = "**The look** uses Apple Intelligence. With a network connection Apple may process it on Private Cloud Compute (encrypted in transit, non-persistent memory on Apple servers). Choose a downloaded local eye, or go offline, to keep it on the device."
         } else {
-            lookLine = "**The look** uses Apple Intelligence, running on your \(ThisDevice.deviceKind) because you're offline. Nothing about the look leaves."
+            // Mark approved, 2026-11-14: a shot taken offline may develop later, online.
+            lookLine = "**The look** uses Apple Intelligence, running on your \(ThisDevice.deviceKind) because you're offline. Nothing about the look leaves. A shot still waiting in the Dark Room is looked at when it develops, so if you're online by then, Apple may process it."
         }
 
         // ── The place ──
@@ -148,7 +149,8 @@ final class PrivacyMonitor: NSObject {
         } else if rawCoordinates {
             placeLine = "**The place** is raw latitude and longitude, computed on your \(ThisDevice.deviceKind). No coordinate is sent anywhere."
         } else if networkAvailable {
-            placeLine = "**The place** is a name, looked up by sending this shot's coordinate to Apple's mapping service. Switch to raw coordinates in Settings to stamp latitude and longitude with no lookup, so nothing is sent."
+            // Mark's words, 2026-11-14: the lookup runs while the camera is open, and the switch is in Preferences.
+            placeLine = "**The place** is a name, looked up by sending your current location to Apple's mapping service while the camera is open. Switch on raw coordinates in Preferences to stamp latitude and longitude with no lookup, so nothing is sent."
         } else {
             placeLine = "**The place** is a name, but the lookup needs a network. While you're offline no coordinate is sent."
         }
