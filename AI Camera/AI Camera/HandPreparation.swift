@@ -276,28 +276,38 @@ final class HandPreparation {
 /// and what to do (keep Thomas open). Honest: no invented percentage.
 struct HandPreparationCard: View {
     let repoID: String
+    /// The spinner, "Preparing for shooting" and the clock. Off when the card opens from the capture screen's pill,
+    /// which already shows all three just above it (Mark, 2026-11-15: "a bit redundant to the one just above it").
+    var showsHeading = true
+    /// The gray of the step and the explanation; nil is .secondary. The pill's popover passes a measured lighter gray
+    /// for its dark card (.secondary on that glass measured 3.2:1, under Apple's 4.5, 2026-11-15).
+    var textGray: Color? = nil
     @State private var prep = HandPreparation.shared
+
+    private var gray: AnyShapeStyle { textGray.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if prep.waitingToCool && !prep.begun {
-                    Image(systemName: "thermometer.high").font(.subheadline).foregroundStyle(.orange)
-                    Text("Cooling down").font(.subheadline.weight(.medium))
-                } else {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing for shooting").font(.subheadline.weight(.medium))
-                }
-                Spacer()
-                if prep.begun {
-                    Text(HandPreparation.clock(prep.elapsed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            if showsHeading {
+                HStack(spacing: 8) {
+                    if prep.waitingToCool && !prep.begun {
+                        Image(systemName: "thermometer.high").font(.subheadline).foregroundStyle(.orange)
+                        Text("Cooling down").font(.subheadline.weight(.medium))
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("Preparing for shooting").font(.subheadline.weight(.medium))
+                    }
+                    Spacer()
+                    if prep.begun {
+                        Text(HandPreparation.clock(prep.elapsed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
             }
             if prep.stageCount > 0 {
                 Text("Step \(prep.stage) of \(prep.stageCount): \(prep.stageName)")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(gray)
             }
-            Text(detail).font(.caption2).foregroundStyle(.secondary)
+            Text(detail).font(.caption2).foregroundStyle(gray)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 4)

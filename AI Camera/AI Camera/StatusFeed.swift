@@ -308,10 +308,15 @@ struct StatusFeedView: View {
             Button { showingPreparation = true } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showingPreparation) {
-                    HandPreparationCard(repoID: HandPreparation.shared.repoID ?? Settings.shared.selectedDrawer)
+                    // Without the heading the pill above already shows, on the same solid dark card and lighter gray
+                    // as the privacy popover (Mark, 2026-11-15: both).
+                    HandPreparationCard(repoID: HandPreparation.shared.repoID ?? Settings.shared.selectedDrawer,
+                                        showsHeading: false, textGray: PrivacyPopover.bodyGray)
                         .padding(16)
                         .frame(width: 300)
                         .presentationCompactAdaptation(.popover)
+                        .environment(\.colorScheme, .dark)
+                        .presentationBackground(Color(white: 0.11))
                 }
         case .none:
             capsuleBody(message)
@@ -357,9 +362,9 @@ struct CaptureControlCircle: ViewModifier {
             // The camera's buttons are fixed circles, like a camera body's. At the largest text sizes the glyph
             // outgrew its circle and the top corner's two collided (largest-size check, 2026-11-15), so the
             // glyph stops growing at the largest standard size; a long press shows it large, Apple's way for
-            // fixed bar controls.
+            // fixed bar controls. (That long-press view is set on each Button in CameraView, where the finger is;
+            // set here, on the glyph, it never appeared: 2026-11-15.)
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .accessibilityShowsLargeContentViewer()
     }
 }
 

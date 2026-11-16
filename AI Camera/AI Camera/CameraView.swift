@@ -326,11 +326,15 @@ struct CameraView: View {
     private var darkRoomButton: some View {
         Button { showingDarkRoom = true } label: { cornerGlyph("tray.full") }
             .accessibilityLabel("Dark Room")
+            // The long-press large view on the BUTTON, where the finger is: on the glyph inside the label it never
+            // appeared (held 10 s at the largest text size on the phone, 2026-11-15; last night's review, item 9).
+            .accessibilityShowsLargeContentViewer { Label("Dark Room", systemImage: "tray.full") }
     }
 
     private var preferencesButton: some View {
         Button { showingPreferences = true } label: { cornerGlyph("slider.horizontal.3") }
             .accessibilityLabel("Preferences")   // the glyph's own name read "Edit"
+            .accessibilityShowsLargeContentViewer { Label("Preferences", systemImage: "slider.horizontal.3") }
     }
 
     /// Selfie flip — the standard camera-flip loop (its preview mirrors, its photo doesn't; see
@@ -349,6 +353,7 @@ struct CameraView: View {
         if lens.canFlip {
             Button { lens.flip() } label: { cornerGlyph("arrow.triangle.2.circlepath.camera") }
                 .accessibilityLabel("Switch Camera")
+                .accessibilityShowsLargeContentViewer { Label("Switch Camera", systemImage: "arrow.triangle.2.circlepath.camera") }
         } else {
             cornerGlyph("arrow.triangle.2.circlepath.camera").hidden().accessibilityHidden(true)
         }
@@ -364,6 +369,7 @@ struct CameraView: View {
                 .modifier(CaptureControlCircle())
         }
         .accessibilityLabel("Photos")
+        .accessibilityShowsLargeContentViewer { Label("Photos", systemImage: "photo.stack") }
     }
 
     /// Open the system Photos app. There is no official API for this; `photos-redirect://` is the

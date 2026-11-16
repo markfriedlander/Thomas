@@ -428,11 +428,12 @@ final class ThomasAuditTests: XCTestCase {
     /// never makes one (independent tool review, 2026-11-15: the old scroll-back could close it and report the wrong
     /// reason). It stops when the page stops moving (its end), and notices if the element is gone. Every drag counts.
     @MainActor
-    private func scrollUntilHittable(_ el: XCUIElement, in app: XCUIApplication, outcome: inout Outcome) -> String? {
+    private func scrollUntilHittable(_ el: XCUIElement, in app: XCUIApplication, outcome: inout Outcome,
+                                     atX x: CGFloat = 0.03) -> String? {
         for _ in 0..<15 {
             let before = el.frame
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.75))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.40))
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.75))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.40))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
             outcome.scrolls += 1
             guard el.exists else { return "it disappeared while scrolling (the page closed or changed)" }
@@ -514,6 +515,12 @@ final class ThomasAuditTests: XCTestCase {
                             "\(app.sliders.matching(NSPredicate(format: "label == %@", "Temperature")).firstMatch.value ?? "")"
                         },
                         undo: { _, _ in }),   // the slider is put back from its own reading, below
+            // A page tab in the top bar (last night's review, item 6: the bar might not take taps on all of the
+            // 46-49 pt it reports). Tested at its top and bottom edges, inside the reported area.
+            TouchTarget(name: "Page tab (Eye)", taps: [.button("Preferences"), .buttonPrefix("Lens:")],
+                        element: { Marker.button("Eye").element(in: $0) },
+                        state: { app in Marker.text("FRAME 2 · THE EYE").element(in: app).exists ? "Eye page" : "other page" },
+                        undo: { _, _ in }),
             // The guide's search field: focused (keyboard up) when the tap reached it. Each tap point starts fresh.
             TouchTarget(name: "Search field (Find in the guide)", taps: [.button("Preferences"), .buttonPrefix("The Thomas Guide")],
                         element: { Marker.field(placeholder: "Find in the guide").element(in: $0) },
@@ -558,6 +565,10 @@ final class ThomasAuditTests: XCTestCase {
             // First the CENTRE, which must respond: a check that has never seen a response can't be trusted when it
             // reports none (a touch-check run on 2026-11-15 reported "no response" everywhere with no control).
             var points: [(String, CGFloat, CGFloat)] = [("centre (control)", cx, cy)]
+            if target.name.hasPrefix("Page tab") {
+                // Inside its reported frame, 3 pt from its top and bottom edges.
+                points += [("top edge", cx, frame.minY + 3), ("bottom edge", cx, frame.maxY - 3)]
+            }
             if frame.height < 44 { points += [("above", cx, cy - 21), ("below", cx, cy + 21)] }
             if !isSwitch && !isSlider && frame.width < 44 { points += [("left", cx - 21, cy), ("right", cx + 21, cy)] }
             var results: [[String: Any]] = []
@@ -623,7 +634,7 @@ final class ThomasAuditTests: XCTestCase {
     /// A fresh launch and the taps to a touch target; the control, on screen, or nil (the reason in
     /// `lastReachFailure`, and a screenshot named touch-unreachable-<n>.png).
     @MainActor
-    private func reach(_ target: TouchTarget) -> XCUIElement? {
+    private func reach(_ target: TouchTarget, scrollAtX x: CGFloat = 0.03, moreDrags: Int = 0) -> XCUIElement? {
         func failed(_ why: String) -> XCUIElement? {
             reachFailures += 1
             lastReachFailure = why + " (picture: touch-unreachable-\(reachFailures).png)"
@@ -650,8 +661,14 @@ final class ThomasAuditTests: XCTestCase {
         }
         let el = target.element(app)
         guard el.waitForExistence(timeout: 5) else { return failed("the control is not on screen") }
-        if !el.isHittable, let why = scrollUntilHittable(el, in: app, outcome: &scratch) {
+        if !el.isHittable, let why = scrollUntilHittable(el, in: app, outcome: &scratch, atX: x) {
             return failed("the control could not be brought on screen: \(why)")
+        }
+        // A little further, so all of a tall element shows, not just its top edge (for pictures).
+        for _ in 0..<moreDrags {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.70))
+            start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.45)),
+                        withVelocity: .slow, thenHoldForDuration: 0.1)
         }
         return el
     }
@@ -704,6 +721,63 @@ final class ThomasAuditTests: XCTestCase {
             if abs(moved) >= 1 { ptsPerNotch = abs(move / CGFloat(moved)) }
         }
         return ((reading().map { abs($0 - target) < 0.001 }) ?? false, readings)
+    }
+
+    /// Goes to each named spot the way a person does (fresh launch, taps, scrolling) and takes a picture, for
+    /// looking at things below the top of a page (last night's review, items 7, 8, 11). TEST_RUNNER_THOMAS_LOOK
+    /// picks spots by name (comma-separated); attaches look-<name>.png, or look-<name>-UNREACHED.png with why.
+    @MainActor
+    func testLook() throws {
+        // Spots that scroll elsewhere: the privacy popup scrolls inside itself (a drag at the left margin lands on
+        // the camera screen and closes it); the prompt box is tall, so two more drags show all of it.
+        let scrollX: [String: CGFloat] = ["privacy-link": 0.3]
+        let extra: [String: Int] = ["prompt-box": 2, "privacy-link": 3]
+        let spots: [(String, TouchTarget)] = [
+            ("locked-line-info", TouchTarget(name: "info", taps: [.button("Preferences"), .buttonPrefix("Eye:")],
+                element: { Marker.button("Why this line is locked").element(in: $0) }, state: { _ in "" }, undo: { _, _ in })),
+            ("prompt-box", TouchTarget(name: "prompt", taps: [.button("Preferences"), .buttonPrefix("Eye:")],
+                element: { $0.textViews.matching(NSPredicate(format: "label == %@", "System prompt")).firstMatch },
+                state: { _ in "" }, undo: { _, _ in })),
+            ("about-reset-row", TouchTarget(name: "row", taps: [.button("Preferences")],
+                element: { Marker.button("Reset everything").element(in: $0) }, state: { _ in "" }, undo: { _, _ in })),
+            ("privacy-link", TouchTarget(name: "link", taps: [.buttonPrefix("Privacy:")],
+                element: { $0.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Preferences")).allElementsBoundByIndex
+                    .first { $0.frame.minY > 150 } ?? Marker.button("zz-none").element(in: $0) },
+                state: { _ in "" }, undo: { _, _ in })),
+        ]
+        let wanted = (ProcessInfo.processInfo.environment["THOMAS_LOOK"] ?? "").split(separator: ",").map(String.init)
+        var log: [String: String] = [:]
+        for (name, target) in spots where wanted.isEmpty || wanted.contains(name) {
+            if reach(target, scrollAtX: scrollX[name] ?? 0.03, moreDrags: extra[name] ?? 0) != nil {
+                RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+                attachScreenshot(named: "look-\(name).png")
+                log[name] = "pictured"
+            } else {
+                attachScreenshot(named: "look-\(name)-UNREACHED.png")
+                log[name] = "not reached: \(lastReachFailure)"
+            }
+        }
+        Self.leaveThomasInFront()
+        try attachJSON(log, named: "look.json")
+    }
+
+    /// Holds a finger on the camera screen's Preferences gear for TEST_RUNNER_THOMAS_HOLD_SECONDS (default 6), so
+    /// a screenshot taken from the Mac meanwhile shows whether the long-press large view appears (last night's
+    /// review, item 9). Apple shows that view only at the accessibility text sizes.
+    @MainActor
+    func testHoldGear() throws {
+        let app = Self.thomas()
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 15)
+        var scratch = Outcome(tag: "hold")
+        _ = answerSystemAlerts(into: &scratch, settle: 2.0)
+        let gear = Marker.button("Preferences").element(in: app)
+        guard gear.waitForExistence(timeout: 5) else { return }
+        try attachJSON(["holding": "now"], named: "hold-start.json")
+        let seconds = Double(ProcessInfo.processInfo.environment["THOMAS_HOLD_SECONDS"] ?? "") ?? 6
+        gear.press(forDuration: seconds)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        Self.leaveThomasInFront()
     }
 
     // MARK: - Attach-only tests (whatever is in front)

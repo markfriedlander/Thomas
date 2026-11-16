@@ -200,6 +200,7 @@ struct PrivacyState: Equatable {
 struct PrivacyPopover: View {
     static let bodyGray = Color(white: 0.72)
     let state: PrivacyState
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Invoked when the user taps "Preferences": the caller dismisses the popover and opens
     /// Preferences. Preferences is the door to BOTH remedies the popover names — pick a downloaded
     /// local eye in the Model Library, OR switch off the place-name lookup (Mark, 2026-07-28).
@@ -245,8 +246,11 @@ struct PrivacyPopover: View {
                 .frame(minHeight: 44).contentShape(Rectangle())   // a finger's 44 pt (audit, 2026-11-15)
             }
             // The 44 pt target is 26 pt taller than the line it draws; hand 13 back above (less the old 2 pt
-            // gap) and 13 below, so the popover keeps its size (compared pixel by pixel, 2026-11-15).
-            .padding(.top, -11).padding(.bottom, -13)
+            // gap) and 13 below, so the popover keeps its size (compared pixel by pixel, 2026-11-15). Only at the
+            // standard sizes: at the accessibility sizes the link wraps to two lines and those fixed amounts cut
+            // its second line off at the popover's edge (seen on the phone at the largest size, 2026-11-15).
+            .padding(.top, typeSize.isAccessibilitySize ? 0 : -11)
+            .padding(.bottom, typeSize.isAccessibilitySize ? 0 : -13)
         }
         .padding(16)
         .frame(width: 300)
