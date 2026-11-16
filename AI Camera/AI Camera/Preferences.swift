@@ -966,6 +966,12 @@ struct PreferencesView: View {
         .padding(3)
         .background(.ultraThinMaterial.opacity(0.85), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+        // Invisible room above and below the row, so the top bar delivers taps to each pill's full 46 pt: the bar
+        // passes a tap only inside the row's own space, which the pills' handed-back padding had trimmed to their
+        // drawn size (a tap 3 pt inside the top or bottom of a pill did nothing, measured on the phone,
+        // 2026-11-15; last night's review, item 6). The pills and their capsule look the same.
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
         // The pills grow with text size up to the largest standard size; past that a long press shows
         // the label large (as the tray's do).
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
