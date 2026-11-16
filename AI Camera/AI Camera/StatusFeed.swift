@@ -284,6 +284,9 @@ struct StatusFeedView: View {
                 .padding(.vertical, -Self.lockHitPadV).padding(.horizontal, -Self.lockHitPadH)
                 // The lock is glyph-only; without a name VoiceOver read the symbol ("Unlock").
                 .accessibilityLabel(message.icon == "lock" ? "Privacy: stays on device" : "Privacy: may leave device")
+                .accessibilityShowsLargeContentViewer {
+                    Label(message.icon == "lock" ? "Stays on device" : "May leave device", systemImage: message.icon ?? "lock")
+                }
                 .popover(isPresented: $showingPrivacy) {
                     PrivacyPopover(
                         state: privacyState,
@@ -301,12 +304,14 @@ struct StatusFeedView: View {
         case .openDarkRoom:
             Button { onOpenDarkRoom() } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
+                .accessibilityShowsLargeContentViewer { Label(message.text, systemImage: message.icon ?? "tray.full") }
         case .explainPreparation:
             // The "Preparing for shooting" pill opens the same card the Model Library row shows: the
             // real stage, the clock, and "Keep Thomas open until it finishes" (Mark, 2026-11-13). It
             // closes on its own when the preparation ends, because the pill it hangs from goes away.
             Button { showingPreparation = true } label: { capsuleBody(message) }
                 .buttonStyle(.plain)
+                .accessibilityShowsLargeContentViewer { Label(message.text, systemImage: "hourglass") }
                 .popover(isPresented: $showingPreparation) {
                     // Without the heading the pill above already shows, on the same solid dark card and lighter gray
                     // as the privacy popover (Mark, 2026-11-15: both).
@@ -339,6 +344,12 @@ struct StatusFeedView: View {
         .foregroundStyle(.white.opacity(0.85))
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(.black.opacity(0.35), in: Capsule())
+        // Stops growing at the largest standard size, as the camera's corner buttons do: past it the lock alone
+        // grew while the corners didn't, and "Preparing for shooting" became a bubble over the middle of the
+        // viewfinder, broken mid-word (seen on Mark's phone at the largest text size, 2026-11-15). A long press
+        // shows it large (set on each button below); a tap opens its popup, which grows all the way (the cap is
+        // on the capsule's drawing only, so the popups attached to the buttons don't inherit it).
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 
