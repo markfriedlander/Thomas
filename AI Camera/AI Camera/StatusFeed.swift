@@ -333,7 +333,9 @@ struct StatusFeedView: View {
             if message.showsSpinner {
                 ProgressView().tint(.white).scaleEffect(0.7)
             } else if let icon = message.icon {
-                Image(systemName: icon).font(.footnote.weight(.semibold))
+                // A glyph-only message (the privacy lock) at the corner buttons' icon size: at the pills' text
+                // size it looked small beside them (Mark, 2026-11-15, at the largest text size).
+                Image(systemName: icon).font(message.text.isEmpty ? .title3 : .footnote.weight(.semibold))
             }
             // Glyph-only messages (the privacy lock) carry no text: the glyph is the whole message.
             if !message.text.isEmpty {
