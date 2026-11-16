@@ -1446,7 +1446,12 @@ extension LocalAPIServer {
         // test photo can exercise any layout without photographing the room through the live lens.
         let drawThird: Bool? = req.headers["x-draw"].map { $0 != "false" }
         let layoutOverride = req.headers["x-layout"].flatMap { Layout(rawValue: $0) }
-        await DarkRoomWorker.shared.enqueue(photograph, place: placeStamp, drawsThirdFrame: drawThird, layoutOverride: layoutOverride)
+        // The footer's date is when the picture was TAKEN (its EXIF), exactly as the Dark Room's "Load pictures"
+        // door does; a fed-in photo without one falls back to now, like a shutter press. Without this the route
+        // stamped the develop time on an old photo, which no human path does (Studio's review, 2026-11-16).
+        let takenAt = DarkRoomView.dateTaken(CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any])
+        await DarkRoomWorker.shared.enqueue(photograph, place: placeStamp, takenAt: takenAt,
+                                            drawsThirdFrame: drawThird, layoutOverride: layoutOverride)
         let after = await MainActor.run { DarkRoomWorker.shared.developingCount }
         return (200, json([
             "enqueued":    true,
