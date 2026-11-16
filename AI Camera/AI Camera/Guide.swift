@@ -421,14 +421,14 @@ private struct GuideSearchBar: View {
                     Button(action: onPrevious) {
                         Image(systemName: "chevron.up")
                             .font(.footnote.weight(.semibold))
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)   // a finger's 44 pt (was 32; found 2026-11-15)
                     }
                     .accessibilityLabel("Previous match")
 
                     Button(action: onNext) {
                         Image(systemName: "chevron.down")
                             .font(.footnote.weight(.semibold))
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)   // a finger's 44 pt (was 32; found 2026-11-15)
                     }
                     .accessibilityLabel("Next match")
                 }
@@ -438,7 +438,7 @@ private struct GuideSearchBar: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)   // a finger's 44 pt (was 32; found 2026-11-15)
                 }
                 .accessibilityLabel("Clear search")
             }

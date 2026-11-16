@@ -698,14 +698,19 @@ struct PreferencesView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 HStack(spacing: 28) {
-                    NavigationLink("About Thomas") { AboutView.thomas }
-                        .foregroundStyle(.white.opacity(0.8))
-                        .frame(minHeight: 44).contentShape(Rectangle())   // a finger's 44 pt (audit walk, 2026-11-15)
-                    Button("Reset everything", role: .destructive) { confirmingReset = true }
-                        .foregroundStyle(Color(red: 1, green: 0.41, blue: 0.38))
-                        .frame(minHeight: 44).contentShape(Rectangle())
+                    // The finger's area INSIDE each label: a frame put around a link or button grows the box the
+                    // accessibility system reports, not the area a tap lands on (independent review, 2026-11-15;
+                    // the same fix as Reset the eye's defaults). 46 pt, so whole-pixel snapping can't take it under 44.
+                    NavigationLink { AboutView.thomas } label: {
+                        Text("About Thomas").frame(minHeight: 46).contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                    Button(role: .destructive) { confirmingReset = true } label: {
+                        Text("Reset everything").frame(minHeight: 46).contentShape(Rectangle())
+                    }
+                    .foregroundStyle(Color(red: 1, green: 0.41, blue: 0.38))
                 }
-                .padding(.vertical, -13)   // the taller targets hand their extra height back
+                .padding(.vertical, -14)   // the taller targets hand their extra height back (46 - about 18 pt of text)
                 .font(.subheadline)
                 .frame(maxWidth: .infinity)
                 #if DEBUG
@@ -976,9 +981,10 @@ struct PreferencesView: View {
                     ForEach(PictureShape.allCases, id: \.self) { Text($0.name).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                // Apple's larger size: at the regular size a real tap 5 pt above or below the 32 pt control did
-                // nothing (measured on the phone, 2026-11-15, items 13-14). Measured again after this change.
-                .controlSize(.large)
+                // Apple's own control at Apple's own size (32 pt; a tap 5 pt outside it does nothing, measured on
+                // the phone, 2026-11-15, items 13-14). Apple's .large size (49 pt) stood out from everything around
+                // it; Mark: "Apple doesn't get to tell us things should be 44 and then make something that's 32 and
+                // complain when we use it."
                 // Light, so the choice reads clearly on the dark card (the dark style was faint on the phone).
                 .environment(\.colorScheme, .light)
                 PrefLine(settings.pictureShape == .fourThree
