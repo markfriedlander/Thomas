@@ -225,7 +225,7 @@ struct AboutView: View {
 /// than the limit, so nothing changes. Part of the shared About code: other studio apps can use it on any
 /// list screen.
 struct ReadableListWidth: ViewModifier {
-    var maxWidth: CGFloat = 640
+    var maxWidth: CGFloat = 720
     @State private var width: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -236,7 +236,7 @@ struct ReadableListWidth: ViewModifier {
 }
 
 extension View {
-    func readableListWidth(_ maxWidth: CGFloat = 640) -> some View {
+    func readableListWidth(_ maxWidth: CGFloat = 720) -> some View {
         modifier(ReadableListWidth(maxWidth: maxWidth))
     }
 }

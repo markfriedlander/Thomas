@@ -587,6 +587,14 @@ struct CameraView: View {
 // Copied verbatim from Hal (Hal Universal/ChatViews.swift, 2026-11-13) at Mark's request: on the Mac the
 // Preferences and Dark Room cards were small fixed cards in a big window; Hal solved it this way.
 extension View {
+    /// Full screen on a Mac AND on an iPad. On the iPad a sheet is a small card floating in the middle of a big
+    /// black screen (seen on the iPad Pro 13-inch, 2026-11-15; Mark: "They look small on the iPad"), so the iPad
+    /// opens these screens filling the screen, as the Mac does. Constant for the process, so the presentation
+    /// never flips. iPhone keeps the sheet.
+    var fillsTheScreen: Bool {
+        ProcessInfo.processInfo.isiOSAppOnMac || UIDevice.current.userInterfaceIdiom == .pad
+    }
+
     /// Presents `content` as a sheet on iPhone/iPad, but as a window-filling full-screen cover on a
     /// "Designed for iPad" Mac (2026-08-05 Mac resizability). On Mac a `.sheet` is a fixed-size
     /// floating card that ignores the window; a `.fullScreenCover` fills the window and resizes
@@ -600,7 +608,7 @@ extension View {
         onDismiss: (() -> Void)? = nil,
         @ViewBuilder content: @escaping () -> PresentedContent
     ) -> some View {
-        if ProcessInfo.processInfo.isiOSAppOnMac {
+        if fillsTheScreen {
             self.fullScreenCover(isPresented: isPresented, onDismiss: onDismiss, content: content)
         } else {
             self.sheet(isPresented: isPresented, onDismiss: onDismiss, content: content)
@@ -613,7 +621,7 @@ extension View {
 // scrolling text; in a small window the card and the window kept re-measuring each other until macOS
 // aborted ("more Layout Window passes than there are views in the window", reproduced twice,
 // 2026-11-13); the square's numbers card did the same. A window-filling cover has no size to
-// negotiate. iPhone and iPad keep the sheet.
+// negotiate. iPhone keeps the sheet; iPad fills the screen too (see `fillsTheScreen`).
 extension View {
     @ViewBuilder
     func macResizablePresentation<Item: Identifiable, PresentedContent: View>(
@@ -621,7 +629,7 @@ extension View {
         onDismiss: (() -> Void)? = nil,
         @ViewBuilder content: @escaping (Item) -> PresentedContent
     ) -> some View {
-        if ProcessInfo.processInfo.isiOSAppOnMac {
+        if fillsTheScreen {
             self.fullScreenCover(item: item, onDismiss: onDismiss, content: content)
         } else {
             self.sheet(item: item, onDismiss: onDismiss, content: content)
@@ -649,6 +657,34 @@ nonisolated enum ThisDevice {
         if machine.hasPrefix("iPad") { return "iPad" }
         return machine.hasPrefix("iPhone") ? "iPhone" : "Mac"
     }
+}
+
+/// Asking for an App Store rating, Apple's way (Studio Analytics and Mark, 2026-11-15: none of the studio's apps
+/// had ever asked, and a product page with no stars reads as untested). `requestReview` is Apple's own prompt: the
+/// system shows it at most three times a year per person and decides itself whether to show it at all, and it tells
+/// the app nothing back, so nothing here depends on whether it appeared. The rules:
+/// - never at launch, never after an error, never beside anything that steers the answer;
+/// - only after something has gone well, while the person is looking at results rather than about to shoot: at
+///   least three shots have developed, and they have just closed the Developer Tray on a finished shot, or a shot
+///   has just finished developing while they watch the Dark Room (`DarkRoomView` asks, if no shot is stuck). Not on
+///   the way back to the camera: that is when someone is about to shoot (Studio Analytics, 2026-11-15);
+/// - at most once per app version, on top of Apple's own limit.
+enum ReviewAsk {
+    private static let completedKey = "reviewAsk.completedShots"
+    private static let askedVersionKey = "reviewAsk.askedVersion"
+    private static var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "" }
+
+    /// Shots that have finished developing and landed in Photos, ever (counted by `DarkRoomWorker`).
+    static var completedShots: Int { UserDefaults.standard.integer(forKey: completedKey) }
+
+    static func shotDeveloped() { UserDefaults.standard.set(completedShots + 1, forKey: completedKey) }
+
+    /// Three shots developed, and not yet asked in this version.
+    static var mayAsk: Bool {
+        completedShots >= 3 && UserDefaults.standard.string(forKey: askedVersionKey) != version
+    }
+
+    static func markAsked() { UserDefaults.standard.set(version, forKey: askedVersionKey) }
 }
 
 // ==== LEGO END: 18 CameraView (The Sacred Screen) ====

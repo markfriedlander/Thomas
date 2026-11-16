@@ -18,6 +18,7 @@
 
 import SwiftUI
 import PhotosUI
+import StoreKit
 import ImageIO
 import UIKit
 
@@ -40,6 +41,8 @@ enum Safelight {
 struct DarkRoomView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// Apple's own rating request, asked here while the person is looking at results (see `ReviewAsk`).
+    @Environment(\.requestReview) private var requestReview
     @State private var worker = DarkRoomWorker.shared
     @State private var settings = Settings.shared
     @State private var records: [ShotRecord] = []
@@ -68,7 +71,10 @@ struct DarkRoomView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
+                        // Shrinks to fit rather than cutting off: with the Edit button beside "?", the title read
+                        // "THE DARK RO..." on the iPhone (store screenshots, 2026-11-15).
                         Text("THE DARK ROOM").font(.headline.weight(.heavy)).tracking(2)
+                            .lineLimit(1).minimumScaleFactor(0.6)
                         if worker.developingCount > 0 {
                             Text("\(worker.developingCount) in the bath").font(.caption.weight(.semibold)).foregroundStyle(Safelight.text)
                         }
@@ -91,7 +97,9 @@ struct DarkRoomView: View {
             // follows the message instead (see `content`).
             .safeAreaInset(edge: .bottom) { if !loadBarFollowsMessage { loadBar } }
             // Full screen, not pushed inside this sheet: the tray's picture is the whole canvas.
-            .fullScreenCover(item: $watching) { target in DeveloperTrayView(shotID: target.id, followsQueue: target.followsQueue) }
+            .fullScreenCover(item: $watching, onDismiss: { askForReviewIfDue() }) { target in
+                DeveloperTrayView(shotID: target.id, followsQueue: target.followsQueue)
+            }
         }
         .overlay { if let help { PrefHelpCard(help: help) { self.help = nil }.transition(.opacity) } }
         .animation(.easeInOut(duration: 0.2), value: help)
@@ -101,7 +109,10 @@ struct DarkRoomView: View {
         // Reload the list whenever a shot is added (count changes) or one lands in Photos (arrivals bumps).
         // The live row updates on its own (it reads the worker and the trace).
         .onChange(of: worker.developingCount) { _, _ in Task { await reload() } }
-        .onChange(of: worker.arrivals) { _, _ in Task { await reload() } }
+        .onChange(of: worker.arrivals) { _, _ in
+            Task { await reload() }
+            askForReviewIfDue()   // a shot just finished while they watch the room
+        }
         .onChange(of: pickerItems) { _, items in load(items) }
         #if DEBUG
         // Human parity: the antenna taps the developing shot's Watch button (`POST /open` X-Screen: tray).
@@ -222,6 +233,18 @@ struct DarkRoomView: View {
 
     // MARK: - The list (or the empty state)
 
+    /// Apple's rating request, if `ReviewAsk` allows it and nothing is stuck: after the Developer Tray closes on a
+    /// finished shot, or when a shot finishes while the room is open. A moment later, so it never lands on the
+    /// transition. The system decides whether to show it at all; nothing depends on that.
+    private func askForReviewIfDue() {
+        guard ReviewAsk.mayAsk, worker.blockedCount == 0, watching == nil else { return }
+        ReviewAsk.markAsked()
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            requestReview()
+        }
+    }
+
     /// An empty room at an accessibility text size: the "Load pictures" button follows the message, inside the
     /// scroll, instead of floating over it. Everywhere else it floats at the bottom, as designed.
     private var loadBarFollowsMessage: Bool {
@@ -320,7 +343,7 @@ struct DarkRoomView: View {
 
     private func sectionHeader(_ text: String, color: Color) -> some View {
         Text(text).font(.caption.weight(.heavy)).tracking(1.6).foregroundStyle(color)
-            .frame(maxWidth: 600, alignment: .leading)
+            .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .accessibilityAddTraits(.isHeader)
@@ -477,8 +500,8 @@ struct DarkRoomView: View {
 private extension View {
     /// A Dark Room list row: no system background or separator, the room's own spacing.
     func darkRoomRow() -> some View {
-        // A phone-like width on iPad and Mac, centered, so the tiles stay tile-sized in a wide window.
-        self.frame(maxWidth: 600)
+        // A reading column on iPad and Mac, centered (720 pt, the same as every wide screen, Mark 2026-11-15).
+        self.frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)

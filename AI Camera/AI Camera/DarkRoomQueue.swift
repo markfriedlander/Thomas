@@ -1045,6 +1045,7 @@ final class DarkRoomWorker {
         lastDevelopedID = shot.id
         #endif
         arrivals += 1
+        ReviewAsk.shotDeveloped()   // counts toward asking for a rating (CameraView, ReviewAsk)
         currentShotID = nil; currentStage = nil
         return true
     }

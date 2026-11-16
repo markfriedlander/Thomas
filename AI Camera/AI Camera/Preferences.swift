@@ -719,7 +719,7 @@ struct PreferencesView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 28)
-            .frame(maxWidth: 600)
+            .frame(maxWidth: 720)   // one reading column on every wide screen (Mark, 2026-11-15: the Guide's two-thirds on the iPad)
             .frame(maxWidth: .infinity)
         }
         .background(backdrop)
@@ -919,7 +919,7 @@ struct PreferencesView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 28)
-            .frame(maxWidth: 600)
+            .frame(maxWidth: 720)   // one reading column on every wide screen (Mark, 2026-11-15: the Guide's two-thirds on the iPad)
             .frame(maxWidth: .infinity)
             .id(current)
             .transition(.opacity)
