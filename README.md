@@ -2,6 +2,11 @@
 
 **A camera whose film is language.**
 
+<p align="center">
+  <img src="docs/assets/thomas-triptych.jpg" width="300"
+       alt="One shot from Thomas: a photograph of a sunset over the sea, the machine's words describing it, and the drawing made from those words alone.">
+</p>
+
 Point Thomas at the world and press the shutter. A vision model **describes what it sees**, and those
 words are the recording. Then a second model **draws the scene from the words alone**, having never
 seen your photograph. One press, three frames:
